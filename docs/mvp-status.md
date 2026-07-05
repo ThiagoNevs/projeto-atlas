@@ -31,6 +31,8 @@ conectores e descoberta real permanecem fora do estado atual.
 - Massa demo com 15 ativos e cenários variados.
 - Network Discovery Lite seguro e integralmente simulado.
 - Persistência e auditoria de execuções concluídas, rejeitadas e com falha.
+- Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
+- Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
 - Suíte E2E integrada ao PostgreSQL.
 
 ## Funcionalidades parciais
@@ -48,8 +50,9 @@ aprovação, atribuição de responsável, SLA, comentários encadeados ou resol
 
 ### Auditoria
 
-Eventos críticos geram `AuditLog`, mas não existe uma tela dedicada de auditoria, exportação ou
-política de retenção. O ator continua simulado porque não há autenticação.
+Eventos críticos geram `AuditLog` e podem ser consultados na tela dedicada. Exportação e
+política de retenção ainda não fazem parte do MVP. O ator continua simulado porque não há
+autenticação.
 
 ### Qualidade e confiança
 

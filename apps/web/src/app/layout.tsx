@@ -23,9 +23,12 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               </span>
             </Link>
             <nav aria-label="Navegação principal">
+              <Link href="/">Dashboard</Link>
               <Link href="/assets">Ativos</Link>
               <Link href="/conflicts">Conflitos</Link>
               <Link href="/network-discovery">Descoberta de rede</Link>
+              <Link href="/audit">Auditoria</Link>
+              <Link href="/data-quality">Qualidade dos dados</Link>
             </nav>
           </div>
         </header>

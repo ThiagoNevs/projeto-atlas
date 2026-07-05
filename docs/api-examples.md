@@ -269,3 +269,51 @@ curl.exe http://localhost:3001/network-discovery/runs/RUN_ID
 
 O detalhe inclui o perfil, o resumo da execução, resultados, IP, MAC, hostname, método,
 confiança e o ativo relacionado.
+
+## Auditoria
+
+### Listar registros
+
+```powershell
+curl.exe "http://localhost:3001/audit-logs?page=1&pageSize=20&sortBy=occurredAt&sortDirection=desc"
+```
+
+### Buscar e filtrar
+
+```powershell
+curl.exe "http://localhost:3001/audit-logs?search=suporte&action=ADMIN_STATUS_CHANGED&actorType=USER&entityType=Asset&dateFrom=2026-07-01T00:00:00.000-03:00&dateTo=2026-07-31T23:59:59.999-03:00"
+```
+
+Também é possível filtrar por `entityId`. O valor deve ser um UUID válido.
+
+### Consultar detalhe
+
+```powershell
+curl.exe http://localhost:3001/audit-logs/AUDIT_LOG_ID
+```
+
+Substitua `AUDIT_LOG_ID` pelo UUID retornado na listagem. O detalhe inclui valores anterior e
+novo, metadados, ator, entidade, ação e data/hora.
+
+## Qualidade dos dados
+
+### Consultar resumo
+
+```powershell
+curl.exe http://localhost:3001/data-quality/summary
+```
+
+### Listar ativos com problemas de qualidade
+
+```powershell
+curl.exe "http://localhost:3001/data-quality/assets?page=1&pageSize=20&sortBy=dataQualityScore&sortDirection=asc"
+```
+
+### Filtrar por problema e scores
+
+```powershell
+curl.exe "http://localhost:3001/data-quality/assets?issue=MISSING_OPERATING_SYSTEM&maxDataQualityScore=70&type=SERVER"
+```
+
+Os problemas aceitos incluem baixa qualidade ou confiança, ausência de série, fabricante,
+modelo, sistema operacional, rede, status administrativo e evidência recente.

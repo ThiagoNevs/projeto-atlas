@@ -112,8 +112,18 @@ export default function Home() {
   const metrics = [
     { label: 'Total de ativos', value: summary.assets.total, tone: 'accent' },
     { label: 'Vistos recentemente', value: summary.assets.seenRecently, tone: 'positive' },
-    { label: 'Baixa qualidade', value: summary.assets.lowDataQuality, tone: 'warning' },
-    { label: 'Baixa confiança', value: summary.assets.lowConfidence, tone: 'warning' },
+    {
+      label: 'Baixa qualidade',
+      value: summary.assets.lowDataQuality,
+      tone: 'warning',
+      href: '/data-quality',
+    },
+    {
+      label: 'Baixa confiança',
+      value: summary.assets.lowConfidence,
+      tone: 'warning',
+      href: '/data-quality',
+    },
     {
       label: 'Administrativamente encerrados',
       value: summary.assets.administrativelyClosed,
@@ -155,12 +165,23 @@ export default function Home() {
       )}
 
       <section className="metric-grid" aria-label="Indicadores principais">
-        {metrics.map((metric) => (
-          <article className={`metric-card metric-${metric.tone}`} key={metric.label}>
-            <span>{metric.label}</span>
-            <strong>{metric.value}</strong>
-          </article>
-        ))}
+        {metrics.map((metric) =>
+          metric.href ? (
+            <Link
+              className={`metric-card metric-${metric.tone} metric-card-link`}
+              href={metric.href}
+              key={metric.label}
+            >
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+            </Link>
+          ) : (
+            <article className={`metric-card metric-${metric.tone}`} key={metric.label}>
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+            </article>
+          ),
+        )}
         <article className="metric-card metric-accent">
           <span>Última descoberta</span>
           <strong className="metric-status">

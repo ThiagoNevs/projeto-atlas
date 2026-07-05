@@ -33,6 +33,9 @@ conflitos; em seguida, destaque a saúde do inventário, a atividade recente e a
 recomendadas. Na saúde do inventário, compare as famílias e versões de sistemas operacionais.
 Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 
+Abra **Qualidade dos dados** para transformar os indicadores em ação. Mostre os ativos sem
+sistema operacional, número de série ou rede, use uma prioridade e abra o detalhe de um ativo.
+
 Apresente o Atlas como uma camada de inteligência que:
 
 - consolida ativos;
@@ -81,6 +84,9 @@ No detalhe de um ativo apropriado:
 
 Explique que a atualização do ativo, o evento e o `AuditLog` são tratados de forma transacional.
 Informe que a identidade do ator ainda é simulada no MVP.
+
+Abra **Auditoria** e localize a alteração por ação, entidade ou período. Expanda o registro para
+mostrar valor anterior, valor novo, motivo, comentário e data da decisão.
 
 ## 6. Ativo encerrado que reaparece — 1 minuto
 
@@ -159,7 +165,7 @@ Recapitule:
 Apresente as próximas fases:
 
 1. transformar o MVP em demo vendável;
-2. adicionar autenticação, auditoria visual e testes frontend;
+2. adicionar autenticação, exportação de auditoria e testes frontend;
 3. integrar fontes corporativas reais;
 4. projetar Collector seguro;
 5. evoluir para produto multi-tenant comercial.

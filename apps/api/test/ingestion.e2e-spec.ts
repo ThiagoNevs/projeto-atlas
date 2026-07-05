@@ -64,6 +64,44 @@ type PaginatedResponse<T> = {
   totalPages: number;
 };
 
+type AuditLogItem = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  occurredAt: string;
+};
+
+type AuditLogListResponse = PaginatedResponse<AuditLogItem> & {
+  summary: {
+    total: number;
+    administrativeChanges: number;
+    conflictTreatments: number;
+    discoveryExecutions: number;
+    failuresOrRejections: number;
+  };
+};
+
+type DataQualityAssetResponse = {
+  id: string;
+  dataQualityScore: number | null;
+  confidenceScore: number | null;
+  issues: string[];
+  missingFields: string[];
+};
+
+type DataQualitySummaryResponse = {
+  totalAssets: number;
+  lowDataQuality: number;
+  lowConfidence: number;
+  missingSerialNumber: number;
+  missingOperatingSystem: number;
+  missingNetworkInfo: number;
+  assetsWithoutRecentEvidence: number;
+  averageDataQualityScore: number;
+  averageConfidenceScore: number;
+};
+
 describe('Asset ingestion idempotency (e2e)', () => {
   let app: INestApplication;
   let httpServer: Server;
@@ -79,6 +117,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   let discoveryProfileId: string;
   let disabledDiscoveryProfileId: string;
   let discoveryRunId: string;
+  let dataQualityAssetId: string;
   let initialAttributeCount: number;
   const sourceAssetId = `e2e-${randomUUID()}`;
   const querySerialNumber = `QUERY-SERIAL-${sourceAssetId}`;
@@ -196,6 +235,21 @@ describe('Asset ingestion idempotency (e2e)', () => {
       }),
     ]);
     queryConflictIds = queryConflicts.map((conflict) => conflict.id);
+
+    const dataQualityAsset = await prisma.asset.create({
+      data: {
+        canonicalKey: `${canonicalKey}:data-quality-incomplete`,
+        name: `quality-incomplete-${sourceAssetId.slice(-8)}`,
+        kind: 'SERVER',
+        operationalStatus: 'UNKNOWN',
+        administrativeStatus: 'IN_USE',
+        confidenceScore: 45,
+        dataQualityScore: 40,
+        firstSeenAt: new Date('2020-01-01T10:00:00.000Z'),
+        lastSeenAt: new Date('2020-01-01T10:00:00.000Z'),
+      },
+    });
+    dataQualityAssetId = dataQualityAsset.id;
   });
 
   afterAll(async () => {
@@ -1258,5 +1312,206 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const activity = (response.body as { recentActivity: Array<{ id: string }> }).recentActivity;
 
     expect(activity.map((event) => event.id)).toEqual(expectedEvents.map((event) => event.id));
+  });
+
+  it('lists audit logs with pagination and summary', async () => {
+    const response = await request(httpServer).get('/audit-logs').expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body).toEqual(
+      expect.objectContaining({
+        items: expect.any(Array),
+        total: expect.any(Number),
+        page: 1,
+        pageSize: 20,
+        totalPages: expect.any(Number),
+        summary: expect.objectContaining({ total: expect.any(Number) }),
+      }),
+    );
+    expect(body.items.length).toBeGreaterThan(0);
+  });
+
+  it('returns an empty audit log page when no record matches', async () => {
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ search: `missing-${randomUUID()}` })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body.items).toEqual([]);
+    expect(body.total).toBe(0);
+  });
+
+  it('filters audit logs by action', async () => {
+    const existing = await prisma.auditLog.findFirstOrThrow();
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ action: existing.action, pageSize: 100 })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items.every((item) => item.action === existing.action)).toBe(true);
+  });
+
+  it('filters audit logs by entity type', async () => {
+    const existing = await prisma.auditLog.findFirstOrThrow();
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ entityType: existing.entityType, pageSize: 100 })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items.every((item) => item.entityType === existing.entityType)).toBe(true);
+  });
+
+  it('filters audit logs by occurrence period', async () => {
+    const existing = await prisma.auditLog.findFirstOrThrow({ orderBy: { occurredAt: 'asc' } });
+    const dateFrom = new Date(existing.occurredAt.getTime() - 1_000).toISOString();
+    const dateTo = new Date(existing.occurredAt.getTime() + 1_000).toISOString();
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ dateFrom, dateTo, pageSize: 100 })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body.items.some((item) => item.id === existing.id)).toBe(true);
+    expect(
+      body.items.every(
+        (item) =>
+          new Date(item.occurredAt) >= new Date(dateFrom) &&
+          new Date(item.occurredAt) <= new Date(dateTo),
+      ),
+    ).toBe(true);
+  });
+
+  it('paginates audit logs', async () => {
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ page: 1, pageSize: 1 })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+
+    expect(body.items).toHaveLength(1);
+    expect(body.pageSize).toBe(1);
+    expect(body.totalPages).toBe(body.total);
+  });
+
+  it('orders audit logs by occurredAt', async () => {
+    const response = await request(httpServer)
+      .get('/audit-logs')
+      .query({ sortBy: 'occurredAt', sortDirection: 'desc', pageSize: 100 })
+      .expect(200);
+    const body = response.body as AuditLogListResponse;
+    const timestamps = body.items.map((item) => new Date(item.occurredAt).getTime());
+
+    expect(timestamps).toEqual([...timestamps].sort((left, right) => right - left));
+  });
+
+  it('returns an audit log detail by id', async () => {
+    const existing = await prisma.auditLog.findFirstOrThrow();
+    const response = await request(httpServer).get(`/audit-logs/${existing.id}`).expect(200);
+    const body = response.body as AuditLogItem;
+
+    expect(body).toEqual(
+      expect.objectContaining({
+        id: existing.id,
+        action: existing.action,
+        entityType: existing.entityType,
+        entityId: existing.entityId,
+      }),
+    );
+  });
+
+  it('returns 404 for an unknown audit log', async () => {
+    await request(httpServer).get(`/audit-logs/${randomUUID()}`).expect(404);
+  });
+
+  it('rejects audit log pageSize above 100', async () => {
+    await request(httpServer).get('/audit-logs').query({ pageSize: 101 }).expect(400);
+  });
+
+  it('returns the data quality summary with current inventory data', async () => {
+    const response = await request(httpServer).get('/data-quality/summary').expect(200);
+    const body = response.body as DataQualitySummaryResponse;
+
+    expect(body.totalAssets).toBeGreaterThan(0);
+    expect(body.lowDataQuality).toBeGreaterThan(0);
+    expect(body.lowConfidence).toBeGreaterThan(0);
+    expect(body.missingSerialNumber).toBeGreaterThan(0);
+    expect(body.missingOperatingSystem).toBeGreaterThan(0);
+    expect(body.missingNetworkInfo).toBeGreaterThan(0);
+    expect(body.assetsWithoutRecentEvidence).toBeGreaterThan(0);
+    expect(body.averageDataQualityScore).toEqual(expect.any(Number));
+    expect(body.averageConfidenceScore).toEqual(expect.any(Number));
+  });
+
+  it('lists data quality assets with pagination', async () => {
+    const response = await request(httpServer).get('/data-quality/assets').expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+
+    expect(body).toEqual(
+      expect.objectContaining({
+        items: expect.any(Array),
+        total: expect.any(Number),
+        page: 1,
+        pageSize: 20,
+        totalPages: expect.any(Number),
+      }),
+    );
+    expect(body.items.some((asset) => asset.id === dataQualityAssetId)).toBe(true);
+  });
+
+  it.each([
+    ['LOW_DATA_QUALITY', 'LOW_DATA_QUALITY'],
+    ['LOW_CONFIDENCE', 'LOW_CONFIDENCE'],
+    ['MISSING_SERIAL_NUMBER', 'MISSING_SERIAL_NUMBER'],
+    ['MISSING_OPERATING_SYSTEM', 'MISSING_OPERATING_SYSTEM'],
+    ['MISSING_NETWORK_INFO', 'MISSING_NETWORK_INFO'],
+    ['WITHOUT_RECENT_EVIDENCE', 'WITHOUT_RECENT_EVIDENCE'],
+  ])('filters by %s and reports the issue', async (issue, expectedIssue) => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ issue, pageSize: 100 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+    const asset = body.items.find((item) => item.id === dataQualityAssetId);
+
+    expect(asset).toBeDefined();
+    expect(asset?.issues).toContain(expectedIssue);
+  });
+
+  it('paginates data quality assets', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ page: 1, pageSize: 1 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+
+    expect(body.items).toHaveLength(1);
+    expect(body.pageSize).toBe(1);
+  });
+
+  it('orders low-quality assets by dataQualityScore', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({
+        issue: 'LOW_DATA_QUALITY',
+        sortBy: 'dataQualityScore',
+        sortDirection: 'asc',
+        pageSize: 100,
+      })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+    const scores = body.items.flatMap((asset) =>
+      asset.dataQualityScore === null ? [] : [asset.dataQualityScore],
+    );
+
+    expect(scores).toEqual([...scores].sort((left, right) => left - right));
+  });
+
+  it('rejects data quality pageSize above 100', async () => {
+    await request(httpServer).get('/data-quality/assets').query({ pageSize: 101 }).expect(400);
   });
 });

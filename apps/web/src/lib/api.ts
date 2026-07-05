@@ -255,6 +255,105 @@ export interface DashboardSummary {
   }>;
 }
 
+export interface AuditLogRecord {
+  id: string;
+  actorType: string;
+  actorId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  before: unknown;
+  after: unknown;
+  metadata: unknown;
+  occurredAt: string;
+}
+
+export interface AuditLogQueryParams {
+  search?: string;
+  action?: string;
+  actorType?: string;
+  entityType?: string;
+  entityId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'occurredAt' | 'action' | 'entityType' | 'actorType';
+  sortDirection?: 'asc' | 'desc';
+}
+
+export interface AuditLogResponse extends PaginatedResponse<AuditLogRecord> {
+  summary: {
+    total: number;
+    administrativeChanges: number;
+    conflictTreatments: number;
+    discoveryExecutions: number;
+    failuresOrRejections: number;
+  };
+}
+
+export type DataQualityIssue =
+  | 'LOW_DATA_QUALITY'
+  | 'LOW_CONFIDENCE'
+  | 'MISSING_SERIAL_NUMBER'
+  | 'MISSING_MANUFACTURER'
+  | 'MISSING_MODEL'
+  | 'MISSING_OPERATING_SYSTEM'
+  | 'MISSING_NETWORK_INFO'
+  | 'MISSING_ADMINISTRATIVE_STATUS'
+  | 'WITHOUT_RECENT_EVIDENCE';
+
+export interface DataQualitySummary {
+  totalAssets: number;
+  lowDataQuality: number;
+  lowConfidence: number;
+  missingSerialNumber: number;
+  missingManufacturer: number;
+  missingModel: number;
+  missingOperatingSystem: number;
+  missingNetworkInfo: number;
+  missingAdministrativeStatus: number;
+  assetsWithoutRecentEvidence: number;
+  averageDataQualityScore: number;
+  averageConfidenceScore: number;
+}
+
+export interface DataQualityAsset {
+  id: string;
+  name: string;
+  hostname: string;
+  type: string;
+  administrativeStatus: AdministrativeStatus;
+  operationalStatus: OperationalStatus;
+  dataQualityScore: number | null;
+  confidenceScore: number | null;
+  lastSeenAt: string | null;
+  issues: DataQualityIssue[];
+  missingFields: string[];
+  primaryIp: string | null;
+  primaryMac: string | null;
+  operatingSystem: string | null;
+  serialNumber: string | null;
+  manufacturer: string | null;
+  model: string | null;
+}
+
+export interface DataQualityQueryParams {
+  search?: string;
+  issue?: DataQualityIssue;
+  type?: string;
+  administrativeStatus?: AdministrativeStatus;
+  operationalStatus?: OperationalStatus;
+  minDataQualityScore?: number;
+  maxDataQualityScore?: number;
+  minConfidenceScore?: number;
+  maxConfidenceScore?: number;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'dataQualityScore' | 'confidenceScore' | 'lastSeenAt' | 'name' | 'type';
+  sortDirection?: 'asc' | 'desc';
+}
+
 export interface ConflictDetail {
   conflict: {
     id: string;
@@ -475,6 +574,24 @@ export function getNetworkDiscoveryRun(id: string): Promise<NetworkDiscoveryRunD
 
 export function getDashboardSummary(): Promise<DashboardSummary> {
   return fetchJson('/dashboard/summary');
+}
+
+export function getAuditLogs(params: AuditLogQueryParams = {}): Promise<AuditLogResponse> {
+  return fetchJson(`/audit-logs${queryString(params)}`);
+}
+
+export function getAuditLog(id: string): Promise<AuditLogRecord> {
+  return fetchJson(`/audit-logs/${encodeURIComponent(id)}`);
+}
+
+export function getDataQualitySummary(): Promise<DataQualitySummary> {
+  return fetchJson('/data-quality/summary');
+}
+
+export function getDataQualityAssets(
+  params: DataQualityQueryParams = {},
+): Promise<PaginatedResponse<DataQualityAsset>> {
+  return fetchJson(`/data-quality/assets${queryString(params)}`);
 }
 
 export function runNetworkDiscoveryProfile(id: string): Promise<NetworkDiscoveryRunDetail> {

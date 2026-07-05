@@ -22,6 +22,8 @@ de conflitos.
 - Detecção de ativo administrativamente encerrado que voltou a aparecer.
 - Conflitos de ciclo de vida e identidade de rede.
 - Resolution Center com mudança auditável de status.
+- Tela de auditoria com busca, filtros, resumo, paginação e detalhe dos registros.
+- Tela operacional de qualidade dos dados com lacunas, scores e prioridades de correção.
 - Massa fictícia com 15 cenários de demonstração.
 - Network Discovery Lite simulado, escopado a redes privadas e auditável.
 - Interface em português com tratamento de loading, erro e hydration.
@@ -149,6 +151,8 @@ corepack pnpm dev:web
 - Inventário: [http://localhost:3000/assets](http://localhost:3000/assets)
 - Resolution Center: [http://localhost:3000/conflicts](http://localhost:3000/conflicts)
 - Network Discovery Lite: [http://localhost:3000/network-discovery](http://localhost:3000/network-discovery)
+- Auditoria: [http://localhost:3000/audit](http://localhost:3000/audit)
+- Qualidade dos dados: [http://localhost:3000/data-quality](http://localhost:3000/data-quality)
 - API: [http://localhost:3001](http://localhost:3001)
 - Health check: [http://localhost:3001/health](http://localhost:3001/health)
 - Resumo do dashboard: [http://localhost:3001/dashboard/summary](http://localhost:3001/dashboard/summary)

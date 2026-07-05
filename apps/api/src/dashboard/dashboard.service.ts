@@ -247,9 +247,9 @@ export class DashboardService {
         },
         {
           id: 'review-low-quality-assets',
-          title: 'Revisar ativos com baixa qualidade',
+          title: 'Revisar qualidade dos dados',
           description: `${lowDataQuality} ativo(s) abaixo do nível mínimo de qualidade.`,
-          href: '/assets',
+          href: '/data-quality',
           count: lowDataQuality,
         },
         {
