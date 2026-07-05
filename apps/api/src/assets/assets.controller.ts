@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 
 import { AssetsService } from './assets.service';
+import { CreateManualAssetDto } from './dto/create-manual-asset.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { UpdateAdministrativeStatusDto } from './dto/update-administrative-status.dto';
 
@@ -24,5 +25,10 @@ export class AssetsController {
     @Body() payload: UpdateAdministrativeStatusDto,
   ) {
     return this.assetsService.updateAdministrativeStatus(id, payload);
+  }
+
+  @Post('manual')
+  createManual(@Body() payload: CreateManualAssetDto) {
+    return this.assetsService.createManual(payload);
   }
 }

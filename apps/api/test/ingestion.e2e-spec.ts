@@ -102,6 +102,20 @@ type DataQualitySummaryResponse = {
   averageConfidenceScore: number;
 };
 
+type ManualAssetResponse = {
+  asset: {
+    id: string;
+    name: string;
+    operationalStatus: string;
+    administrativeStatus: string;
+    confidenceScore: number | null;
+    dataQualityScore: number | null;
+  };
+  evidenceId: string;
+  eventId: string;
+  auditLogId: string;
+};
+
 describe('Asset ingestion idempotency (e2e)', () => {
   let app: INestApplication;
   let httpServer: Server;
@@ -118,6 +132,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   let disabledDiscoveryProfileId: string;
   let discoveryRunId: string;
   let dataQualityAssetId: string;
+  let manualAssetId: string;
   let initialAttributeCount: number;
   const sourceAssetId = `e2e-${randomUUID()}`;
   const querySerialNumber = `QUERY-SERIAL-${sourceAssetId}`;
@@ -139,6 +154,25 @@ describe('Asset ingestion idempotency (e2e)', () => {
     macAddresses: ['02:42:ac:11:99:10'],
     confidenceScore: 92,
     dataQualityScore: 95,
+  };
+  const manualPayload = {
+    identifier: `MANUAL-${sourceAssetId}`,
+    identifierType: 'HOSTNAME',
+    type: 'NOTEBOOK',
+    administrativeStatus: 'IN_STOCK',
+    reason: 'Equipamento de teste ainda sem observação técnica.',
+    hostname: `manual-${sourceAssetId}`,
+    serialNumber: `MANUAL-SERIAL-${sourceAssetId}`,
+    manufacturer: 'Fabricante de teste',
+    model: 'Modelo de laboratório',
+    operatingSystem: 'Windows 11',
+    osVersion: '23H2',
+    location: 'Laboratório E2E',
+    owner: 'TI',
+    department: 'Infraestrutura',
+    environment: 'Estoque',
+    criticality: 'Baixa',
+    comment: 'Declaração criada exclusivamente pela suíte E2E.',
   };
 
   beforeAll(async () => {
@@ -253,6 +287,10 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   afterAll(async () => {
+    if (manualAssetId) {
+      await prisma.auditLog.deleteMany({ where: { entityId: manualAssetId } });
+      await prisma.asset.deleteMany({ where: { id: manualAssetId } });
+    }
     await prisma.auditLog.deleteMany({
       where: {
         OR: [
@@ -1513,5 +1551,133 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('rejects data quality pageSize above 100', async () => {
     await request(httpServer).get('/data-quality/assets').query({ pageSize: 101 }).expect(400);
+  });
+
+  it('requires the mandatory manual declaration fields', async () => {
+    await request(httpServer).post('/assets/manual').send({}).expect(400);
+  });
+
+  it('requires a non-empty reason for manual declaration', async () => {
+    await request(httpServer)
+      .post('/assets/manual')
+      .send({ ...manualPayload, reason: '   ' })
+      .expect(400);
+  });
+
+  it('creates a manually declared asset with conservative operational state', async () => {
+    const response = await request(httpServer)
+      .post('/assets/manual')
+      .send(manualPayload)
+      .expect(201);
+    const body = response.body as ManualAssetResponse;
+    manualAssetId = body.asset.id;
+
+    expect(body.asset).toEqual(
+      expect.objectContaining({
+        name: manualPayload.hostname,
+        operationalStatus: 'UNKNOWN',
+        administrativeStatus: 'IN_STOCK',
+        confidenceScore: 60,
+      }),
+    );
+    expect(body.asset.dataQualityScore).toBeGreaterThan(70);
+  });
+
+  it('creates manual evidence for the declared asset', async () => {
+    const evidence = await prisma.assetEvidence.findFirstOrThrow({
+      where: { assetId: manualAssetId },
+    });
+
+    expect(evidence).toEqual(
+      expect.objectContaining({
+        source: 'MANUAL',
+        evidenceType: 'MANUAL_DECLARATION',
+        confidenceScore: expect.anything(),
+      }),
+    );
+  });
+
+  it('creates the manual declaration timeline event', async () => {
+    const event = await prisma.assetEvent.findFirstOrThrow({
+      where: { assetId: manualAssetId, eventType: 'ASSET_MANUALLY_DECLARED' },
+    });
+
+    expect(event.title).toBe('Ativo declarado manualmente');
+    expect(event.description).toBe(manualPayload.reason);
+  });
+
+  it('creates the manual declaration audit log', async () => {
+    const auditLog = await prisma.auditLog.findFirstOrThrow({
+      where: { entityId: manualAssetId, action: 'ASSET_MANUALLY_DECLARED' },
+    });
+
+    expect(auditLog).toEqual(
+      expect.objectContaining({ actorType: 'USER', actorId: 'atlas-mvp-user' }),
+    );
+    expect(auditLog.metadata).toEqual(
+      expect.objectContaining({ reason: manualPayload.reason, origin: 'manual-declaration' }),
+    );
+  });
+
+  it('rejects a manual declaration with duplicate hostname', async () => {
+    await request(httpServer)
+      .post('/assets/manual')
+      .send({
+        ...manualPayload,
+        identifier: `${manualPayload.identifier}-hostname-duplicate`,
+        serialNumber: `${manualPayload.serialNumber}-other`,
+      })
+      .expect(409);
+  });
+
+  it('rejects a manual declaration with duplicate serial number', async () => {
+    await request(httpServer)
+      .post('/assets/manual')
+      .send({
+        ...manualPayload,
+        identifier: `${manualPayload.identifier}-serial-duplicate`,
+        hostname: `${manualPayload.hostname}-other`,
+      })
+      .expect(409);
+  });
+
+  it('lists the manually declared asset in the inventory', async () => {
+    const response = await request(httpServer)
+      .get('/assets')
+      .query({ search: manualPayload.hostname })
+      .expect(200);
+    const body = response.body as PaginatedResponse<{ id: string }>;
+
+    expect(body.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: manualAssetId })]),
+    );
+  });
+
+  it('returns the manually declared asset detail', async () => {
+    const response = await request(httpServer).get(`/assets/${manualAssetId}`).expect(200);
+    const body = response.body as { id: string; attributes: Array<{ key: string }> };
+
+    expect(body.id).toBe(manualAssetId);
+    expect(body.attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'hostname' }),
+        expect.objectContaining({ key: 'serialNumber' }),
+        expect.objectContaining({ key: 'operatingSystem' }),
+      ]),
+    );
+  });
+
+  it('keeps the manual-only asset visible in data quality', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ search: manualPayload.hostname, pageSize: 100 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+    const asset = body.items.find((item) => item.id === manualAssetId);
+
+    expect(asset).toBeDefined();
+    expect(asset?.issues).toEqual(
+      expect.arrayContaining(['LOW_CONFIDENCE', 'MISSING_NETWORK_INFO', 'WITHOUT_RECENT_EVIDENCE']),
+    );
   });
 });

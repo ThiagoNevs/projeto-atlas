@@ -8,6 +8,7 @@ const eventLabels: Record<string, string> = {
   NETWORK_DISCOVERY_RUN_STARTED: 'Descoberta de rede iniciada',
   NETWORK_DISCOVERY_ASSET_FOUND: 'Ativo encontrado pela descoberta de rede',
   NETWORK_DISCOVERY_RUN_FINISHED: 'Descoberta de rede concluída',
+  ASSET_MANUALLY_DECLARED: 'Ativo declarado manualmente',
 };
 
 const conflictStatusLabels: Record<string, string> = {
@@ -87,6 +88,7 @@ const evidenceTypeLabels: Record<string, string> = {
   DEMO_ASSET_SNAPSHOT: 'Captura simulada do ativo',
   MANUAL_ASSET_SNAPSHOT: 'Captura manual do ativo',
   NETWORK_DISCOVERY: 'Descoberta de rede',
+  MANUAL_DECLARATION: 'Declaração manual do ativo',
 };
 
 const auditActionLabels: Record<string, string> = {
@@ -95,6 +97,15 @@ const auditActionLabels: Record<string, string> = {
   NETWORK_DISCOVERY_RUN_EXECUTED: 'Descoberta de rede executada',
   NETWORK_DISCOVERY_RUN_REJECTED: 'Descoberta de rede rejeitada',
   NETWORK_DISCOVERY_RUN_FAILED: 'Descoberta de rede com falha',
+  ASSET_MANUALLY_DECLARED: 'Ativo declarado manualmente',
+};
+
+const manualIdentifierTypeLabels: Record<string, string> = {
+  HOSTNAME: 'Hostname',
+  SERIAL_NUMBER: 'Número de série',
+  ASSET_TAG: 'Etiqueta patrimonial',
+  MAC_ADDRESS: 'Endereço MAC',
+  INTERNAL_NAME: 'Nome interno',
 };
 
 const auditActorTypeLabels: Record<string, string> = {
@@ -224,4 +235,8 @@ export function getAuditValueLabel(value: string): string {
 
 export function getDataQualityIssueLabel(value: string): string {
   return labelFrom(dataQualityIssueLabels, value);
+}
+
+export function getManualIdentifierTypeLabel(value: string): string {
+  return labelFrom(manualIdentifierTypeLabels, value);
 }

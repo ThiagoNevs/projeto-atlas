@@ -24,6 +24,7 @@ de conflitos.
 - Resolution Center com mudança auditável de status.
 - Tela de auditoria com busca, filtros, resumo, paginação e detalhe dos registros.
 - Tela operacional de qualidade dos dados com lacunas, scores e prioridades de correção.
+- Declaração manual de ativos ainda não observados por fontes técnicas, com evidência e auditoria.
 - Massa fictícia com 15 cenários de demonstração.
 - Network Discovery Lite simulado, escopado a redes privadas e auditável.
 - Interface em português com tratamento de loading, erro e hydration.

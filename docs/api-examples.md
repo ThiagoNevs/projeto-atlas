@@ -317,3 +317,34 @@ curl.exe "http://localhost:3001/data-quality/assets?issue=MISSING_OPERATING_SYST
 
 Os problemas aceitos incluem baixa qualidade ou confiança, ausência de série, fabricante,
 modelo, sistema operacional, rede, status administrativo e evidência recente.
+
+## Declaração manual de ativo
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/manual `
+  -H "Content-Type: application/json" `
+  -d '{
+    "identifier": "NB-EST-001",
+    "identifierType": "HOSTNAME",
+    "type": "NOTEBOOK",
+    "administrativeStatus": "IN_STOCK",
+    "reason": "Compra nova ainda não entregue ao usuário",
+    "hostname": "NB-EST-001",
+    "serialNumber": "DEMO-BR123456",
+    "manufacturer": "Fabricante de demonstração",
+    "model": "Notebook corporativo",
+    "operatingSystem": "Windows 11",
+    "osVersion": "23H2",
+    "location": "Rio de Janeiro",
+    "owner": "TI",
+    "department": "Infraestrutura",
+    "environment": "Estoque",
+    "criticality": "Baixa",
+    "comment": "Cadastro fictício para demonstração"
+  }'
+```
+
+A declaração cria o ativo com estado operacional desconhecido, confiança inicial moderada,
+evidência `MANUAL_DECLARATION`, evento de timeline e `AuditLog`. Ela não representa confirmação
+por fonte técnica. Identificador, tipo de identificador, tipo do ativo, status administrativo e
+motivo são obrigatórios; duplicidades fortes retornam HTTP `409`.

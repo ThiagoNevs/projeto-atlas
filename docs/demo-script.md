@@ -36,6 +36,10 @@ Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 Abra **Qualidade dos dados** para transformar os indicadores em ação. Mostre os ativos sem
 sistema operacional, número de série ou rede, use uma prioridade e abra o detalhe de um ativo.
 
+Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um equipamento em
+estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado
+operacional até que uma fonte técnica observe o equipamento.
+
 Apresente o Atlas como uma camada de inteligência que:
 
 - consolida ativos;

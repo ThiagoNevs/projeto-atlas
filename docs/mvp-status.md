@@ -33,6 +33,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Persistência e auditoria de execuções concluídas, rejeitadas e com falha.
 - Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
+- Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Suíte E2E integrada ao PostgreSQL.
 
 ## Funcionalidades parciais

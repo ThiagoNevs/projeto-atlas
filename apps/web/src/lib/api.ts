@@ -453,6 +453,36 @@ export interface UpdateAdministrativeStatusResponse {
   auditLogId: string;
 }
 
+export type ManualIdentifierType =
+  'HOSTNAME' | 'SERIAL_NUMBER' | 'ASSET_TAG' | 'MAC_ADDRESS' | 'INTERNAL_NAME';
+
+export interface CreateManualAssetPayload {
+  identifier: string;
+  identifierType: ManualIdentifierType;
+  type: string;
+  administrativeStatus: AdministrativeStatus;
+  reason: string;
+  hostname?: string;
+  serialNumber?: string;
+  manufacturer?: string;
+  model?: string;
+  operatingSystem?: string;
+  osVersion?: string;
+  location?: string;
+  owner?: string;
+  department?: string;
+  environment?: string;
+  criticality?: string;
+  comment?: string;
+}
+
+export interface CreateManualAssetResponse {
+  asset: AssetDetail;
+  evidenceId: string;
+  eventId: string;
+  auditLogId: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -524,6 +554,16 @@ export function updateAdministrativeStatus(
 ): Promise<UpdateAdministrativeStatusResponse> {
   return fetchJson(`/assets/${encodeURIComponent(id)}/administrative-status`, {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createManualAsset(
+  payload: CreateManualAssetPayload,
+): Promise<CreateManualAssetResponse> {
+  return fetchJson('/assets/manual', {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });

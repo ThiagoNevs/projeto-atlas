@@ -40,6 +40,21 @@ type AdministrativeStatusChangeData = {
   comment: string;
 };
 
+type ManualDeclarationData = {
+  reason: string;
+  actorUserId?: string;
+};
+
+function getManualDeclarationData(value: unknown): ManualDeclarationData | null {
+  if (!value || typeof value !== 'object') return null;
+  const eventData = value as Record<string, unknown>;
+  if (typeof eventData.reason !== 'string') return null;
+  return {
+    reason: eventData.reason,
+    actorUserId: typeof eventData.actorUserId === 'string' ? eventData.actorUserId : undefined,
+  };
+}
+
 function getAdministrativeStatusChangeData(value: unknown): AdministrativeStatusChangeData | null {
   if (!value || typeof value !== 'object') return null;
 
@@ -125,6 +140,12 @@ export default function AssetDetailPage() {
   const lifecycleConflict = asset.conflicts.find(
     (conflict) => conflict.conflictType === 'LIFECYCLE_CONFLICT' && conflict.status === 'OPEN',
   );
+  const manualDeclarationEvent = timeline.find(
+    (event) => event.eventType === 'ASSET_MANUALLY_DECLARED',
+  );
+  const manualDeclaration = manualDeclarationEvent
+    ? getManualDeclarationData(manualDeclarationEvent.data)
+    : null;
 
   return (
     <main className="page-shell detail-page">
@@ -155,6 +176,32 @@ export default function AssetDetailPage() {
           administrativeStatus={asset.administrativeStatus}
           conflict={lifecycleConflict}
         />
+      ) : null}
+
+      {manualDeclarationEvent ? (
+        <aside className="manual-declaration-alert">
+          <div>
+            <strong>Ativo declarado manualmente</strong>
+            <p>
+              Este ativo foi declarado manualmente e ainda pode não possuir confirmação por fonte
+              técnica.
+            </p>
+          </div>
+          <dl>
+            <div>
+              <dt>Motivo</dt>
+              <dd>{manualDeclaration?.reason ?? 'Não informado'}</dd>
+            </div>
+            <div>
+              <dt>Data</dt>
+              <dd>{formatDateTime(manualDeclarationEvent.occurredAt)}</dd>
+            </div>
+            <div>
+              <dt>Declarado por</dt>
+              <dd>{manualDeclaration?.actorUserId ?? 'Usuário do MVP'}</dd>
+            </div>
+          </dl>
+        </aside>
       ) : null}
 
       <section className="detail-grid overview-grid" aria-label="Visão geral">

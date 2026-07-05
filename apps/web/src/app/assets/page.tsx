@@ -158,12 +158,17 @@ export default function AssetsPage() {
             Visão consolidada dos ativos observados e da qualidade das informações disponíveis.
           </p>
         </div>
-        {!loading && !error ? (
-          <div className="summary-pill">
-            <strong>{result.total}</strong>
-            <span>{result.total === 1 ? 'ativo encontrado' : 'ativos encontrados'}</span>
-          </div>
-        ) : null}
+        <div className="page-heading-actions">
+          <Link className="button button-primary" href="/assets/new">
+            Adicionar ativo
+          </Link>
+          {!loading && !error ? (
+            <div className="summary-pill">
+              <strong>{result.total}</strong>
+              <span>{result.total === 1 ? 'ativo encontrado' : 'ativos encontrados'}</span>
+            </div>
+          ) : null}
+        </div>
       </header>
 
       <section className="filter-card" aria-labelledby="assets-filter-title">
