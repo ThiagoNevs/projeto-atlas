@@ -28,7 +28,10 @@ sozinho não prova o estado técnico do ativo.
 
 ## 2. Visão geral do Atlas — 1 minuto
 
-Abra a página inicial ou `/assets`.
+Abra o dashboard na página inicial. Mostre os indicadores de ativos, qualidade, confiança e
+conflitos; em seguida, destaque a saúde do inventário, a atividade recente e as ações
+recomendadas. Na saúde do inventário, compare as famílias e versões de sistemas operacionais.
+Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 
 Apresente o Atlas como uma camada de inteligência que:
 

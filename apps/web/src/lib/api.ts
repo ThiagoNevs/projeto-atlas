@@ -1,0 +1,484 @@
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+
+export const API_URL = configuredApiUrl.replace(/\/$/, '');
+
+export type OperationalStatus =
+  'UNKNOWN' | 'SEEN_RECENTLY' | 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE';
+
+export type AdministrativeStatus =
+  | 'UNKNOWN'
+  | 'IN_USE'
+  | 'IN_STOCK'
+  | 'PLANNED'
+  | 'ACTIVE'
+  | 'MAINTENANCE'
+  | 'DEACTIVATED'
+  | 'DISCARDED'
+  | 'LOST'
+  | 'STOLEN'
+  | 'ARCHIVED'
+  | 'RETIRED';
+
+export type ConflictStatus =
+  'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'IGNORED' | 'EXCEPTION' | 'DISMISSED';
+
+export interface AssetSummary {
+  id: string;
+  atlasId: string;
+  canonicalKey: string | null;
+  name: string;
+  type: string;
+  operationalStatus: OperationalStatus;
+  administrativeStatus: AdministrativeStatus;
+  confidenceScore: number | null;
+  dataQualityScore: number | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  evidenceCount: number;
+  eventCount: number;
+}
+
+export interface AssetAttribute {
+  id: string;
+  key: string;
+  value: unknown;
+  valueText: string | null;
+  valueType: string;
+  confidenceScore: number | null;
+  dataQualityScore: number | null;
+  observedAt: string;
+  lastConfirmedAt: string;
+  confirmationCount: number;
+}
+
+export interface NetworkInterface {
+  id: string;
+  name: string;
+  macAddress: string | null;
+  ipAddresses: string[];
+  interfaceIndex: number | null;
+  isPrimary: boolean;
+  isCurrent: boolean;
+  observedAt: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface AssetConflict {
+  id: string;
+  conflictType: string;
+  attributeKey: string;
+  status: ConflictStatus;
+  severity: number;
+  impact: string | null;
+  suggestedValue: string | null;
+  suggestionReason: string | null;
+  detectedAt: string;
+  lastDetectedAt: string | null;
+  occurrenceCount: number;
+}
+
+export interface ConflictSummary {
+  id: string;
+  type: string;
+  field: string;
+  status: ConflictStatus;
+  impact: string | null;
+  assetId: string;
+  assetName: string;
+  administrativeStatus: AdministrativeStatus;
+  occurrenceCount: number;
+  suggestionReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface AssetQueryParams {
+  search?: string;
+  operationalStatus?: OperationalStatus;
+  administrativeStatus?: AdministrativeStatus;
+  type?: string;
+  minConfidenceScore?: number;
+  maxConfidenceScore?: number;
+  minDataQualityScore?: number;
+  maxDataQualityScore?: number;
+  page?: number;
+  pageSize?: number;
+  sortBy?:
+    | 'name'
+    | 'lastSeenAt'
+    | 'confidenceScore'
+    | 'dataQualityScore'
+    | 'evidenceCount'
+    | 'eventCount'
+    | 'createdAt'
+    | 'updatedAt';
+  sortDirection?: 'asc' | 'desc';
+}
+
+export interface ConflictQueryParams {
+  search?: string;
+  status?: ConflictStatus;
+  impact?: string;
+  type?: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: 'updatedAt' | 'createdAt' | 'occurrenceCount' | 'impact' | 'status';
+  sortDirection?: 'asc' | 'desc';
+}
+
+export type NetworkDiscoveryMode = 'PASSIVE' | 'LIGHT' | 'CONTROLLED';
+export type NetworkDiscoveryMethod = 'ICMP_SIMULATED' | 'DNS_REVERSE_SIMULATED' | 'ARP_SIMULATED';
+export type NetworkDiscoveryRunStatus =
+  'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type NetworkDiscoveryResultStatus = 'DISCOVERED' | 'UPDATED' | 'SKIPPED' | 'ERROR';
+
+export interface NetworkDiscoveryProfile {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  mode: NetworkDiscoveryMode;
+  allowedCidrs: string[];
+  deniedCidrs: string[];
+  rateLimitPerMinute: number;
+  scheduleEnabled: boolean;
+  scheduleExpression: string | null;
+  methods: NetworkDiscoveryMethod[];
+  createdAt: string;
+  updatedAt: string;
+  _count?: { runs: number };
+}
+
+export interface CreateNetworkDiscoveryProfilePayload {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  mode: NetworkDiscoveryMode;
+  allowedCidrs: string[];
+  deniedCidrs?: string[];
+  rateLimitPerMinute: number;
+  methods: NetworkDiscoveryMethod[];
+  scheduleEnabled?: boolean;
+}
+
+export interface NetworkDiscoveryRun {
+  id: string;
+  profileId: string;
+  status: NetworkDiscoveryRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  totalTargets: number;
+  discoveredCount: number;
+  updatedAssetCount: number;
+  createdAssetCount: number;
+  skippedCount: number;
+  errorCount: number;
+  summary: unknown;
+  createdAt: string;
+  updatedAt: string;
+  profile: Pick<NetworkDiscoveryProfile, 'id' | 'name' | 'mode'>;
+}
+
+export interface NetworkDiscoveryResult {
+  id: string;
+  assetId: string | null;
+  ipAddress: string;
+  macAddress: string | null;
+  hostname: string | null;
+  source: string;
+  method: NetworkDiscoveryMethod;
+  confidenceScore: number | null;
+  status: NetworkDiscoveryResultStatus;
+  raw: unknown;
+  createdAt: string;
+  asset: { id: string; name: string; canonicalKey: string | null } | null;
+}
+
+export interface NetworkDiscoveryRunDetail extends NetworkDiscoveryRun {
+  profile: NetworkDiscoveryProfile;
+  results: NetworkDiscoveryResult[];
+}
+
+export interface DashboardSummary {
+  assets: {
+    total: number;
+    seenRecently: number;
+    lowDataQuality: number;
+    lowConfidence: number;
+    administrativelyClosed: number;
+    byAdministrativeStatus: Record<string, number>;
+    byOperationalStatus: Record<string, number>;
+    byType: Record<string, number>;
+    byOperatingSystem: Record<string, number>;
+    byOperatingSystemVersion: Record<string, number>;
+  };
+  conflicts: {
+    totalOpen: number;
+    inReview: number;
+    highImpact: number;
+    criticalImpact: number;
+    lifecycleConflicts: number;
+  };
+  networkDiscovery: {
+    totalRuns: number;
+    lastRunStatus: NetworkDiscoveryRunStatus | null;
+    lastRunAt: string | null;
+    lastRunDiscoveredCount: number;
+    lastRunCreatedAssetCount: number;
+    lastRunUpdatedAssetCount: number;
+  };
+  recentActivity: Array<{
+    id: string;
+    assetId: string;
+    assetName: string;
+    eventType: string;
+    title: string;
+    occurredAt: string;
+  }>;
+  recommendedActions: Array<{
+    id: string;
+    title: string;
+    description: string;
+    href: string;
+    count: number | null;
+  }>;
+}
+
+export interface ConflictDetail {
+  conflict: {
+    id: string;
+    type: string;
+    field: string;
+    status: ConflictStatus;
+    impact: string | null;
+    severity: number;
+    occurrenceCount: number;
+    suggestedValue: string | null;
+    suggestionReason: string | null;
+    detectedAt: string;
+    lastDetectedAt: string | null;
+    resolvedAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  };
+  asset: {
+    id: string;
+    canonicalKey: string | null;
+    name: string;
+    type: string;
+    operationalStatus: OperationalStatus;
+    administrativeStatus: AdministrativeStatus;
+    lastSeenAt: string | null;
+    updatedAt: string;
+  };
+  values: Array<{
+    id: string;
+    evidenceId: string | null;
+    value: unknown;
+    normalizedValue: string | null;
+    source: string;
+    observedAt: string | null;
+    createdAt: string;
+  }>;
+  metadata: Record<string, unknown>;
+  timeline: AssetTimelineEvent[];
+}
+
+export interface UpdateConflictStatusPayload {
+  status: ConflictStatus;
+  reason: string;
+  comment: string;
+}
+
+export interface UpdateConflictStatusResponse {
+  conflict: ConflictSummary;
+  previousStatus: ConflictStatus;
+  status: ConflictStatus;
+  eventId: string;
+  auditLogId: string;
+}
+
+export interface AssetDetail extends AssetSummary {
+  description: string | null;
+  attributes: AssetAttribute[];
+  networkInterfaces: NetworkInterface[];
+  conflicts: AssetConflict[];
+}
+
+export interface AssetEvidence {
+  id: string;
+  source: string;
+  sourceRecordId: string | null;
+  evidenceType: string;
+  payload: unknown;
+  fingerprint: string | null;
+  confidenceScore: number | null;
+  dataQualityScore: number | null;
+  observedAt: string;
+  ingestedAt: string;
+}
+
+export interface AssetTimelineEvent {
+  id: string;
+  evidenceId: string | null;
+  eventType: string;
+  title: string;
+  description: string | null;
+  data: unknown;
+  occurredAt: string;
+  recordedAt: string;
+}
+
+export interface UpdateAdministrativeStatusPayload {
+  administrativeStatus: AdministrativeStatus;
+  reason: string;
+  comment: string;
+}
+
+export interface UpdateAdministrativeStatusResponse {
+  asset: AssetDetail;
+  previousStatus: AdministrativeStatus;
+  administrativeStatus: AdministrativeStatus;
+  eventId: string;
+  auditLogId: string;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    cache: 'no-store',
+    headers: { Accept: 'application/json', ...init.headers },
+  });
+
+  if (!response.ok) {
+    let message =
+      response.status === 404
+        ? 'O recurso solicitado não foi encontrado.'
+        : 'Não foi possível concluir a solicitação.';
+
+    try {
+      const errorBody = (await response.json()) as { message?: string | string[] };
+      if (Array.isArray(errorBody.message)) message = errorBody.message.join(' ');
+      else if (errorBody.message) message = errorBody.message;
+    } catch {
+      // Keep the controlled fallback when the API does not return JSON.
+    }
+
+    throw new ApiError(message, response.status);
+  }
+
+  const body: unknown = await response.json();
+  return body as T;
+}
+
+function queryString(params: object): string {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') searchParams.set(key, String(value));
+  });
+
+  const serialized = searchParams.toString();
+  return serialized ? `?${serialized}` : '';
+}
+
+export function getAssets(params: AssetQueryParams = {}): Promise<PaginatedResponse<AssetSummary>> {
+  return fetchJson(`/assets${queryString(params)}`);
+}
+
+export function getAsset(id: string): Promise<AssetDetail> {
+  return fetchJson(`/assets/${encodeURIComponent(id)}`);
+}
+
+export function getAssetEvidences(id: string): Promise<AssetEvidence[]> {
+  return fetchJson(`/assets/${encodeURIComponent(id)}/evidences`);
+}
+
+export function getAssetTimeline(id: string): Promise<AssetTimelineEvent[]> {
+  return fetchJson(`/assets/${encodeURIComponent(id)}/timeline`);
+}
+
+export function updateAdministrativeStatus(
+  id: string,
+  payload: UpdateAdministrativeStatusPayload,
+): Promise<UpdateAdministrativeStatusResponse> {
+  return fetchJson(`/assets/${encodeURIComponent(id)}/administrative-status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getConflicts(
+  params: ConflictQueryParams = {},
+): Promise<PaginatedResponse<ConflictSummary>> {
+  return fetchJson(`/conflicts${queryString(params)}`);
+}
+
+export function getConflict(id: string): Promise<ConflictDetail> {
+  return fetchJson(`/conflicts/${encodeURIComponent(id)}`);
+}
+
+export function updateConflictStatus(
+  id: string,
+  payload: UpdateConflictStatusPayload,
+): Promise<UpdateConflictStatusResponse> {
+  return fetchJson(`/conflicts/${encodeURIComponent(id)}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getNetworkDiscoveryProfiles(): Promise<NetworkDiscoveryProfile[]> {
+  return fetchJson('/network-discovery/profiles');
+}
+
+export function createNetworkDiscoveryProfile(
+  payload: CreateNetworkDiscoveryProfilePayload,
+): Promise<NetworkDiscoveryProfile> {
+  return fetchJson('/network-discovery/profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getNetworkDiscoveryRuns(): Promise<NetworkDiscoveryRun[]> {
+  return fetchJson('/network-discovery/runs');
+}
+
+export function getNetworkDiscoveryRun(id: string): Promise<NetworkDiscoveryRunDetail> {
+  return fetchJson(`/network-discovery/runs/${encodeURIComponent(id)}`);
+}
+
+export function getDashboardSummary(): Promise<DashboardSummary> {
+  return fetchJson('/dashboard/summary');
+}
+
+export function runNetworkDiscoveryProfile(id: string): Promise<NetworkDiscoveryRunDetail> {
+  return fetchJson(`/network-discovery/profiles/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+  });
+}

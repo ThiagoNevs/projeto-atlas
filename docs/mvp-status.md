@@ -11,6 +11,7 @@ conectores e descoberta real permanecem fora do estado atual.
 
 ## Funcionalidades concluídas
 
+- Dashboard inicial com indicadores operacionais, distribuições do inventário por estado, tipo e sistema operacional, atividade recente e recomendações.
 - Monorepo com Next.js, NestJS, Prisma, PostgreSQL e tipos compartilhados.
 - Ingestão manual/simulada idempotente.
 - Criação e atualização conservadora de ativos.

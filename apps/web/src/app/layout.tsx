@@ -1,0 +1,36 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'Atlas',
+  description: 'Inteligência de ativos baseada em evidências.',
+};
+
+export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <html lang="pt-BR">
+      <body>
+        <header className="site-header">
+          <div className="nav-shell">
+            <Link className="brand" href="/">
+              <span className="brand-mark">A</span>
+              <span>
+                <strong>Atlas</strong>
+                <small>Asset intelligence</small>
+              </span>
+            </Link>
+            <nav aria-label="Navegação principal">
+              <Link href="/assets">Ativos</Link>
+              <Link href="/conflicts">Conflitos</Link>
+              <Link href="/network-discovery">Descoberta de rede</Link>
+            </nav>
+          </div>
+        </header>
+        {children}
+      </body>
+    </html>
+  );
+}

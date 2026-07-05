@@ -10,6 +10,7 @@ de conflitos.
 
 ## Funcionalidades atuais
 
+- Dashboard executivo e operacional com indicadores, saúde do inventário, distribuição por sistema operacional, atividade recente e ações recomendadas.
 - Inventário pesquisável de ativos de infraestrutura.
 - Busca, filtros, ordenação e paginação de ativos e conflitos.
 - Detalhe do ativo com identificação, atributos, interfaces, scores e estado atual.
@@ -144,12 +145,13 @@ corepack pnpm dev:web
 
 ## URLs principais
 
-- Frontend: [http://localhost:3000](http://localhost:3000)
+- Dashboard: [http://localhost:3000](http://localhost:3000)
 - Inventário: [http://localhost:3000/assets](http://localhost:3000/assets)
 - Resolution Center: [http://localhost:3000/conflicts](http://localhost:3000/conflicts)
 - Network Discovery Lite: [http://localhost:3000/network-discovery](http://localhost:3000/network-discovery)
 - API: [http://localhost:3001](http://localhost:3001)
 - Health check: [http://localhost:3001/health](http://localhost:3001/health)
+- Resumo do dashboard: [http://localhost:3001/dashboard/summary](http://localhost:3001/dashboard/summary)
 
 ## Comandos úteis
 

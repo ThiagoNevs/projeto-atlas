@@ -1,0 +1,350 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OperationalStatus {
+  UNKNOWN
+  SEEN_RECENTLY
+  OPERATIONAL
+  DEGRADED
+  UNAVAILABLE
+}
+
+enum AdministrativeStatus {
+  UNKNOWN
+  IN_USE
+  IN_STOCK
+  PLANNED
+  ACTIVE
+  MAINTENANCE
+  DEACTIVATED
+  DISCARDED
+  LOST
+  STOLEN
+  ARCHIVED
+  RETIRED
+}
+
+enum AttributeValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  DATETIME
+  JSON
+}
+
+enum ConflictStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  IGNORED
+  EXCEPTION
+  DISMISSED
+}
+
+enum NetworkDiscoveryMode {
+  PASSIVE
+  LIGHT
+  CONTROLLED
+}
+
+enum NetworkDiscoveryMethod {
+  ICMP_SIMULATED
+  DNS_REVERSE_SIMULATED
+  ARP_SIMULATED
+}
+
+enum NetworkDiscoveryRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum NetworkDiscoveryResultStatus {
+  DISCOVERED
+  UPDATED
+  SKIPPED
+  ERROR
+}
+
+model Asset {
+  id                   String               @id @default(uuid()) @db.Uuid
+  canonicalKey         String?              @unique @map("canonical_key")
+  name                 String
+  kind                 String
+  description          String?
+  operationalStatus    OperationalStatus    @default(UNKNOWN) @map("operational_status")
+  administrativeStatus AdministrativeStatus @default(IN_USE) @map("administrative_status")
+  confidenceScore      Decimal?             @map("confidence") @db.Decimal(5, 2)
+  dataQualityScore     Decimal?             @map("quality_score") @db.Decimal(5, 2)
+  firstSeenAt          DateTime?            @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt           DateTime?            @map("last_seen_at") @db.Timestamptz(3)
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  attributes        AssetAttribute[]
+  evidence          AssetEvidence[]
+  events            AssetEvent[]
+  networkInterfaces NetworkInterface[]
+  conflicts         Conflict[]
+  auditLogs         AuditLog[]
+  discoveryResults  NetworkDiscoveryResult[]
+
+  @@index([kind])
+  @@index([operationalStatus])
+  @@index([administrativeStatus])
+  @@index([updatedAt])
+  @@map("assets")
+}
+
+model AssetAttribute {
+  id                String             @id @default(uuid()) @db.Uuid
+  assetId           String             @map("asset_id") @db.Uuid
+  evidenceId        String?            @map("evidence_id") @db.Uuid
+  key               String
+  value             Json               @db.JsonB
+  valueText         String?            @map("value_text")
+  valueType         AttributeValueType @default(JSON) @map("value_type")
+  confidenceScore   Decimal?           @map("confidence") @db.Decimal(5, 2)
+  dataQualityScore  Decimal?           @map("quality_score") @db.Decimal(5, 2)
+  isCurrent         Boolean            @default(true) @map("is_current")
+  observedAt        DateTime           @map("observed_at") @db.Timestamptz(3)
+  lastConfirmedAt   DateTime           @default(now()) @map("last_confirmed_at") @db.Timestamptz(3)
+  confirmationCount Int                @default(1) @map("confirmation_count")
+  validFrom         DateTime?          @map("valid_from") @db.Timestamptz(3)
+  validTo           DateTime?          @map("valid_to") @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  asset    Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  evidence AssetEvidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, key, isCurrent])
+  @@index([assetId, observedAt(sort: Desc)])
+  @@index([evidenceId])
+  @@map("asset_attributes")
+}
+
+model AssetEvidence {
+  id               String    @id @default(uuid()) @db.Uuid
+  assetId          String    @map("asset_id") @db.Uuid
+  source           String
+  sourceRecordId   String?   @map("source_record_id")
+  evidenceType     String    @map("evidence_type")
+  payload          Json      @db.JsonB
+  fingerprint      String?
+  confidenceScore  Decimal?  @map("confidence") @db.Decimal(5, 2)
+  dataQualityScore Decimal?  @map("quality_score") @db.Decimal(5, 2)
+  observedAt       DateTime  @map("observed_at") @db.Timestamptz(3)
+  ingestedAt       DateTime  @default(now()) @map("ingested_at") @db.Timestamptz(3)
+  expiresAt        DateTime? @map("expires_at") @db.Timestamptz(3)
+
+  asset             Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  attributes        AssetAttribute[]
+  events            AssetEvent[]
+  networkInterfaces NetworkInterface[]
+  conflictValues    ConflictValue[]
+
+  @@index([source, sourceRecordId])
+  @@index([assetId, observedAt(sort: Desc)])
+  @@index([source, observedAt(sort: Desc)])
+  @@index([fingerprint])
+  @@map("asset_evidence")
+}
+
+model AssetEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  assetId     String   @map("asset_id") @db.Uuid
+  evidenceId  String?  @map("evidence_id") @db.Uuid
+  eventType   String   @map("event_type")
+  title       String
+  description String?
+  data        Json?    @db.JsonB
+  occurredAt  DateTime @map("occurred_at") @db.Timestamptz(3)
+  recordedAt  DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  asset    Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  evidence AssetEvidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, occurredAt(sort: Desc)])
+  @@index([eventType, occurredAt(sort: Desc)])
+  @@index([evidenceId])
+  @@map("asset_events")
+}
+
+model NetworkInterface {
+  id             String    @id @default(uuid()) @db.Uuid
+  assetId        String    @map("asset_id") @db.Uuid
+  evidenceId     String?   @map("evidence_id") @db.Uuid
+  identityKey    String    @map("identity_key")
+  name           String
+  macAddress     String?   @map("mac_address")
+  ipAddresses    String[]  @default([]) @map("ip_addresses")
+  interfaceIndex Int?      @map("interface_index")
+  isPrimary      Boolean   @default(false) @map("is_primary")
+  isCurrent      Boolean   @default(true) @map("is_current")
+  observedAt     DateTime? @map("observed_at") @db.Timestamptz(3)
+  firstSeenAt    DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt     DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  asset    Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  evidence AssetEvidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, name])
+  @@unique([assetId, identityKey])
+  @@index([assetId])
+  @@index([assetId, isCurrent])
+  @@index([macAddress])
+  @@index([ipAddresses], type: Gin)
+  @@index([evidenceId])
+  @@map("network_interfaces")
+}
+
+model Conflict {
+  id               String         @id @default(uuid()) @db.Uuid
+  assetId          String         @map("asset_id") @db.Uuid
+  conflictType     String         @default("ATTRIBUTE_CONFLICT") @map("conflict_type")
+  attributeKey     String         @map("attribute_key")
+  status           ConflictStatus @default(OPEN)
+  severity         Int            @default(1)
+  impact           String?
+  suggestedValue   String?        @map("suggested_value")
+  suggestionReason String?        @map("suggestion_reason")
+  resolutionValue  Json?          @map("resolution_value") @db.JsonB
+  resolutionNote   String?        @map("resolution_note")
+  detectedAt       DateTime       @default(now()) @map("detected_at") @db.Timestamptz(3)
+  lastDetectedAt   DateTime?      @map("last_detected_at") @db.Timestamptz(3)
+  occurrenceCount  Int            @default(1) @map("occurrence_count")
+  resolvedAt       DateTime?      @map("resolved_at") @db.Timestamptz(3)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  asset  Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  values ConflictValue[]
+
+  @@index([assetId, status, detectedAt(sort: Desc)])
+  @@index([assetId, conflictType, status])
+  @@index([assetId, attributeKey])
+  @@map("conflicts")
+}
+
+model ConflictValue {
+  id              String    @id @default(uuid()) @db.Uuid
+  conflictId      String    @map("conflict_id") @db.Uuid
+  evidenceId      String?   @map("evidence_id") @db.Uuid
+  value           Json      @db.JsonB
+  normalizedValue String?   @map("normalized_value")
+  source          String
+  confidenceScore Decimal?  @map("confidence") @db.Decimal(5, 2)
+  observedAt      DateTime? @map("observed_at") @db.Timestamptz(3)
+  isPreferred     Boolean   @default(false) @map("is_preferred")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  conflict Conflict       @relation(fields: [conflictId], references: [id], onDelete: Cascade)
+  evidence AssetEvidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@index([conflictId])
+  @@index([evidenceId])
+  @@map("conflict_values")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  assetId    String?  @map("asset_id") @db.Uuid
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  before     Json?    @db.JsonB
+  after      Json?    @db.JsonB
+  metadata   Json?    @db.JsonB
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+
+  asset Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, occurredAt(sort: Desc)])
+  @@index([entityType, entityId, occurredAt(sort: Desc)])
+  @@index([actorType, actorId, occurredAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model NetworkDiscoveryProfile {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  name               String
+  description        String?
+  enabled            Boolean                  @default(true)
+  mode               NetworkDiscoveryMode
+  allowedCidrs       String[]                 @map("allowed_cidrs")
+  deniedCidrs        String[]                 @default([]) @map("denied_cidrs")
+  rateLimitPerMinute Int                      @map("rate_limit_per_minute")
+  scheduleEnabled    Boolean                  @default(false) @map("schedule_enabled")
+  scheduleExpression String?                  @map("schedule_expression")
+  methods            NetworkDiscoveryMethod[]
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  runs NetworkDiscoveryRun[]
+
+  @@index([enabled, updatedAt(sort: Desc)])
+  @@map("network_discovery_profiles")
+}
+
+model NetworkDiscoveryRun {
+  id                String                    @id @default(uuid()) @db.Uuid
+  profileId         String                    @map("profile_id") @db.Uuid
+  status            NetworkDiscoveryRunStatus @default(RUNNING)
+  startedAt         DateTime                  @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime?                 @map("finished_at") @db.Timestamptz(3)
+  totalTargets      Int                       @default(0) @map("total_targets")
+  discoveredCount   Int                       @default(0) @map("discovered_count")
+  updatedAssetCount Int                       @default(0) @map("updated_asset_count")
+  createdAssetCount Int                       @default(0) @map("created_asset_count")
+  skippedCount      Int                       @default(0) @map("skipped_count")
+  errorCount        Int                       @default(0) @map("error_count")
+  summary           Json?                     @db.JsonB
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  profile NetworkDiscoveryProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  results NetworkDiscoveryResult[]
+
+  @@index([profileId, startedAt(sort: Desc)])
+  @@index([status, startedAt(sort: Desc)])
+  @@map("network_discovery_runs")
+}
+
+model NetworkDiscoveryResult {
+  id              String                       @id @default(uuid()) @db.Uuid
+  runId           String                       @map("run_id") @db.Uuid
+  assetId         String?                      @map("asset_id") @db.Uuid
+  ipAddress       String                       @map("ip_address")
+  macAddress      String?                      @map("mac_address")
+  hostname        String?
+  source          String
+  method          NetworkDiscoveryMethod
+  confidenceScore Decimal?                     @map("confidence") @db.Decimal(5, 2)
+  status          NetworkDiscoveryResultStatus
+  raw             Json                         @db.JsonB
+  createdAt       DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  run   NetworkDiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  asset Asset?              @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@index([runId, createdAt])
+  @@index([assetId])
+  @@index([ipAddress])
+  @@index([macAddress])
+  @@map("network_discovery_results")
+}
