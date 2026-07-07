@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds and caches
+dist/
+.next/
+next-env.d.ts
+apps/api/src/generated/prisma/
+coverage/
+*.tsbuildinfo
+
+# Environment and local state
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+pnpm-debug.log*
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

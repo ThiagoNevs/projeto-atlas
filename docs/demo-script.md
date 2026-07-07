@@ -31,6 +31,8 @@ sozinho não prova o estado técnico do ativo.
 Abra o dashboard na página inicial. Mostre os indicadores de ativos, qualidade, confiança e
 conflitos; em seguida, destaque a saúde do inventário, a atividade recente e as ações
 recomendadas. Na saúde do inventário, compare as famílias e versões de sistemas operacionais.
+Apresente **Sinais de Atenção** e diferencie acompanhamento operacional de conflito. Destaque
+sistemas operacionais obsoletos e ativos que deixaram de gerar evidência há mais de 45 dias.
 Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 
 Abra **Qualidade dos dados** para transformar os indicadores em ação. Mostre os ativos sem
@@ -39,6 +41,10 @@ sistema operacional, número de série ou rede, use uma prioridade e abra o deta
 Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um equipamento em
 estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado
 operacional até que uma fonte técnica observe o equipamento.
+
+No detalhe de um ativo incompleto, use **Adicionar informação manual** para preencher um campo
+ausente. Mostre a nova evidência e timeline e destaque que valores técnicos existentes não são
+sobrescritos.
 
 Apresente o Atlas como uma camada de inteligência que:
 

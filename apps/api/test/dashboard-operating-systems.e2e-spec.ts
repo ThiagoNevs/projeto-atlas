@@ -14,6 +14,9 @@ type OperatingSystemSummary = {
     byOperatingSystem: Record<string, number>;
     byOperatingSystemVersion: Record<string, number>;
   };
+  inventoryHealth: {
+    attentionSignals: { obsoleteOperatingSystems: number };
+  };
 };
 
 describe('Dashboard operating system distributions (e2e)', () => {
@@ -38,11 +41,17 @@ describe('Dashboard operating system distributions (e2e)', () => {
           },
         ],
       },
+      {
+        attributes: [
+          { key: 'operatingSystem', value: 'Windows Server', valueText: 'Windows Server' },
+          { key: 'OSVERSION', value: '2012 R2', valueText: '2012 R2' },
+        ],
+      },
       { attributes: [] },
     ];
     const prismaMock = {
       asset: {
-        count: jest.fn<() => Promise<number>>().mockResolvedValue(3),
+        count: jest.fn<() => Promise<number>>().mockResolvedValue(4),
         groupBy: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
         findMany: jest.fn<() => Promise<typeof assets>>().mockResolvedValue(assets),
       },
@@ -73,7 +82,7 @@ describe('Dashboard operating system distributions (e2e)', () => {
     const body = response.body as OperatingSystemSummary;
 
     expect(body.assets.byOperatingSystem).toEqual({
-      Windows: 1,
+      Windows: 2,
       Linux: 1,
       'Não identificado': 1,
     });
@@ -83,7 +92,7 @@ describe('Dashboard operating system distributions (e2e)', () => {
     const response = await request(httpServer).get('/dashboard/summary').expect(200);
     const body = response.body as OperatingSystemSummary;
 
-    expect(body.assets.byOperatingSystem.Windows).toBe(1);
+    expect(body.assets.byOperatingSystem.Windows).toBe(2);
     expect(body.assets.byOperatingSystem.Linux).toBe(1);
   });
 
@@ -93,7 +102,15 @@ describe('Dashboard operating system distributions (e2e)', () => {
 
     expect(body.assets.byOperatingSystemVersion).toEqual({
       'Windows 11 Pro 23H2': 1,
+      'Windows Server 2012 R2': 1,
       'Ubuntu Server 24.04': 1,
     });
+  });
+
+  it('counts operating systems matched by the versioned obsolete catalog', async () => {
+    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const body = response.body as OperatingSystemSummary;
+
+    expect(body.inventoryHealth.attentionSignals.obsoleteOperatingSystems).toBe(1);
   });
 });

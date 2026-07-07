@@ -1,0 +1,35 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plataforma de inteligência de ativos baseada em evidências.",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22.13.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "dev": "corepack pnpm --parallel --filter @atlas/shared --filter @atlas/web --filter @atlas/api dev",
+    "dev:web": "corepack pnpm --filter @atlas/web dev",
+    "dev:api": "corepack pnpm --filter @atlas/api dev",
+    "build": "corepack pnpm --recursive --if-present build",
+    "lint": "corepack pnpm --recursive --if-present lint",
+    "test": "corepack pnpm --recursive --if-present test",
+    "typecheck": "corepack pnpm --recursive --if-present typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f postgres",
+    "db:generate": "corepack pnpm --filter @atlas/api prisma:generate",
+    "db:validate": "corepack pnpm --filter @atlas/api prisma:validate",
+    "db:format": "corepack pnpm --filter @atlas/api prisma:format",
+    "db:migrate": "corepack pnpm --filter @atlas/api prisma:migrate",
+    "db:seed": "corepack pnpm --filter @atlas/api prisma:seed",
+    "db:studio": "corepack pnpm --filter @atlas/api prisma:studio"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3"
+  }
+}

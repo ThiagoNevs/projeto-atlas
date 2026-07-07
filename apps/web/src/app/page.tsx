@@ -109,6 +109,9 @@ export default function Home() {
   if (!summary) return null;
 
   const lastDiscovery = summary.networkDiscovery;
+  const attentionSignals = summary.inventoryHealth.attentionSignals.items.filter(
+    (signal) => signal.count > 0,
+  );
   const metrics = [
     { label: 'Total de ativos', value: summary.assets.total, tone: 'accent' },
     { label: 'Vistos recentemente', value: summary.assets.seenRecently, tone: 'positive' },
@@ -238,6 +241,39 @@ export default function Home() {
             total={summary.assets.total}
             emptyMessage="Nenhum sistema operacional identificado."
           />
+        </div>
+        <div className="attention-signals" aria-labelledby="attention-signals-title">
+          <div className="attention-signals-heading">
+            <div>
+              <p className="section-kicker">Acompanhamento operacional</p>
+              <h3 id="attention-signals-title">Sinais de Atenção</h3>
+            </div>
+            <p>
+              Sinais de atenção indicam condições que merecem revisão operacional, mas nem sempre
+              representam conflitos.
+            </p>
+          </div>
+          {attentionSignals.length ? (
+            <div className="attention-signal-grid">
+              {attentionSignals.map((signal) => (
+                <Link
+                  className={`attention-signal-card attention-${signal.severity}`}
+                  href={signal.href}
+                  key={signal.type}
+                >
+                  <span className="attention-severity">
+                    {signal.severity === 'high' ? 'Prioridade alta' : 'Prioridade média'}
+                  </span>
+                  <strong>{signal.count}</strong>
+                  <h4>{signal.label}</h4>
+                  <p>{signal.description}</p>
+                  <small>Revisar →</small>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="attention-empty">Nenhum sinal de atenção relevante no momento.</p>
+          )}
         </div>
       </section>
 

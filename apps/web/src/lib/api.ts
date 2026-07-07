@@ -223,6 +223,28 @@ export interface DashboardSummary {
     byOperatingSystem: Record<string, number>;
     byOperatingSystemVersion: Record<string, number>;
   };
+  inventoryHealth: {
+    attentionSignals: {
+      obsoleteOperatingSystems: number;
+      staleAssets45Days: number;
+      lowConfidence: number;
+      incompleteData: number;
+      reappearedClosedAssets: number;
+      items: Array<{
+        type:
+          | 'OBSOLETE_OPERATING_SYSTEM'
+          | 'STALE_ASSET_45_DAYS'
+          | 'LOW_CONFIDENCE'
+          | 'INCOMPLETE_DATA'
+          | 'REAPPEARED_CLOSED_ASSET';
+        label: string;
+        description: string;
+        count: number;
+        severity: 'medium' | 'high';
+        href: string;
+      }>;
+    };
+  };
   conflicts: {
     totalOpen: number;
     inReview: number;
@@ -483,6 +505,35 @@ export interface CreateManualAssetResponse {
   auditLogId: string;
 }
 
+export interface ManualEnrichmentAttributes {
+  operatingSystem?: string;
+  osVersion?: string;
+  manufacturer?: string;
+  model?: string;
+  serialNumber?: string;
+  location?: string;
+  owner?: string;
+  department?: string;
+  environment?: string;
+  criticality?: string;
+  comment?: string;
+}
+
+export interface ManualEnrichmentPayload {
+  reason: string;
+  comment?: string;
+  attributes: ManualEnrichmentAttributes;
+}
+
+export interface ManualEnrichmentResponse {
+  asset: AssetDetail;
+  createdAttributes: string[];
+  confirmedAttributes: string[];
+  evidenceId: string;
+  eventId: string;
+  auditLogId: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -563,6 +614,17 @@ export function createManualAsset(
   payload: CreateManualAssetPayload,
 ): Promise<CreateManualAssetResponse> {
   return fetchJson('/assets/manual', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function enrichAssetManually(
+  id: string,
+  payload: ManualEnrichmentPayload,
+): Promise<ManualEnrichmentResponse> {
+  return fetchJson(`/assets/${encodeURIComponent(id)}/manual-enrichment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

@@ -17,12 +17,15 @@ import {
 import { UpdateAdministrativeStatusDto } from './dto/update-administrative-status.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateManualAssetDto } from './dto/create-manual-asset.dto';
+import { ManualEnrichmentDto } from './dto/manual-enrichment.dto';
 
 const SIMULATED_ACTOR_USER_ID = 'atlas-mvp-user';
 const MANUAL_CONFIDENCE_SCORE = 60;
 const MANUAL_SOURCE = 'MANUAL';
 const MANUAL_EVIDENCE_TYPE = 'MANUAL_DECLARATION';
 const MANUAL_EVENT_TYPE = 'ASSET_MANUALLY_DECLARED';
+const MANUAL_ENRICHMENT_EVIDENCE_TYPE = 'MANUAL_ENRICHMENT';
+const MANUAL_ENRICHMENT_EVENT_TYPE = 'ASSET_MANUALLY_ENRICHED';
 
 @Injectable()
 export class AssetsService {
@@ -280,9 +283,7 @@ export class AssetsService {
   }
 
   private manualPayload(payload: CreateManualAssetDto): Prisma.InputJsonObject {
-    return Object.fromEntries(
-      Object.entries(payload).filter(([, value]) => value !== undefined),
-    );
+    return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
   }
 
   private normalizeIdentifier(identifier: string, identifierType: string): string {
@@ -459,5 +460,240 @@ export class AssetsService {
         auditLogId: auditLog.id,
       };
     });
+  }
+
+  async enrichManually(id: string, payload: ManualEnrichmentDto) {
+    const attributes = Object.entries(payload.attributes).flatMap(([key, value]) =>
+      typeof value === 'string' && value.trim() ? [{ key, value: value.trim() }] : [],
+    );
+    if (!attributes.length) {
+      throw new BadRequestException('At least one non-empty attribute is required.');
+    }
+
+    const occurredAt = new Date();
+    return this.prisma.$transaction(async (transaction) => {
+      const asset = await transaction.asset.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          canonicalKey: true,
+          name: true,
+          kind: true,
+          administrativeStatus: true,
+          confidenceScore: true,
+          dataQualityScore: true,
+          lastSeenAt: true,
+          attributes: {
+            where: { isCurrent: true },
+            select: {
+              id: true,
+              key: true,
+              valueText: true,
+              value: true,
+              lastConfirmedAt: true,
+            },
+          },
+          networkInterfaces: {
+            where: { isCurrent: true },
+            select: { macAddress: true, ipAddresses: true },
+          },
+        },
+      });
+      if (!asset) throw new NotFoundException(`Asset ${id} was not found.`);
+
+      const currentByKey = new Map(
+        asset.attributes.map((attribute) => [this.normalizeAttributeKey(attribute.key), attribute]),
+      );
+      for (const attribute of attributes) {
+        const current = currentByKey.get(this.normalizeAttributeKey(attribute.key));
+        const currentValue = this.attributeText(current);
+        if (
+          currentValue &&
+          currentValue.toLocaleLowerCase() !== attribute.value.toLocaleLowerCase()
+        ) {
+          throw new ConflictException(
+            `O campo ${attribute.key} já possui um valor atual diferente. Para evitar sobrescrever evidências, a alteração não foi aplicada.`,
+          );
+        }
+      }
+
+      const mergedValues = new Map(
+        asset.attributes.flatMap((attribute) => {
+          const value = this.attributeText(attribute);
+          return value ? [[this.normalizeAttributeKey(attribute.key), value] as const] : [];
+        }),
+      );
+      attributes.forEach((attribute) =>
+        mergedValues.set(this.normalizeAttributeKey(attribute.key), attribute.value),
+      );
+      const calculatedQuality = this.calculateEnrichedDataQuality(asset, mergedValues);
+      const currentQuality = asset.dataQualityScore?.toNumber() ?? 0;
+      const dataQualityScore = Math.max(currentQuality, calculatedQuality);
+      const evidencePayload = {
+        reason: payload.reason,
+        comment: payload.comment ?? null,
+        attributes: Object.fromEntries(
+          attributes.map((attribute) => [attribute.key, attribute.value]),
+        ),
+      };
+      const evidence = await transaction.assetEvidence.create({
+        data: {
+          assetId: id,
+          source: MANUAL_SOURCE,
+          evidenceType: MANUAL_ENRICHMENT_EVIDENCE_TYPE,
+          payload: evidencePayload,
+          fingerprint: createHash('sha256').update(JSON.stringify(evidencePayload)).digest('hex'),
+          confidenceScore: MANUAL_CONFIDENCE_SCORE,
+          dataQualityScore,
+          observedAt: occurredAt,
+        },
+        select: { id: true },
+      });
+
+      const createdAttributes: string[] = [];
+      const confirmedAttributes: string[] = [];
+      for (const attribute of attributes) {
+        const current = currentByKey.get(this.normalizeAttributeKey(attribute.key));
+        if (current) {
+          await transaction.assetAttribute.update({
+            where: { id: current.id },
+            data: {
+              confirmationCount: { increment: 1 },
+              lastConfirmedAt:
+                current.lastConfirmedAt > occurredAt ? current.lastConfirmedAt : occurredAt,
+            },
+          });
+          confirmedAttributes.push(attribute.key);
+        } else {
+          await transaction.assetAttribute.create({
+            data: {
+              assetId: id,
+              evidenceId: evidence.id,
+              key: attribute.key,
+              value: attribute.value,
+              valueText: attribute.value,
+              valueType: AttributeValueType.STRING,
+              confidenceScore: MANUAL_CONFIDENCE_SCORE,
+              dataQualityScore,
+              isCurrent: true,
+              observedAt: occurredAt,
+              lastConfirmedAt: occurredAt,
+              validFrom: occurredAt,
+            },
+          });
+          createdAttributes.push(attribute.key);
+        }
+      }
+
+      await transaction.asset.update({ where: { id }, data: { dataQualityScore } });
+      const eventData = {
+        reason: payload.reason,
+        comment: payload.comment ?? null,
+        attributes: Object.fromEntries(
+          attributes.map((attribute) => [attribute.key, attribute.value]),
+        ),
+        createdAttributes,
+        confirmedAttributes,
+        source: MANUAL_SOURCE,
+        actorUserId: SIMULATED_ACTOR_USER_ID,
+      };
+      const previousValues = Object.fromEntries(
+        attributes.map((attribute) => {
+          const current = currentByKey.get(this.normalizeAttributeKey(attribute.key));
+          return [attribute.key, this.attributeText(current)];
+        }),
+      );
+      const event = await transaction.assetEvent.create({
+        data: {
+          assetId: id,
+          evidenceId: evidence.id,
+          eventType: MANUAL_ENRICHMENT_EVENT_TYPE,
+          title: 'Ativo enriquecido manualmente',
+          description: payload.reason,
+          data: eventData,
+          occurredAt,
+        },
+        select: { id: true },
+      });
+      const auditLog = await transaction.auditLog.create({
+        data: {
+          assetId: id,
+          actorType: 'USER',
+          actorId: SIMULATED_ACTOR_USER_ID,
+          action: MANUAL_ENRICHMENT_EVENT_TYPE,
+          entityType: 'ASSET',
+          entityId: id,
+          before: previousValues,
+          after: Object.fromEntries(
+            attributes.map((attribute) => [attribute.key, attribute.value]),
+          ),
+          metadata: eventData,
+          occurredAt,
+        },
+        select: { id: true },
+      });
+      const detail = await transaction.asset.findUniqueOrThrow({
+        where: { id },
+        select: assetDetailSelect,
+      });
+
+      return {
+        asset: presentAssetDetail(detail),
+        createdAttributes,
+        confirmedAttributes,
+        evidenceId: evidence.id,
+        eventId: event.id,
+        auditLogId: auditLog.id,
+      };
+    });
+  }
+
+  private attributeText(attribute: { valueText: string | null; value: unknown } | undefined) {
+    if (!attribute) return null;
+    if (attribute.valueText?.trim()) return attribute.valueText.trim();
+    return typeof attribute.value === 'string' && attribute.value.trim()
+      ? attribute.value.trim()
+      : null;
+  }
+
+  private normalizeAttributeKey(key: string): string {
+    return key.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  }
+
+  private calculateEnrichedDataQuality(
+    asset: {
+      id: string;
+      canonicalKey: string | null;
+      name: string;
+      kind: string;
+      administrativeStatus: string;
+      lastSeenAt: Date | null;
+      networkInterfaces: Array<{ macAddress: string | null; ipAddresses: string[] }>;
+    },
+    attributes: Map<string, string>,
+  ): number {
+    const hasNetwork = asset.networkInterfaces.some(
+      (networkInterface) =>
+        Boolean(networkInterface.macAddress) || networkInterface.ipAddresses.length > 0,
+    );
+    const values = [
+      asset.canonicalKey ?? asset.id,
+      asset.name,
+      asset.kind,
+      asset.administrativeStatus,
+      attributes.get('SERIALNUMBER'),
+      attributes.get('MANUFACTURER'),
+      attributes.get('MODEL'),
+      attributes.get('OPERATINGSYSTEM') ?? attributes.get('OS'),
+      attributes.get('OSVERSION'),
+      attributes.get('LOCATION'),
+      attributes.get('OWNER'),
+      attributes.get('DEPARTMENT'),
+      attributes.get('ENVIRONMENT'),
+      attributes.get('CRITICALITY'),
+      asset.lastSeenAt || hasNetwork ? 'observed' : undefined,
+    ];
+    const completed = values.filter(Boolean).length;
+    return Math.round((completed / values.length) * 10000) / 100;
   }
 }

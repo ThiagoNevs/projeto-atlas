@@ -10,7 +10,7 @@ de conflitos.
 
 ## Funcionalidades atuais
 
-- Dashboard executivo e operacional com indicadores, saúde do inventário, distribuição por sistema operacional, atividade recente e ações recomendadas.
+- Dashboard executivo e operacional com saúde do inventário, sinais de atenção, sistemas operacionais obsoletos, atividade recente e ações recomendadas.
 - Inventário pesquisável de ativos de infraestrutura.
 - Busca, filtros, ordenação e paginação de ativos e conflitos.
 - Detalhe do ativo com identificação, atributos, interfaces, scores e estado atual.
@@ -25,6 +25,7 @@ de conflitos.
 - Tela de auditoria com busca, filtros, resumo, paginação e detalhe dos registros.
 - Tela operacional de qualidade dos dados com lacunas, scores e prioridades de correção.
 - Declaração manual de ativos ainda não observados por fontes técnicas, com evidência e auditoria.
+- Enriquecimento manual de campos ausentes sem sobrescrever valores técnicos atuais.
 - Massa fictícia com 15 cenários de demonstração.
 - Network Discovery Lite simulado, escopado a redes privadas e auditável.
 - Interface em português com tratamento de loading, erro e hydration.

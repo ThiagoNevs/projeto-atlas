@@ -11,7 +11,7 @@ conectores e descoberta real permanecem fora do estado atual.
 
 ## Funcionalidades concluídas
 
-- Dashboard inicial com indicadores operacionais, distribuições do inventário por estado, tipo e sistema operacional, atividade recente e recomendações.
+- Dashboard inicial com Saúde do Inventário, distribuições, atividade recente, recomendações e Sinais de Atenção para sistemas obsoletos, ativos sem evidência há 45+ dias e outros riscos operacionais.
 - Monorepo com Next.js, NestJS, Prisma, PostgreSQL e tipos compartilhados.
 - Ingestão manual/simulada idempotente.
 - Criação e atualização conservadora de ativos.
@@ -34,6 +34,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
+- Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
 - Suíte E2E integrada ao PostgreSQL.
 
 ## Funcionalidades parciais

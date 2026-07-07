@@ -116,6 +116,15 @@ type ManualAssetResponse = {
   auditLogId: string;
 };
 
+type ManualEnrichmentResponse = {
+  asset: { id: string; dataQualityScore: number | null; confidenceScore: number | null };
+  createdAttributes: string[];
+  confirmedAttributes: string[];
+  evidenceId: string;
+  eventId: string;
+  auditLogId: string;
+};
+
 describe('Asset ingestion idempotency (e2e)', () => {
   let app: INestApplication;
   let httpServer: Server;
@@ -287,6 +296,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   afterAll(async () => {
+    if (dataQualityAssetId) {
+      await prisma.auditLog.deleteMany({
+        where: { entityId: dataQualityAssetId, action: 'ASSET_MANUALLY_ENRICHED' },
+      });
+    }
     if (manualAssetId) {
       await prisma.auditLog.deleteMany({ where: { entityId: manualAssetId } });
       await prisma.asset.deleteMany({ where: { id: manualAssetId } });
@@ -1352,6 +1366,40 @@ describe('Asset ingestion idempotency (e2e)', () => {
     expect(activity.map((event) => event.id)).toEqual(expectedEvents.map((event) => event.id));
   });
 
+  it('reports inventory attention signals from current data', async () => {
+    const staleCutoff = new Date(Date.now() - 45 * 24 * 60 * 60 * 1_000);
+    const [stale, lowConfidence, incomplete, reappeared] = await Promise.all([
+      prisma.asset.count({ where: { lastSeenAt: { lt: staleCutoff } } }),
+      prisma.asset.count({ where: { confidenceScore: { lt: 70 } } }),
+      prisma.asset.count({ where: { dataQualityScore: { lt: 70 } } }),
+      prisma.conflict.count({
+        where: { status: 'OPEN', conflictType: 'LIFECYCLE_CONFLICT' },
+      }),
+    ]);
+    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const body = response.body as {
+      inventoryHealth: {
+        attentionSignals: {
+          staleAssets45Days: number;
+          lowConfidence: number;
+          incompleteData: number;
+          reappearedClosedAssets: number;
+          items: unknown[];
+        };
+      };
+    };
+
+    expect(body.inventoryHealth.attentionSignals).toEqual(
+      expect.objectContaining({
+        staleAssets45Days: stale,
+        lowConfidence,
+        incompleteData: incomplete,
+        reappearedClosedAssets: reappeared,
+        items: expect.any(Array),
+      }),
+    );
+  });
+
   it('lists audit logs with pagination and summary', async () => {
     const response = await request(httpServer).get('/audit-logs').expect(200);
     const body = response.body as AuditLogListResponse;
@@ -1679,5 +1727,117 @@ describe('Asset ingestion idempotency (e2e)', () => {
     expect(asset?.issues).toEqual(
       expect.arrayContaining(['LOW_CONFIDENCE', 'MISSING_NETWORK_INFO', 'WITHOUT_RECENT_EVIDENCE']),
     );
+  });
+
+  it('requires a reason for manual enrichment', async () => {
+    await request(httpServer)
+      .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
+      .send({ reason: '   ', attributes: { operatingSystem: 'Windows Server' } })
+      .expect(400);
+  });
+
+  it('rejects manual enrichment without non-empty attributes', async () => {
+    await request(httpServer)
+      .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
+      .send({ reason: 'Validação E2E', attributes: { operatingSystem: '   ' } })
+      .expect(400);
+  });
+
+  it('returns 404 when enriching an unknown asset', async () => {
+    await request(httpServer)
+      .post(`/assets/${randomUUID()}/manual-enrichment`)
+      .send({ reason: 'Validação E2E', attributes: { operatingSystem: 'Windows Server' } })
+      .expect(404);
+  });
+
+  it('fills missing attributes through manual enrichment', async () => {
+    const response = await request(httpServer)
+      .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
+      .send({
+        reason: 'Validado com o time de infraestrutura',
+        comment: 'Informação confirmada em inventário interno',
+        attributes: {
+          operatingSystem: 'Windows Server',
+          manufacturer: 'Dell',
+        },
+      })
+      .expect(201);
+    const body = response.body as ManualEnrichmentResponse;
+
+    expect(body.createdAttributes).toEqual(
+      expect.arrayContaining(['operatingSystem', 'manufacturer']),
+    );
+    expect(body.asset.dataQualityScore).toBeGreaterThan(40);
+    expect(body.asset.confidenceScore).toBe(45);
+  });
+
+  it('creates evidence, timeline and audit for manual enrichment', async () => {
+    const [evidence, event, auditLog] = await Promise.all([
+      prisma.assetEvidence.findFirstOrThrow({
+        where: { assetId: dataQualityAssetId, evidenceType: 'MANUAL_ENRICHMENT' },
+      }),
+      prisma.assetEvent.findFirstOrThrow({
+        where: { assetId: dataQualityAssetId, eventType: 'ASSET_MANUALLY_ENRICHED' },
+      }),
+      prisma.auditLog.findFirstOrThrow({
+        where: { entityId: dataQualityAssetId, action: 'ASSET_MANUALLY_ENRICHED' },
+      }),
+    ]);
+
+    expect(evidence.source).toBe('MANUAL');
+    expect(event.title).toBe('Ativo enriquecido manualmente');
+    expect(auditLog.entityType).toBe('ASSET');
+  });
+
+  it('confirms an identical value without duplicating the attribute', async () => {
+    const beforeCount = await prisma.assetAttribute.count({
+      where: { assetId: dataQualityAssetId, key: 'operatingSystem' },
+    });
+    const response = await request(httpServer)
+      .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
+      .send({
+        reason: 'Segunda confirmação manual',
+        attributes: { operatingSystem: 'Windows Server' },
+      })
+      .expect(201);
+    const body = response.body as ManualEnrichmentResponse;
+
+    expect(body.confirmedAttributes).toContain('operatingSystem');
+    expect(
+      await prisma.assetAttribute.count({
+        where: { assetId: dataQualityAssetId, key: 'operatingSystem' },
+      }),
+    ).toBe(beforeCount);
+  });
+
+  it('rejects a different current value without overwriting it', async () => {
+    const evidenceCount = await prisma.assetEvidence.count({
+      where: { assetId: dataQualityAssetId },
+    });
+    await request(httpServer)
+      .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
+      .send({
+        reason: 'Tentativa de sobrescrita',
+        attributes: { operatingSystem: 'Linux' },
+      })
+      .expect(409);
+
+    const operatingSystem = await prisma.assetAttribute.findFirstOrThrow({
+      where: { assetId: dataQualityAssetId, key: 'operatingSystem', isCurrent: true },
+    });
+    expect(operatingSystem.valueText).toBe('Windows Server');
+    expect(await prisma.assetEvidence.count({ where: { assetId: dataQualityAssetId } })).toBe(
+      evidenceCount,
+    );
+  });
+
+  it('removes the filled field from data-quality missing issues', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ issue: 'MISSING_OPERATING_SYSTEM', pageSize: 100 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+
+    expect(body.items.some((asset) => asset.id === dataQualityAssetId)).toBe(false);
   });
 });

@@ -67,6 +67,16 @@ describe('Dashboard with an empty database (e2e)', () => {
           lastRunAt: null,
         }),
         recentActivity: [],
+        inventoryHealth: {
+          attentionSignals: {
+            obsoleteOperatingSystems: 0,
+            staleAssets45Days: 0,
+            lowConfidence: 0,
+            incompleteData: 0,
+            reappearedClosedAssets: 0,
+            items: expect.arrayContaining([expect.objectContaining({ count: 0 })]),
+          },
+        },
       }),
     );
   });

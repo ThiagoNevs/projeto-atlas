@@ -348,3 +348,25 @@ A declaração cria o ativo com estado operacional desconhecido, confiança inic
 evidência `MANUAL_DECLARATION`, evento de timeline e `AuditLog`. Ela não representa confirmação
 por fonte técnica. Identificador, tipo de identificador, tipo do ativo, status administrativo e
 motivo são obrigatórios; duplicidades fortes retornam HTTP `409`.
+
+## Enriquecimento manual de ativo
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/ASSET_ID/manual-enrichment `
+  -H "Content-Type: application/json" `
+  -d '{
+    "reason": "Validado com o time de infraestrutura",
+    "comment": "Informação confirmada em inventário interno",
+    "attributes": {
+      "operatingSystem": "Windows Server",
+      "osVersion": "2012 R2",
+      "manufacturer": "Dell",
+      "model": "PowerEdge R740",
+      "serialNumber": "DEMO-BR123456"
+    }
+  }'
+```
+
+O enriquecimento cria evidência `MANUAL_ENRICHMENT`, timeline e auditoria. Campos ausentes são
+preenchidos; valores idênticos recebem nova confirmação sem duplicação; valores atuais diferentes
+retornam HTTP `409` e nenhuma alteração é aplicada.

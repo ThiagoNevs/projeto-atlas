@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 
 import { AdministrativeStatusForm } from '@/components/administrative-status-form';
 import { LifecycleConflictAlert } from '@/components/lifecycle-conflict-alert';
+import { ManualEnrichmentForm } from '@/components/manual-enrichment-form';
 import { ErrorState, LoadingState } from '@/components/page-state';
 import { RelativeTime } from '@/components/relative-time';
 import { Score } from '@/components/score';
@@ -89,9 +90,13 @@ export default function AssetDetailPage() {
     setRequestVersion((version) => version + 1);
   }
 
-  async function refreshAdministrativeData(): Promise<void> {
-    const [asset, timeline] = await Promise.all([getAsset(id), getAssetTimeline(id)]);
-    setData((current) => (current ? { ...current, asset, timeline } : current));
+  async function refreshAssetData(): Promise<void> {
+    const [asset, evidences, timeline] = await Promise.all([
+      getAsset(id),
+      getAssetEvidences(id),
+      getAssetTimeline(id),
+    ]);
+    setData({ asset, evidences, timeline });
   }
 
   useEffect(() => {
@@ -275,7 +280,13 @@ export default function AssetDetailPage() {
       <AdministrativeStatusForm
         assetId={asset.id}
         currentStatus={asset.administrativeStatus}
-        onChanged={refreshAdministrativeData}
+        onChanged={refreshAssetData}
+      />
+
+      <ManualEnrichmentForm
+        assetId={asset.id}
+        existingAttributeKeys={asset.attributes.map((attribute) => attribute.key)}
+        onChanged={refreshAssetData}
       />
 
       <section className="panel full-panel">

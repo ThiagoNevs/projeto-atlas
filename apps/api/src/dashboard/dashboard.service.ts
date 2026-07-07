@@ -6,8 +6,11 @@ import {
   OperationalStatus,
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { isObsoleteOperatingSystem } from './operating-system-lifecycle.catalog';
 
 const LOW_SCORE_THRESHOLD = 60;
+const ATTENTION_SCORE_THRESHOLD = 70;
+const STALE_ASSET_DAYS = 45;
 const CLOSED_ADMINISTRATIVE_STATUSES: AdministrativeStatus[] = [
   AdministrativeStatus.DEACTIVATED,
   AdministrativeStatus.DISCARDED,
@@ -89,6 +92,7 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getSummary() {
+    const staleCutoff = new Date(Date.now() - STALE_ASSET_DAYS * 24 * 60 * 60 * 1_000);
     const [
       totalAssets,
       seenRecently,
@@ -98,6 +102,9 @@ export class DashboardService {
       administrativeGroups,
       operationalGroups,
       typeGroups,
+      staleAssets45Days,
+      attentionLowConfidence,
+      incompleteData,
       totalOpenConflicts,
       conflictsInReview,
       highImpactConflicts,
@@ -139,6 +146,13 @@ export class DashboardService {
         by: ['kind'],
         _count: { _all: true },
         orderBy: { kind: 'asc' },
+      }),
+      this.prisma.asset.count({ where: { lastSeenAt: { lt: staleCutoff } } }),
+      this.prisma.asset.count({
+        where: { confidenceScore: { lt: ATTENTION_SCORE_THRESHOLD } },
+      }),
+      this.prisma.asset.count({
+        where: { dataQualityScore: { lt: ATTENTION_SCORE_THRESHOLD } },
       }),
       this.prisma.conflict.count({ where: { status: ConflictStatus.OPEN } }),
       this.prisma.conflict.count({ where: { status: ConflictStatus.IN_REVIEW } }),
@@ -187,10 +201,12 @@ export class DashboardService {
 
     const byOperatingSystem: Record<string, number> = {};
     const byOperatingSystemVersion: Record<string, number> = {};
+    let obsoleteOperatingSystems = 0;
 
     assetsWithOperatingSystemAttributes.forEach((asset) => {
       const operatingSystem = findAttribute(asset.attributes, OPERATING_SYSTEM_KEYS);
       const version = findAttribute(asset.attributes, OPERATING_SYSTEM_VERSION_KEYS);
+      if (isObsoleteOperatingSystem(operatingSystem, version)) obsoleteOperatingSystems += 1;
       incrementCount(byOperatingSystem, operatingSystemFamily(operatingSystem));
 
       const versionLabel = operatingSystemVersionLabel(operatingSystem, version);
@@ -213,6 +229,58 @@ export class DashboardService {
         byType: Object.fromEntries(typeGroups.map((group) => [group.kind, group._count._all])),
         byOperatingSystem,
         byOperatingSystemVersion,
+      },
+      inventoryHealth: {
+        attentionSignals: {
+          obsoleteOperatingSystems,
+          staleAssets45Days,
+          lowConfidence: attentionLowConfidence,
+          incompleteData,
+          reappearedClosedAssets: lifecycleConflicts,
+          items: [
+            {
+              type: 'OBSOLETE_OPERATING_SYSTEM',
+              label: 'Sistemas operacionais obsoletos',
+              description: 'Ativos com versões de sistema operacional fora do catálogo suportado.',
+              count: obsoleteOperatingSystems,
+              severity: 'high',
+              href: '/data-quality',
+            },
+            {
+              type: 'STALE_ASSET_45_DAYS',
+              label: 'Ativos sem evidência há 45+ dias',
+              description:
+                'Ativos anteriormente observados que deixaram de gerar evidência recente.',
+              count: staleAssets45Days,
+              severity: 'medium',
+              href: '/data-quality',
+            },
+            {
+              type: 'LOW_CONFIDENCE',
+              label: 'Ativos com baixa confiança',
+              description: 'Ativos com confiança inferior a 70 pontos.',
+              count: attentionLowConfidence,
+              severity: 'medium',
+              href: '/data-quality',
+            },
+            {
+              type: 'INCOMPLETE_DATA',
+              label: 'Ativos com dados incompletos',
+              description: 'Ativos com qualidade dos dados inferior a 70 pontos.',
+              count: incompleteData,
+              severity: 'medium',
+              href: '/data-quality',
+            },
+            {
+              type: 'REAPPEARED_CLOSED_ASSET',
+              label: 'Ativos encerrados que reapareceram',
+              description: 'Ativos encerrados administrativamente que voltaram a gerar evidência.',
+              count: lifecycleConflicts,
+              severity: 'high',
+              href: '/conflicts',
+            },
+          ],
+        },
       },
       conflicts: {
         totalOpen: totalOpenConflicts,
