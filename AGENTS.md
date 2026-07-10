@@ -6,7 +6,14 @@ Este arquivo orienta Codex, colaboradores e agentes de desenvolvimento sobre com
 
 Projeto Atlas é uma plataforma de inteligência de ativos baseada em evidências, qualidade, confiabilidade, histórico, conflitos, sinais de atenção e auditoria.
 
-O Atlas não é apenas um inventário. O produto deve explicar de onde vieram as informações, o que mudou, qual é a qualidade dos dados, qual é o nível de confiança, onde existem divergências que exigem decisão e quais condições merecem revisão operacional.
+O Atlas não é apenas um inventário. O produto deve explicar:
+
+- De onde vieram as informações.
+- O que mudou.
+- Qual é a qualidade dos dados.
+- Qual é o nível de confiança.
+- Onde existem divergências que exigem decisão.
+- Quais condições merecem revisão operacional.
 
 ## 2. Documentos obrigatórios de leitura antes de implementar
 
@@ -45,22 +52,79 @@ Em caso de divergência entre uma tarefa e esses documentos, interrompa a implem
 - Não alterar contratos existentes sem necessidade.
 - Não executar mudanças destrutivas.
 - Não coletar segredos.
-- Não colocar `.env` ou credenciais no Git.
+- Não colocar `.env`, tokens, senhas ou credenciais no Git.
+- Não implementar funcionalidades grandes sem dividir em etapas menores.
+- Não criar nova feature se houver erro crítico conhecido no MVP. Primeiro estabilizar.
 
 ## 5. Fluxo de trabalho
 
 - Criar branch por funcionalidade.
 - Fazer implementação pequena e objetiva.
-- Rodar lint, typecheck, testes e build.
+- Manter o escopo da tarefa.
 - Atualizar documentação mínima necessária.
-- Abrir PR com resumo técnico.
+- Rodar validações antes de finalizar.
+- Abrir Pull Request com resumo técnico.
 
-## 6. Como reportar entrega
+Exemplo de branch:
+
+```bash
+git checkout main
+git pull
+git checkout -b feat/nome-da-funcionalidade
+```
+
+## 6. Comandos padrão de validação
+
+Antes de finalizar uma entrega, rodar:
+
+```powershell
+corepack pnpm lint
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
+```
+
+Para rodar o projeto localmente:
+
+```powershell
+corepack pnpm infra:up
+corepack pnpm db:migrate
+corepack pnpm db:seed
+corepack pnpm dev
+```
+
+## 7. Como reportar entrega
+
+Ao final de uma tarefa, reportar:
 
 - Arquivos criados.
 - Arquivos alterados.
-- Endpoints criados.
+- Endpoints criados ou alterados.
 - Regras de negócio implementadas.
-- Testes criados.
-- Resultado de lint/typecheck/testes/build.
+- Testes criados ou ajustados.
+- Resultado de lint.
+- Resultado de typecheck.
+- Resultado dos testes.
+- Resultado do build.
 - Problemas encontrados e resolvidos.
+
+## 8. Direção atual do produto
+
+O MVP atual já possui:
+
+- Dashboard.
+- Saúde do Inventário.
+- Sinais de Atenção.
+- Inventário de ativos.
+- Detalhe de ativos.
+- Evidências.
+- Timeline.
+- Conflitos.
+- Resolution Center.
+- Network Discovery Lite.
+- Auditoria.
+- Qualidade dos dados.
+- Declaração manual de ativo.
+- Enriquecimento manual de ativo existente.
+
+Próximas evoluções devem preservar o conceito do Atlas como uma plataforma de inteligência de ativos baseada em evidências.
