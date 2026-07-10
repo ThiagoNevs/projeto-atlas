@@ -29,6 +29,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               <Link href="/network-discovery">Descoberta de rede</Link>
               <Link href="/audit">Auditoria</Link>
               <Link href="/data-quality">Qualidade dos dados</Link>
+              <Link href="/data-sources">Fontes de dados</Link>
             </nav>
           </div>
         </header>

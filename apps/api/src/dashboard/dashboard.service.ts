@@ -334,6 +334,13 @@ export class DashboardService {
           href: '/network-discovery',
           count: null,
         },
+        {
+          id: 'view-data-sources',
+          title: 'Ver fontes de dados',
+          description: 'Conheça as fontes atuais e os conectores planejados para o Atlas.',
+          href: '/data-sources',
+          count: null,
+        },
       ],
     };
   }

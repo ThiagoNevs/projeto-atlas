@@ -370,3 +370,42 @@ curl.exe -X POST http://localhost:3001/assets/ASSET_ID/manual-enrichment `
 O enriquecimento cria evidência `MANUAL_ENRICHMENT`, timeline e auditoria. Campos ausentes são
 preenchidos; valores idênticos recebem nova confirmação sem duplicação; valores atuais diferentes
 retornam HTTP `409` e nenhuma alteração é aplicada.
+
+## Fontes de Dados
+
+### Listar catálogo interno
+
+```powershell
+curl.exe http://localhost:3001/data-sources
+```
+
+O endpoint retorna um catálogo estático de fontes atuais e conectores planejados. Nesta etapa, ele
+não consulta banco, não chama APIs externas, não armazena tokens e não configura autenticação de
+conectores.
+
+Exemplo resumido de resposta:
+
+```json
+{
+  "items": [
+    {
+      "id": "manual-declaration",
+      "name": "Cadastro manual",
+      "category": "Manual",
+      "status": "AVAILABLE",
+      "description": "Permite declarar ativos que existem, mas ainda não possuem evidência técnica.",
+      "evidenceType": "MANUAL_DECLARATION",
+      "current": true
+    }
+  ],
+  "summary": {
+    "available": 3,
+    "planned": 4,
+    "future": 3,
+    "total": 10
+  }
+}
+```
+
+Fonte de dados é qualquer origem controlada que gera evidências para o Atlas. Integração real é uma
+implementação futura que conecta uma fonte externa, com autenticação, escopo e segurança próprios.

@@ -46,6 +46,10 @@ No detalhe de um ativo incompleto, use **Adicionar informação manual** para pr
 ausente. Mostre a nova evidência e timeline e destaque que valores técnicos existentes não são
 sobrescritos.
 
+Abra **Fontes de Dados** para explicar que o Atlas não depende exclusivamente de conectores reais.
+Mostre cadastro manual, enriquecimento manual e Network Discovery Lite como fontes disponíveis, e
+posicione CSV, Microsoft, segurança, cloud e CMDB/ITSM como evolução planejada.
+
 Apresente o Atlas como uma camada de inteligência que:
 
 - consolida ativos;
@@ -171,6 +175,7 @@ Recapitule:
 - decisões administrativas auditáveis;
 - conflitos que exigem tratamento humano;
 - arquitetura preparada para conectores e Collector futuros.
+- fontes de dados atuais e planejadas sem armazenar credenciais no MVP.
 
 Apresente as próximas fases:
 

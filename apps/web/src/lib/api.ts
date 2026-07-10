@@ -143,6 +143,28 @@ export type NetworkDiscoveryRunStatus =
   'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type NetworkDiscoveryResultStatus = 'DISCOVERED' | 'UPDATED' | 'SKIPPED' | 'ERROR';
 
+export type DataSourceStatus = 'AVAILABLE' | 'PLANNED' | 'FUTURE';
+
+export interface DataSourceItem {
+  id: string;
+  name: string;
+  category: string;
+  status: DataSourceStatus;
+  description: string;
+  evidenceType: string | null;
+  current: boolean;
+}
+
+export interface DataSourcesResponse {
+  items: DataSourceItem[];
+  summary: {
+    available: number;
+    planned: number;
+    future: number;
+    total: number;
+  };
+}
+
 export interface NetworkDiscoveryProfile {
   id: string;
   name: string;
@@ -694,6 +716,10 @@ export function getDataQualityAssets(
   params: DataQualityQueryParams = {},
 ): Promise<PaginatedResponse<DataQualityAsset>> {
   return fetchJson(`/data-quality/assets${queryString(params)}`);
+}
+
+export function getDataSources(): Promise<DataSourcesResponse> {
+  return fetchJson('/data-sources');
 }
 
 export function runNetworkDiscoveryProfile(id: string): Promise<NetworkDiscoveryRunDetail> {
