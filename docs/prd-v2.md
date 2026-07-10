@@ -85,6 +85,9 @@ fontes corporativas já existentes.
   desativação, descarte, perda ou arquivamento.
 - **Qualidade e confiabilidade são métricas diferentes:** qualidade mede completude e consistência;
   confiabilidade mede credibilidade da informação e da fonte.
+- **Scores são derivados:** qualidade e confiabilidade devem exibir fatores positivos e negativos
+  sempre que possível, mas não representam decisão administrativa e não devem ser editados
+  diretamente.
 - **Conflitos exigem decisão:** o Atlas detecta divergências, mas não deve resolvê-las
   automaticamente sem decisão humana.
 - **Sinais de Atenção orientam revisão operacional:** nem todo sinal é conflito, mas todo sinal deve

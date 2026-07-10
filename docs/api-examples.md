@@ -309,6 +309,66 @@ curl.exe http://localhost:3001/data-quality/summary
 curl.exe "http://localhost:3001/data-quality/assets?page=1&pageSize=20&sortBy=dataQualityScore&sortDirection=asc"
 ```
 
+A resposta separa `dataQualityScore` e `confidenceScore` e inclui `scoreAnalysis` com fatores
+positivos, fatores negativos e evidências relacionadas quando disponíveis. Os scores são derivados
+de evidências e completude dos dados; eles não representam decisão administrativa e não possuem
+endpoint de edição direta.
+
+Exemplo resumido:
+
+```json
+{
+  "items": [
+    {
+      "id": "ASSET_ID",
+      "dataQualityScore": 40,
+      "confidenceScore": 45,
+      "scoreAnalysis": {
+        "quality": {
+          "metric": "Qualidade dos dados",
+          "score": 40,
+          "note": "Score derivado de completude, rede e recência das evidências. Não representa decisão administrativa e não pode ser editado diretamente.",
+          "positiveFactors": [],
+          "negativeFactors": [
+            {
+              "code": "MISSING_SERIAL_NUMBER",
+              "label": "Número de série ausente",
+              "evidenceIds": []
+            }
+          ],
+          "relatedEvidence": []
+        },
+        "confidence": {
+          "metric": "Confiabilidade",
+          "score": 45,
+          "positiveFactors": [
+            {
+              "code": "TECHNICAL_EVIDENCE_PRESENT",
+              "label": "Evidência técnica disponível",
+              "evidenceIds": ["EVIDENCE_ID"]
+            }
+          ],
+          "negativeFactors": [
+            {
+              "code": "LOW_CONFIDENCE_SCORE",
+              "label": "Confiabilidade abaixo de 70",
+              "evidenceIds": ["EVIDENCE_ID"]
+            }
+          ],
+          "relatedEvidence": [
+            {
+              "id": "EVIDENCE_ID",
+              "source": "manual-simulation",
+              "evidenceType": "ASSET_INGESTION"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
 ### Filtrar por problema e scores
 
 ```powershell

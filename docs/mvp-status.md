@@ -59,8 +59,11 @@ autenticação.
 
 ### Qualidade e confiança
 
-Os scores são armazenados e exibidos, mas os critérios ainda são simples e não configuráveis por
-fonte ou política organizacional.
+Os scores são armazenados e exibidos separadamente. A tela de Qualidade dos Dados apresenta
+fatores positivos e negativos para qualidade e confiabilidade, além de evidências relacionadas
+quando disponíveis. Os scores são derivados, não representam decisão administrativa e não podem ser
+editados diretamente. Os critérios ainda são simples e não configuráveis por fonte ou política
+organizacional.
 
 ### Tipos compartilhados
 

@@ -124,6 +124,65 @@ function score(value: number | null): string {
   return value === null ? 'Não informado' : String(Math.round(value));
 }
 
+function ScoreAnalysisBlock({
+  analysis,
+}: {
+  analysis: DataQualityAsset['scoreAnalysis']['quality'];
+}) {
+  const relatedEvidence = analysis.relatedEvidence.slice(0, 2);
+
+  return (
+    <article className="score-analysis-card">
+      <div className="score-analysis-heading">
+        <strong>{analysis.metric}</strong>
+        <span>{score(analysis.score)}</span>
+      </div>
+      <p>{analysis.note}</p>
+      <div className="score-factor-columns">
+        <div>
+          <span className="score-factor-title">Fatores positivos</span>
+          {analysis.positiveFactors.length ? (
+            <ul>
+              {analysis.positiveFactors.slice(0, 3).map((factor) => (
+                <li key={factor.code}>{factor.label}</li>
+              ))}
+            </ul>
+          ) : (
+            <small>Nenhum fator positivo identificado.</small>
+          )}
+        </div>
+        <div>
+          <span className="score-factor-title">Fatores negativos</span>
+          {analysis.negativeFactors.length ? (
+            <ul>
+              {analysis.negativeFactors.slice(0, 3).map((factor) => (
+                <li key={factor.code}>{factor.label}</li>
+              ))}
+            </ul>
+          ) : (
+            <small>Nenhum fator negativo identificado.</small>
+          )}
+        </div>
+      </div>
+      {relatedEvidence.length ? (
+        <div className="score-related-evidence">
+          <span>Evidências relacionadas</span>
+          {relatedEvidence.map((evidence) => (
+            <small key={evidence.id}>
+              {evidence.source} · {evidence.evidenceType} · {formatDateTime(evidence.observedAt)}
+            </small>
+          ))}
+        </div>
+      ) : (
+        <div className="score-related-evidence">
+          <span>Evidências relacionadas</span>
+          <small>Nenhuma evidência relacionada disponível.</small>
+        </div>
+      )}
+    </article>
+  );
+}
+
 export default function DataQualityPage() {
   const [form, setForm] = useState<FilterForm>(initialForm);
   const [query, setQuery] = useState<DataQualityQueryParams>(initialQuery);
@@ -225,6 +284,10 @@ export default function DataQualityPage() {
           <h1>Qualidade dos dados</h1>
           <p className="page-description">
             Identifique ativos incompletos, inconsistentes ou com baixa confiabilidade.
+          </p>
+          <p className="page-description">
+            Qualidade e confiabilidade são scores derivados de evidências e completude dos dados.
+            Eles não representam decisão administrativa e não são editáveis diretamente.
           </p>
         </div>
         <div className="quality-averages">
@@ -441,6 +504,7 @@ export default function DataQualityPage() {
                     <th>Sistema operacional</th>
                     <th>Qualidade</th>
                     <th>Confiabilidade</th>
+                    <th>Análise dos scores</th>
                     <th>Última evidência</th>
                     <th>Problemas</th>
                     <th>Campos ausentes</th>
@@ -467,6 +531,12 @@ export default function DataQualityPage() {
                         {score(asset.dataQualityScore)}
                       </td>
                       <td className="number-column score-number">{score(asset.confidenceScore)}</td>
+                      <td>
+                        <div className="score-analysis-list">
+                          <ScoreAnalysisBlock analysis={asset.scoreAnalysis.quality} />
+                          <ScoreAnalysisBlock analysis={asset.scoreAnalysis.confidence} />
+                        </div>
+                      </td>
                       <td>
                         <time dateTime={asset.lastSeenAt ?? undefined}>
                           {formatDateTime(asset.lastSeenAt)}

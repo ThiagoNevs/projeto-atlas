@@ -380,6 +380,36 @@ export interface DataQualityAsset {
   serialNumber: string | null;
   manufacturer: string | null;
   model: string | null;
+  scoreAnalysis: {
+    quality: ScoreAnalysis;
+    confidence: ScoreAnalysis;
+  };
+}
+
+export interface ScoreFactor {
+  code: string;
+  label: string;
+  description: string;
+  impact: 'positive' | 'negative';
+  evidenceIds: string[];
+}
+
+export interface ScoreRelatedEvidence {
+  id: string;
+  source: string;
+  evidenceType: string;
+  observedAt: string;
+  confidenceScore: number | null;
+  dataQualityScore: number | null;
+}
+
+export interface ScoreAnalysis {
+  metric: string;
+  score: number | null;
+  note: string;
+  positiveFactors: ScoreFactor[];
+  negativeFactors: ScoreFactor[];
+  relatedEvidence: ScoreRelatedEvidence[];
 }
 
 export interface DataQualityQueryParams {

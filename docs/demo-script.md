@@ -37,6 +37,10 @@ Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 
 Abra **Qualidade dos dados** para transformar os indicadores em ação. Mostre os ativos sem
 sistema operacional, número de série ou rede, use uma prioridade e abra o detalhe de um ativo.
+Explique que **Qualidade** e **Confiabilidade** são métricas diferentes: a primeira reflete
+completude/recência/consistência dos dados, enquanto a segunda reflete confiança nas fontes e
+evidências. Mostre os fatores positivos e negativos e destaque que o score é derivado, não é uma
+decisão administrativa e não pode ser editado diretamente.
 
 Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um equipamento em
 estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado
