@@ -37,6 +37,10 @@ Use os atalhos do dashboard para entrar no inventário e no Resolution Center.
 
 Abra **Qualidade dos dados** para transformar os indicadores em ação. Mostre os ativos sem
 sistema operacional, número de série ou rede, use uma prioridade e abra o detalhe de um ativo.
+Explique que **Qualidade** e **Confiabilidade** são métricas diferentes: a primeira reflete
+completude/recência/consistência dos dados, enquanto a segunda reflete confiança nas fontes e
+evidências. Mostre os fatores positivos e negativos e destaque que o score é derivado, não é uma
+decisão administrativa e não pode ser editado diretamente.
 
 Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um equipamento em
 estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado
@@ -45,6 +49,10 @@ operacional até que uma fonte técnica observe o equipamento.
 No detalhe de um ativo incompleto, use **Adicionar informação manual** para preencher um campo
 ausente. Mostre a nova evidência e timeline e destaque que valores técnicos existentes não são
 sobrescritos.
+
+Abra **Fontes de Dados** para explicar que o Atlas não depende exclusivamente de conectores reais.
+Mostre cadastro manual, enriquecimento manual e Network Discovery Lite como fontes disponíveis, e
+posicione CSV, Microsoft, segurança, cloud e CMDB/ITSM como evolução planejada.
 
 Apresente o Atlas como uma camada de inteligência que:
 
@@ -171,6 +179,7 @@ Recapitule:
 - decisões administrativas auditáveis;
 - conflitos que exigem tratamento humano;
 - arquitetura preparada para conectores e Collector futuros.
+- fontes de dados atuais e planejadas sem armazenar credenciais no MVP.
 
 Apresente as próximas fases:
 

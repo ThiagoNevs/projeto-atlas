@@ -143,6 +143,28 @@ export type NetworkDiscoveryRunStatus =
   'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type NetworkDiscoveryResultStatus = 'DISCOVERED' | 'UPDATED' | 'SKIPPED' | 'ERROR';
 
+export type DataSourceStatus = 'AVAILABLE' | 'PLANNED' | 'FUTURE';
+
+export interface DataSourceItem {
+  id: string;
+  name: string;
+  category: string;
+  status: DataSourceStatus;
+  description: string;
+  evidenceType: string | null;
+  current: boolean;
+}
+
+export interface DataSourcesResponse {
+  items: DataSourceItem[];
+  summary: {
+    available: number;
+    planned: number;
+    future: number;
+    total: number;
+  };
+}
+
 export interface NetworkDiscoveryProfile {
   id: string;
   name: string;
@@ -358,6 +380,36 @@ export interface DataQualityAsset {
   serialNumber: string | null;
   manufacturer: string | null;
   model: string | null;
+  scoreAnalysis: {
+    quality: ScoreAnalysis;
+    confidence: ScoreAnalysis;
+  };
+}
+
+export interface ScoreFactor {
+  code: string;
+  label: string;
+  description: string;
+  impact: 'positive' | 'negative';
+  evidenceIds: string[];
+}
+
+export interface ScoreRelatedEvidence {
+  id: string;
+  source: string;
+  evidenceType: string;
+  observedAt: string;
+  confidenceScore: number | null;
+  dataQualityScore: number | null;
+}
+
+export interface ScoreAnalysis {
+  metric: string;
+  score: number | null;
+  note: string;
+  positiveFactors: ScoreFactor[];
+  negativeFactors: ScoreFactor[];
+  relatedEvidence: ScoreRelatedEvidence[];
 }
 
 export interface DataQualityQueryParams {
@@ -694,6 +746,10 @@ export function getDataQualityAssets(
   params: DataQualityQueryParams = {},
 ): Promise<PaginatedResponse<DataQualityAsset>> {
   return fetchJson(`/data-quality/assets${queryString(params)}`);
+}
+
+export function getDataSources(): Promise<DataSourcesResponse> {
+  return fetchJson('/data-sources');
 }
 
 export function runNetworkDiscoveryProfile(id: string): Promise<NetworkDiscoveryRunDetail> {

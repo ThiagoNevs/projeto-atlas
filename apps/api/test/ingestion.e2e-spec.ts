@@ -88,6 +88,19 @@ type DataQualityAssetResponse = {
   confidenceScore: number | null;
   issues: string[];
   missingFields: string[];
+  scoreAnalysis: {
+    quality: ScoreAnalysisResponse;
+    confidence: ScoreAnalysisResponse;
+  };
+};
+
+type ScoreAnalysisResponse = {
+  metric: string;
+  score: number | null;
+  note: string;
+  positiveFactors: Array<{ code: string; label: string; evidenceIds: string[] }>;
+  negativeFactors: Array<{ code: string; label: string; evidenceIds: string[] }>;
+  relatedEvidence: Array<{ id: string; source: string; evidenceType: string }>;
 };
 
 type DataQualitySummaryResponse = {
@@ -293,6 +306,17 @@ describe('Asset ingestion idempotency (e2e)', () => {
       },
     });
     dataQualityAssetId = dataQualityAsset.id;
+    await prisma.assetEvidence.create({
+      data: {
+        assetId: dataQualityAsset.id,
+        source: 'e2e-tests',
+        evidenceType: 'DATA_QUALITY_FIXTURE',
+        payload: { purpose: 'data-quality-score-analysis' },
+        confidenceScore: 45,
+        dataQualityScore: 40,
+        observedAt: new Date('2020-01-01T10:00:00.000Z'),
+      },
+    });
   });
 
   afterAll(async () => {
@@ -1547,6 +1571,55 @@ describe('Asset ingestion idempotency (e2e)', () => {
       }),
     );
     expect(body.items.some((asset) => asset.id === dataQualityAssetId)).toBe(true);
+  });
+
+  it('shows quality and confidence as separate derived score analyses', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ search: `quality-incomplete-${sourceAssetId.slice(-8)}`, pageSize: 100 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+    const asset = body.items.find((item) => item.id === dataQualityAssetId);
+
+    expect(asset).toBeDefined();
+    expect(asset?.scoreAnalysis.quality).toEqual(
+      expect.objectContaining({
+        metric: 'Qualidade dos dados',
+        score: 40,
+        note: expect.stringContaining('Score derivado'),
+      }),
+    );
+    expect(asset?.scoreAnalysis.confidence).toEqual(
+      expect.objectContaining({
+        metric: 'Confiabilidade',
+        score: 45,
+        note: expect.stringContaining('representa decisão administrativa'),
+      }),
+    );
+  });
+
+  it('reports positive and negative factors with related evidence when available', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets')
+      .query({ search: `quality-incomplete-${sourceAssetId.slice(-8)}`, pageSize: 100 })
+      .expect(200);
+    const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
+    const asset = body.items.find((item) => item.id === dataQualityAssetId);
+
+    expect(asset?.scoreAnalysis.quality.negativeFactors.map((factor) => factor.code)).toEqual(
+      expect.arrayContaining(['MISSING_SERIAL_NUMBER', 'MISSING_OPERATING_SYSTEM']),
+    );
+    expect(asset?.scoreAnalysis.confidence.positiveFactors.map((factor) => factor.code)).toContain(
+      'TECHNICAL_EVIDENCE_PRESENT',
+    );
+    expect(asset?.scoreAnalysis.confidence.negativeFactors.map((factor) => factor.code)).toEqual(
+      expect.arrayContaining(['LOW_CONFIDENCE_SCORE', 'NO_RECENT_TECHNICAL_CONFIRMATION']),
+    );
+    expect(asset?.scoreAnalysis.confidence.relatedEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: 'e2e-tests', evidenceType: 'DATA_QUALITY_FIXTURE' }),
+      ]),
+    );
   });
 
   it.each([

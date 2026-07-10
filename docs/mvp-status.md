@@ -35,6 +35,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
+- Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.
 - Suíte E2E integrada ao PostgreSQL.
 
 ## Funcionalidades parciais
@@ -58,8 +59,11 @@ autenticação.
 
 ### Qualidade e confiança
 
-Os scores são armazenados e exibidos, mas os critérios ainda são simples e não configuráveis por
-fonte ou política organizacional.
+Os scores são armazenados e exibidos separadamente. A tela de Qualidade dos Dados apresenta
+fatores positivos e negativos para qualidade e confiabilidade, além de evidências relacionadas
+quando disponíveis. Os scores são derivados, não representam decisão administrativa e não podem ser
+editados diretamente. Os critérios ainda são simples e não configuráveis por fonte ou política
+organizacional.
 
 ### Tipos compartilhados
 
@@ -92,6 +96,7 @@ frontend.
 - Sem gestão produtiva de secrets.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.
 - Sem política formal de backup, retenção e recuperação.
+- Fontes de Dados ainda é um catálogo estático; conectores reais, credenciais e sincronização continuam fora do escopo.
 
 ## O que já pode ser demonstrado
 
@@ -107,3 +112,4 @@ frontend.
 10. Perfil de descoberta simulado limitado a CIDRs privados.
 11. Execução simulada com resultados, ativos, evidências e histórico.
 12. Rejeição e auditoria de configurações inseguras ou perfis desabilitados.
+13. Fontes de Dados mostrando cadastro manual, enriquecimento manual, descoberta simulada e conectores futuros.

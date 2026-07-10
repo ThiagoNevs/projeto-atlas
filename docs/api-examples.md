@@ -309,6 +309,66 @@ curl.exe http://localhost:3001/data-quality/summary
 curl.exe "http://localhost:3001/data-quality/assets?page=1&pageSize=20&sortBy=dataQualityScore&sortDirection=asc"
 ```
 
+A resposta separa `dataQualityScore` e `confidenceScore` e inclui `scoreAnalysis` com fatores
+positivos, fatores negativos e evidências relacionadas quando disponíveis. Os scores são derivados
+de evidências e completude dos dados; eles não representam decisão administrativa e não possuem
+endpoint de edição direta.
+
+Exemplo resumido:
+
+```json
+{
+  "items": [
+    {
+      "id": "ASSET_ID",
+      "dataQualityScore": 40,
+      "confidenceScore": 45,
+      "scoreAnalysis": {
+        "quality": {
+          "metric": "Qualidade dos dados",
+          "score": 40,
+          "note": "Score derivado de completude, rede e recência das evidências. Não representa decisão administrativa e não pode ser editado diretamente.",
+          "positiveFactors": [],
+          "negativeFactors": [
+            {
+              "code": "MISSING_SERIAL_NUMBER",
+              "label": "Número de série ausente",
+              "evidenceIds": []
+            }
+          ],
+          "relatedEvidence": []
+        },
+        "confidence": {
+          "metric": "Confiabilidade",
+          "score": 45,
+          "positiveFactors": [
+            {
+              "code": "TECHNICAL_EVIDENCE_PRESENT",
+              "label": "Evidência técnica disponível",
+              "evidenceIds": ["EVIDENCE_ID"]
+            }
+          ],
+          "negativeFactors": [
+            {
+              "code": "LOW_CONFIDENCE_SCORE",
+              "label": "Confiabilidade abaixo de 70",
+              "evidenceIds": ["EVIDENCE_ID"]
+            }
+          ],
+          "relatedEvidence": [
+            {
+              "id": "EVIDENCE_ID",
+              "source": "manual-simulation",
+              "evidenceType": "ASSET_INGESTION"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
 ### Filtrar por problema e scores
 
 ```powershell
@@ -370,3 +430,42 @@ curl.exe -X POST http://localhost:3001/assets/ASSET_ID/manual-enrichment `
 O enriquecimento cria evidência `MANUAL_ENRICHMENT`, timeline e auditoria. Campos ausentes são
 preenchidos; valores idênticos recebem nova confirmação sem duplicação; valores atuais diferentes
 retornam HTTP `409` e nenhuma alteração é aplicada.
+
+## Fontes de Dados
+
+### Listar catálogo interno
+
+```powershell
+curl.exe http://localhost:3001/data-sources
+```
+
+O endpoint retorna um catálogo estático de fontes atuais e conectores planejados. Nesta etapa, ele
+não consulta banco, não chama APIs externas, não armazena tokens e não configura autenticação de
+conectores.
+
+Exemplo resumido de resposta:
+
+```json
+{
+  "items": [
+    {
+      "id": "manual-declaration",
+      "name": "Cadastro manual",
+      "category": "Manual",
+      "status": "AVAILABLE",
+      "description": "Permite declarar ativos que existem, mas ainda não possuem evidência técnica.",
+      "evidenceType": "MANUAL_DECLARATION",
+      "current": true
+    }
+  ],
+  "summary": {
+    "available": 3,
+    "planned": 4,
+    "future": 3,
+    "total": 10
+  }
+}
+```
+
+Fonte de dados é qualquer origem controlada que gera evidências para o Atlas. Integração real é uma
+implementação futura que conecta uma fonte externa, com autenticação, escopo e segurança próprios.

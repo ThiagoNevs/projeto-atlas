@@ -26,6 +26,7 @@ de conflitos.
 - Tela operacional de qualidade dos dados com lacunas, scores e prioridades de correção.
 - Declaração manual de ativos ainda não observados por fontes técnicas, com evidência e auditoria.
 - Enriquecimento manual de campos ausentes sem sobrescrever valores técnicos atuais.
+- Fontes de Dados com catálogo de origens atuais e conectores planejados, sem integrações reais.
 - Massa fictícia com 15 cenários de demonstração.
 - Network Discovery Lite simulado, escopado a redes privadas e auditável.
 - Interface em português com tratamento de loading, erro e hydration.
@@ -155,9 +156,11 @@ corepack pnpm dev:web
 - Network Discovery Lite: [http://localhost:3000/network-discovery](http://localhost:3000/network-discovery)
 - Auditoria: [http://localhost:3000/audit](http://localhost:3000/audit)
 - Qualidade dos dados: [http://localhost:3000/data-quality](http://localhost:3000/data-quality)
+- Fontes de dados: [http://localhost:3000/data-sources](http://localhost:3000/data-sources)
 - API: [http://localhost:3001](http://localhost:3001)
 - Health check: [http://localhost:3001/health](http://localhost:3001/health)
 - Resumo do dashboard: [http://localhost:3001/dashboard/summary](http://localhost:3001/dashboard/summary)
+- Catálogo de fontes de dados: [http://localhost:3001/data-sources](http://localhost:3001/data-sources)
 
 ## Comandos úteis
 

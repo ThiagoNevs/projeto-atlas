@@ -18,6 +18,7 @@ devem ser definidos após validação com usuários e priorização de mercado.
 - busca, filtros, ordenação e paginação;
 - massa demo;
 - Network Discovery Lite simulado;
+- catálogo de Fontes de Dados e conectores planejados;
 - auditoria das principais decisões;
 - documentação técnica e testes E2E.
 
@@ -35,6 +36,7 @@ devem ser definidos após validação com usuários e priorização de mercado.
 - dashboard com indicadores executivos;
 - roteiro e ambiente de demonstração reproduzível;
 - tela de auditoria;
+- narrativa visual de Fontes de Dados e conectores planejados;
 - exportação CSV do inventário e conflitos;
 - melhorias de usabilidade no Resolution Center;
 - documentação visual e mensagens explícitas sobre funcionalidades simuladas;
