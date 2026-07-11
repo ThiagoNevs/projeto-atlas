@@ -388,6 +388,26 @@ O CSV usa delimitador `;`, cabeçalhos em português, labels amigáveis e aplica
 principais da listagem. A exportação não usa paginação, possui limite de 5000 registros e protege
 células contra execução acidental de fórmulas em planilhas.
 
+## Importação CSV de ativos
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/import/csv `
+  -H "Content-Type: application/json" `
+  -d '{
+    "csv": "hostname;ipAddress;operatingSystem;osVersion;location;owner;department;type;administrativeStatus;comment\nNB-RH-001;10.20.1.15;Windows 11;23H2;Rio de Janeiro;Ana Silva;RH;Notebook;Em uso;Notebook da Ana / máquina do RH\nSRV-APP-01;10.30.1.20;Windows Server;2019;Datacenter;Infraestrutura;TI;Servidor;Em uso;Servidor de aplicação principal"
+  }'
+```
+
+Nesta primeira versão, `hostname` e `ipAddress` são obrigatórios. O `hostname` é usado como
+identificador principal da importação. O `ipAddress` é registrado como informação de rede do ativo,
+mas não é identidade absoluta porque IP pode mudar ou ser reutilizado. Linhas sem `hostname`, sem
+`ipAddress` ou com IP inválido retornam HTTP `400`; hostnames duplicados retornam HTTP `409`;
+IP repetido gera warning/sinal de atenção e não bloqueia a importação.
+
+Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `department`,
+`type`, `administrativeStatus`, `manufacturer`, `model`, `serialNumber`, `macAddress`,
+`environment`, `criticality` e `comment`.
+
 ## Declaração manual de ativo
 
 ```powershell
@@ -469,8 +489,8 @@ Exemplo resumido de resposta:
     }
   ],
   "summary": {
-    "available": 3,
-    "planned": 4,
+    "available": 4,
+    "planned": 3,
     "future": 3,
     "total": 10
   }

@@ -559,6 +559,23 @@ export interface CreateManualAssetResponse {
   auditLogId: string;
 }
 
+export interface ImportAssetsCsvPayload {
+  csv: string;
+}
+
+export interface ImportAssetsCsvWarning {
+  line: number;
+  field: string;
+  message: string;
+}
+
+export interface ImportAssetsCsvResponse {
+  importedCount: number;
+  warningCount: number;
+  warnings: ImportAssetsCsvWarning[];
+  assets: AssetDetail[];
+}
+
 export interface ManualEnrichmentAttributes {
   operatingSystem?: string;
   osVersion?: string;
@@ -672,6 +689,14 @@ export function createManualAsset(
   payload: CreateManualAssetPayload,
 ): Promise<CreateManualAssetResponse> {
   return fetchJson('/assets/manual', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function importAssetsCsv(payload: ImportAssetsCsvPayload): Promise<ImportAssetsCsvResponse> {
+  return fetchJson('/assets/import/csv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

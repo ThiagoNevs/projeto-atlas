@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from 
 
 import { AssetsService } from './assets.service';
 import { CreateManualAssetDto } from './dto/create-manual-asset.dto';
+import { ImportAssetsCsvDto } from './dto/import-assets-csv.dto';
 import { ManualEnrichmentDto } from './dto/manual-enrichment.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
 import { UpdateAdministrativeStatusDto } from './dto/update-administrative-status.dto';
@@ -39,5 +40,10 @@ export class AssetsController {
   @Post('manual')
   createManual(@Body() payload: CreateManualAssetDto) {
     return this.assetsService.createManual(payload);
+  }
+
+  @Post('import/csv')
+  importCsv(@Body() payload: ImportAssetsCsvDto) {
+    return this.assetsService.importCsv(payload);
   }
 }

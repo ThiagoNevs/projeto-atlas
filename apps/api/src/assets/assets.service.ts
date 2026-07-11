@@ -5,8 +5,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 
-import { AttributeValueType, OperationalStatus, Prisma } from '../generated/prisma/client';
+import {
+  AdministrativeStatus,
+  AttributeValueType,
+  OperationalStatus,
+  Prisma,
+} from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   assetDetailSelect,
@@ -16,7 +22,8 @@ import {
 } from './asset.presenter';
 import { UpdateAdministrativeStatusDto } from './dto/update-administrative-status.dto';
 import { QueryAssetsDto } from './dto/query-assets.dto';
-import { CreateManualAssetDto } from './dto/create-manual-asset.dto';
+import { CreateManualAssetDto, MANUAL_ASSET_TYPES } from './dto/create-manual-asset.dto';
+import { ImportAssetsCsvDto } from './dto/import-assets-csv.dto';
 import { ManualEnrichmentDto } from './dto/manual-enrichment.dto';
 
 const SIMULATED_ACTOR_USER_ID = 'atlas-mvp-user';
@@ -26,6 +33,72 @@ const MANUAL_EVIDENCE_TYPE = 'MANUAL_DECLARATION';
 const MANUAL_EVENT_TYPE = 'ASSET_MANUALLY_DECLARED';
 const MANUAL_ENRICHMENT_EVIDENCE_TYPE = 'MANUAL_ENRICHMENT';
 const MANUAL_ENRICHMENT_EVENT_TYPE = 'ASSET_MANUALLY_ENRICHED';
+const CSV_IMPORT_EVIDENCE_TYPE = 'CSV_MANUAL_IMPORT';
+const CSV_IMPORT_EVENT_TYPE = 'ASSET_IMPORTED_FROM_CSV';
+const CSV_IMPORT_REQUIRED_HEADERS = ['hostname', 'ipAddress'] as const;
+const CSV_IMPORT_ALLOWED_HEADERS = [
+  'hostname',
+  'ipAddress',
+  'operatingSystem',
+  'osVersion',
+  'location',
+  'owner',
+  'department',
+  'type',
+  'administrativeStatus',
+  'manufacturer',
+  'model',
+  'serialNumber',
+  'macAddress',
+  'environment',
+  'criticality',
+  'comment',
+] as const;
+const CSV_IMPORT_ASSET_TYPE_LABELS: Record<string, string> = {
+  SERVIDOR: 'SERVER',
+  NOTEBOOK: 'NOTEBOOK',
+  DESKTOP: 'DESKTOP',
+  'ESTACAO DE TRABALHO': 'WORKSTATION',
+  WORKSTATION: 'WORKSTATION',
+  VM: 'VM',
+  'MAQUINA VIRTUAL': 'VM',
+  'DISPOSITIVO DE REDE': 'NETWORK_DEVICE',
+  NETWORK_DEVICE: 'NETWORK_DEVICE',
+  ARMAZENAMENTO: 'STORAGE',
+  STORAGE: 'STORAGE',
+  IMPRESSORA: 'PRINTER',
+  PRINTER: 'PRINTER',
+  DESCONHECIDO: 'UNKNOWN',
+  UNKNOWN: 'UNKNOWN',
+};
+const CSV_IMPORT_ADMIN_STATUS_LABELS: Record<string, AdministrativeStatus> = {
+  'EM USO': AdministrativeStatus.IN_USE,
+  IN_USE: AdministrativeStatus.IN_USE,
+  'EM ESTOQUE': AdministrativeStatus.IN_STOCK,
+  IN_STOCK: AdministrativeStatus.IN_STOCK,
+  'EM MANUTENCAO': AdministrativeStatus.MAINTENANCE,
+  MAINTENANCE: AdministrativeStatus.MAINTENANCE,
+  DESATIVADO: AdministrativeStatus.DEACTIVATED,
+  DEACTIVATED: AdministrativeStatus.DEACTIVATED,
+  DESCARTADO: AdministrativeStatus.DISCARDED,
+  DISCARDED: AdministrativeStatus.DISCARDED,
+  PERDIDO: AdministrativeStatus.LOST,
+  LOST: AdministrativeStatus.LOST,
+  'ROUBADO/FURTADO': AdministrativeStatus.STOLEN,
+  ROUBADO: AdministrativeStatus.STOLEN,
+  FURTADO: AdministrativeStatus.STOLEN,
+  STOLEN: AdministrativeStatus.STOLEN,
+  ARQUIVADO: AdministrativeStatus.ARCHIVED,
+  ARCHIVED: AdministrativeStatus.ARCHIVED,
+};
+
+type CsvImportHeader = (typeof CSV_IMPORT_ALLOWED_HEADERS)[number];
+type CsvImportRow = Record<CsvImportHeader, string>;
+type CsvImportValidationIssue = {
+  line: number;
+  field: string;
+  message: string;
+};
 
 @Injectable()
 export class AssetsService {
@@ -462,6 +535,166 @@ export class AssetsService {
     });
   }
 
+  async importCsv(payload: ImportAssetsCsvDto) {
+    const parsed = this.parseAssetsCsv(payload.csv);
+    const validation = await this.validateCsvImport(parsed.rows);
+
+    if (validation.errors.length) {
+      throw new BadRequestException({
+        message: 'A importação CSV contém linhas inválidas.',
+        errors: validation.errors,
+      });
+    }
+    if (validation.duplicates.length) {
+      throw new ConflictException({
+        message: 'A importação CSV contém hostnames duplicados.',
+        errors: validation.duplicates,
+      });
+    }
+
+    const occurredAt = new Date();
+    const created = await this.prisma.$transaction(async (transaction) => {
+      const createdAssets: Array<ReturnType<typeof presentAssetDetail>> = [];
+
+      for (const row of parsed.rows) {
+        const type = this.csvAssetType(row.data.type);
+        const administrativeStatus = this.csvAdministrativeStatus(row.data.administrativeStatus);
+        const attributes = this.csvAttributes(row.data);
+        const confidenceScore = MANUAL_CONFIDENCE_SCORE;
+        const dataQualityScore = this.calculateCsvDataQuality(row.data);
+        const hostname = row.data.hostname.trim();
+        const evidencePayload = {
+          source: 'csv-import',
+          line: row.line,
+          ...row.data,
+        };
+        const fingerprint = createHash('sha256')
+          .update(JSON.stringify(evidencePayload))
+          .digest('hex');
+
+        const asset = await transaction.asset.create({
+          data: {
+            canonicalKey: `manual:csv:hostname:${hostname.toLocaleLowerCase()}`,
+            name: hostname,
+            kind: type,
+            operationalStatus: OperationalStatus.UNKNOWN,
+            administrativeStatus,
+            confidenceScore,
+            dataQualityScore,
+            firstSeenAt: null,
+            lastSeenAt: null,
+          },
+        });
+        const evidence = await transaction.assetEvidence.create({
+          data: {
+            assetId: asset.id,
+            source: MANUAL_SOURCE,
+            sourceRecordId: hostname,
+            evidenceType: CSV_IMPORT_EVIDENCE_TYPE,
+            payload: evidencePayload,
+            fingerprint,
+            confidenceScore,
+            dataQualityScore,
+            observedAt: occurredAt,
+          },
+        });
+
+        if (attributes.length) {
+          await transaction.assetAttribute.createMany({
+            data: attributes.map((attribute) => ({
+              assetId: asset.id,
+              evidenceId: evidence.id,
+              key: attribute.key,
+              value: attribute.value,
+              valueText: attribute.value,
+              valueType: AttributeValueType.STRING,
+              confidenceScore,
+              dataQualityScore,
+              isCurrent: true,
+              observedAt: occurredAt,
+              lastConfirmedAt: occurredAt,
+              validFrom: occurredAt,
+            })),
+          });
+        }
+
+        await transaction.networkInterface.create({
+          data: {
+            assetId: asset.id,
+            evidenceId: evidence.id,
+            identityKey: row.data.macAddress
+              ? `mac:${this.normalizeMac(row.data.macAddress)}`
+              : `csv-hostname:${hostname.toLocaleLowerCase()}:primary`,
+            name: 'csv-import-primary',
+            macAddress: row.data.macAddress ? this.normalizeMac(row.data.macAddress) : null,
+            ipAddresses: [row.data.ipAddress.trim()],
+            isPrimary: true,
+            isCurrent: true,
+          },
+        });
+
+        const eventData = {
+          source: 'csv-import',
+          line: row.line,
+          hostname,
+          ipAddress: row.data.ipAddress.trim(),
+          actorUserId: SIMULATED_ACTOR_USER_ID,
+          comment: row.data.comment || null,
+        };
+        const event = await transaction.assetEvent.create({
+          data: {
+            assetId: asset.id,
+            evidenceId: evidence.id,
+            eventType: CSV_IMPORT_EVENT_TYPE,
+            title: 'Ativo importado por CSV',
+            description: row.data.comment || 'Declaração manual controlada via importação CSV.',
+            data: eventData,
+            occurredAt,
+          },
+          select: { id: true },
+        });
+        await transaction.auditLog.create({
+          data: {
+            assetId: asset.id,
+            actorType: 'USER',
+            actorId: SIMULATED_ACTOR_USER_ID,
+            action: CSV_IMPORT_EVENT_TYPE,
+            entityType: 'Asset',
+            entityId: asset.id,
+            after: {
+              hostname,
+              ipAddress: row.data.ipAddress.trim(),
+              type,
+              administrativeStatus,
+            },
+            metadata: {
+              ...eventData,
+              eventId: event.id,
+              fieldsProvided: attributes.map((attribute) => attribute.key),
+              origin: 'csv-import',
+            },
+            occurredAt,
+          },
+        });
+
+        const detail = await transaction.asset.findUniqueOrThrow({
+          where: { id: asset.id },
+          select: assetDetailSelect,
+        });
+        createdAssets.push(presentAssetDetail(detail));
+      }
+
+      return createdAssets;
+    });
+
+    return {
+      importedCount: created.length,
+      warningCount: validation.warnings.length,
+      warnings: validation.warnings,
+      assets: created,
+    };
+  }
+
   async enrichManually(id: string, payload: ManualEnrichmentDto) {
     const attributes = Object.entries(payload.attributes).flatMap(([key, value]) =>
       typeof value === 'string' && value.trim() ? [{ key, value: value.trim() }] : [],
@@ -646,6 +879,315 @@ export class AssetsService {
         auditLogId: auditLog.id,
       };
     });
+  }
+
+  private parseAssetsCsv(csv: string): { rows: Array<{ line: number; data: CsvImportRow }> } {
+    const records = this.parseCsvRecords(csv);
+    const [headerRecord, ...dataRecords] = records;
+    if (!headerRecord) {
+      throw new BadRequestException('A importação CSV precisa conter cabeçalho.');
+    }
+
+    const headers = headerRecord.cells.map((header) => this.csvHeader(header));
+    const missingHeaders = CSV_IMPORT_REQUIRED_HEADERS.filter((header) => !headers.includes(header));
+    if (missingHeaders.length) {
+      throw new BadRequestException(
+        `A importação CSV precisa conter os headers obrigatórios: ${missingHeaders.join(', ')}.`,
+      );
+    }
+
+    const allowedHeaders = CSV_IMPORT_ALLOWED_HEADERS as readonly string[];
+    const unknownHeaders = headers.filter((header) => !allowedHeaders.includes(header));
+    if (unknownHeaders.length) {
+      throw new BadRequestException(
+        `A importação CSV contém headers não suportados: ${unknownHeaders.join(', ')}.`,
+      );
+    }
+
+    const rows = dataRecords.flatMap((record) => {
+      if (record.cells.every((cell) => cell.trim() === '')) return [];
+      const data = Object.fromEntries(
+        CSV_IMPORT_ALLOWED_HEADERS.map((header) => [header, '']),
+      ) as CsvImportRow;
+      headers.forEach((header, index) => {
+        if (!allowedHeaders.includes(header)) return;
+        data[header as CsvImportHeader] = record.cells[index]?.trim() ?? '';
+      });
+      return [{ line: record.line, data }];
+    });
+
+    if (!rows.length) {
+      throw new BadRequestException('A importação CSV precisa conter ao menos uma linha de ativo.');
+    }
+
+    return { rows };
+  }
+
+  private async validateCsvImport(rows: Array<{ line: number; data: CsvImportRow }>) {
+    const errors: CsvImportValidationIssue[] = [];
+    const duplicates: CsvImportValidationIssue[] = [];
+    const warnings: CsvImportValidationIssue[] = [];
+    const hostnames = new Map<string, number>();
+    const ipAddresses = new Map<string, number>();
+
+    rows.forEach((row) => {
+      const hostname = row.data.hostname.trim();
+      const ipAddress = row.data.ipAddress.trim();
+      if (!hostname) {
+        errors.push({
+          line: row.line,
+          field: 'hostname',
+          message: 'Hostname é obrigatório.',
+        });
+      }
+      if (!ipAddress) {
+        errors.push({
+          line: row.line,
+          field: 'ipAddress',
+          message: 'ipAddress é obrigatório.',
+        });
+      } else if (isIP(ipAddress) === 0) {
+        errors.push({
+          line: row.line,
+          field: 'ipAddress',
+          message: 'ipAddress possui formato inválido.',
+        });
+      }
+      if (
+        row.data.type.trim() &&
+        !MANUAL_ASSET_TYPES.includes(
+          this.csvAssetType(row.data.type) as (typeof MANUAL_ASSET_TYPES)[number],
+        )
+      ) {
+        errors.push({
+          line: row.line,
+          field: 'type',
+          message: 'Tipo de ativo inválido.',
+        });
+      }
+      if (
+        row.data.administrativeStatus.trim() &&
+        !Object.values(AdministrativeStatus).includes(
+          this.csvAdministrativeStatus(row.data.administrativeStatus),
+        )
+      ) {
+        errors.push({
+          line: row.line,
+          field: 'administrativeStatus',
+          message: 'Status administrativo inválido.',
+        });
+      }
+
+      if (hostname) {
+        const normalizedHostname = hostname.toLocaleLowerCase();
+        const firstLine = hostnames.get(normalizedHostname);
+        if (firstLine) {
+          duplicates.push({
+            line: row.line,
+            field: 'hostname',
+            message: `Hostname duplicado na linha ${firstLine}.`,
+          });
+        } else {
+          hostnames.set(normalizedHostname, row.line);
+        }
+      }
+
+      if (ipAddress) {
+        const firstLine = ipAddresses.get(ipAddress);
+        if (firstLine) {
+          warnings.push({
+            line: row.line,
+            field: 'ipAddress',
+            message: `ipAddress também aparece na linha ${firstLine}; IP pode mudar ou ser reutilizado e não será tratado como identidade absoluta.`,
+          });
+        } else {
+          ipAddresses.set(ipAddress, row.line);
+        }
+      }
+    });
+
+    if (!errors.length && hostnames.size) {
+      const existing = await this.prisma.asset.findMany({
+        where: {
+          OR: [...hostnames.keys()].map((hostname) => ({
+            name: { equals: hostname, mode: 'insensitive' as const },
+          })),
+        },
+        select: { name: true },
+      });
+      const existingNames = new Set(existing.map((asset) => asset.name.toLocaleLowerCase()));
+      for (const [hostname, line] of hostnames.entries()) {
+        if (existingNames.has(hostname)) {
+          duplicates.push({
+            line,
+            field: 'hostname',
+            message: 'Já existe um ativo com este hostname.',
+          });
+        }
+      }
+    }
+
+    if (!errors.length && ipAddresses.size) {
+      const existingInterfaces = await this.prisma.networkInterface.findMany({
+        where: { ipAddresses: { hasSome: [...ipAddresses.keys()] } },
+        select: { ipAddresses: true },
+      });
+      const existingIps = new Set(existingInterfaces.flatMap((item) => item.ipAddresses));
+      for (const [ipAddress, line] of ipAddresses.entries()) {
+        if (existingIps.has(ipAddress)) {
+          warnings.push({
+            line,
+            field: 'ipAddress',
+            message:
+              'ipAddress já aparece em outro ativo; será registrado como sinal de atenção, não como duplicidade absoluta.',
+          });
+        }
+      }
+    }
+
+    return { errors, duplicates, warnings };
+  }
+
+  private parseCsvRecords(csv: string): Array<{ line: number; cells: string[] }> {
+    const delimiter = this.detectCsvDelimiter(csv);
+    const records: Array<{ line: number; cells: string[] }> = [];
+    let cells: string[] = [];
+    let cell = '';
+    let inQuotes = false;
+    let line = 1;
+    let recordLine = 1;
+
+    for (let index = 0; index < csv.length; index += 1) {
+      const char = csv[index];
+      const nextChar = csv[index + 1];
+
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          cell += '"';
+          index += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+
+      if (!inQuotes && char === delimiter) {
+        cells.push(cell);
+        cell = '';
+        continue;
+      }
+
+      if (!inQuotes && (char === '\n' || char === '\r')) {
+        cells.push(cell);
+        records.push({ line: recordLine, cells });
+        cells = [];
+        cell = '';
+        if (char === '\r' && nextChar === '\n') index += 1;
+        line += 1;
+        recordLine = line;
+        continue;
+      }
+
+      if (char === '\n') line += 1;
+      cell += char;
+    }
+
+    if (cell || cells.length) {
+      cells.push(cell);
+      records.push({ line: recordLine, cells });
+    }
+
+    return records;
+  }
+
+  private detectCsvDelimiter(csv: string): ';' | ',' {
+    const firstLine = csv.split(/\r?\n/, 1)[0] ?? '';
+    return (firstLine.match(/;/g)?.length ?? 0) >= (firstLine.match(/,/g)?.length ?? 0)
+      ? ';'
+      : ',';
+  }
+
+  private csvHeader(header: string): string {
+    const normalized = header
+      .trim()
+      .replace(/^\uFEFF/, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLocaleLowerCase();
+    const match = CSV_IMPORT_ALLOWED_HEADERS.find(
+      (allowed) => allowed.toLocaleLowerCase() === normalized,
+    );
+    return match ?? header.trim();
+  }
+
+  private csvAssetType(value: string): string {
+    if (!value.trim()) return 'UNKNOWN';
+    return CSV_IMPORT_ASSET_TYPE_LABELS[this.normalizeCsvLabel(value)] ?? value.trim().toUpperCase();
+  }
+
+  private csvAdministrativeStatus(value: string): AdministrativeStatus {
+    if (!value.trim()) return AdministrativeStatus.IN_USE;
+    return (
+      CSV_IMPORT_ADMIN_STATUS_LABELS[this.normalizeCsvLabel(value)] ??
+      (value.trim().toUpperCase() as AdministrativeStatus)
+    );
+  }
+
+  private csvAttributes(row: CsvImportRow): Array<{ key: string; value: string }> {
+    const candidates: Array<[string, string]> = [
+      ['hostname', row.hostname],
+      ['operatingSystem', row.operatingSystem],
+      ['osVersion', row.osVersion],
+      ['location', row.location],
+      ['owner', row.owner],
+      ['department', row.department],
+      ['type', this.csvAssetType(row.type)],
+      ['administrativeStatus', this.csvAdministrativeStatus(row.administrativeStatus)],
+      ['manufacturer', row.manufacturer],
+      ['model', row.model],
+      ['serialNumber', row.serialNumber],
+      ['environment', row.environment],
+      ['criticality', row.criticality],
+      ['comment', row.comment],
+    ];
+    return candidates.flatMap(([key, value]) =>
+      value?.trim() ? [{ key, value: value.trim() }] : [],
+    );
+  }
+
+  private calculateCsvDataQuality(row: CsvImportRow): number {
+    const values = [
+      row.hostname,
+      row.ipAddress,
+      row.operatingSystem,
+      row.osVersion,
+      row.location,
+      row.owner,
+      row.department,
+      row.type,
+      row.administrativeStatus,
+      row.manufacturer,
+      row.model,
+      row.serialNumber,
+      row.macAddress,
+      row.environment,
+      row.criticality,
+      row.comment,
+    ];
+    const completed = values.filter((value) => value.trim()).length;
+    return Math.round((completed / values.length) * 10000) / 100;
+  }
+
+  private normalizeCsvLabel(value: string): string {
+    return value
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .toLocaleUpperCase();
+  }
+
+  private normalizeMac(value: string): string {
+    return value.trim().toLocaleLowerCase().replaceAll('-', ':').replace(/\s/g, '');
   }
 
   private attributeText(attribute: { valueText: string | null; value: unknown } | undefined) {
