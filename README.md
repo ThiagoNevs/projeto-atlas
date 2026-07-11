@@ -161,6 +161,7 @@ corepack pnpm dev:web
 - Health check: [http://localhost:3001/health](http://localhost:3001/health)
 - Resumo do dashboard: [http://localhost:3001/dashboard/summary](http://localhost:3001/dashboard/summary)
 - Catálogo de fontes de dados: [http://localhost:3001/data-sources](http://localhost:3001/data-sources)
+- Exportação CSV de qualidade: [http://localhost:3001/data-quality/assets/export](http://localhost:3001/data-quality/assets/export)
 
 ## Comandos úteis
 

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useState } from 'react';
+import { Fragment, FormEvent, useEffect, useState } from 'react';
 
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
@@ -12,6 +12,7 @@ import {
   DataQualityIssue,
   DataQualityQueryParams,
   DataQualitySummary,
+  exportDataQualityAssetsCsv,
   getDataQualityAssets,
   getDataQualitySummary,
   OperationalStatus,
@@ -190,11 +191,15 @@ export default function DataQualityPage() {
   const [result, setResult] = useState<PaginatedResponse<DataQualityAsset>>(emptyResult);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [expandedAssetId, setExpandedAssetId] = useState<string | null>(null);
   const [requestVersion, setRequestVersion] = useState(0);
 
   function loadQuery(nextQuery: DataQualityQueryParams): void {
     setLoading(true);
     setError(null);
+    setExpandedAssetId(null);
     setQuery(nextQuery);
   }
 
@@ -225,7 +230,24 @@ export default function DataQualityPage() {
 
   function clearFilters(): void {
     setForm(initialForm);
+    setExportError(null);
     loadQuery(initialQuery);
+  }
+
+  async function exportCsv(): Promise<void> {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportDataQualityAssetsCsv(query);
+    } catch (downloadError: unknown) {
+      setExportError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : 'Não foi possível exportar o CSV.',
+      );
+    } finally {
+      setExporting(false);
+    }
   }
 
   function retry(): void {
@@ -475,7 +497,16 @@ export default function DataQualityPage() {
             <button className="button button-secondary" type="button" onClick={clearFilters}>
               Limpar filtros
             </button>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={exportCsv}
+              disabled={exporting}
+            >
+              {exporting ? 'Exportando…' : 'Exportar CSV'}
+            </button>
           </div>
+          {exportError ? <p className="form-message form-error">{exportError}</p> : null}
         </form>
       </section>
 
@@ -508,61 +539,90 @@ export default function DataQualityPage() {
                     <th>Última evidência</th>
                     <th>Problemas</th>
                     <th>Campos ausentes</th>
-                    <th>Ação</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {result.items.map((asset) => (
-                    <tr key={asset.id}>
-                      <td>
-                        <Link className="asset-name" href={`/assets/${asset.id}`}>
-                          {asset.hostname}
-                        </Link>
-                        <span className="cell-subtitle">
-                          {asset.manufacturer ?? 'Fabricante não informado'} ·{' '}
-                          {asset.model ?? 'Modelo não informado'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="type-chip">{getAssetTypeLabel(asset.type)}</span>
-                      </td>
-                      <td>{asset.operatingSystem ?? 'Não identificado'}</td>
-                      <td className="number-column score-number">
-                        {score(asset.dataQualityScore)}
-                      </td>
-                      <td className="number-column score-number">{score(asset.confidenceScore)}</td>
-                      <td>
-                        <div className="score-analysis-list">
-                          <ScoreAnalysisBlock analysis={asset.scoreAnalysis.quality} />
-                          <ScoreAnalysisBlock analysis={asset.scoreAnalysis.confidence} />
-                        </div>
-                      </td>
-                      <td>
-                        <time dateTime={asset.lastSeenAt ?? undefined}>
-                          {formatDateTime(asset.lastSeenAt)}
-                        </time>
-                        <RelativeTime className="cell-subtitle" value={asset.lastSeenAt} />
-                      </td>
-                      <td>
-                        <div className="quality-issue-list">
-                          {asset.issues.map((issue) => (
-                            <span key={issue}>{getDataQualityIssueLabel(issue)}</span>
-                          ))}
-                        </div>
-                      </td>
-                      <td>
-                        {asset.missingFields.length
-                          ? asset.missingFields.join(', ')
-                          : 'Nenhum campo essencial ausente'}
-                      </td>
-                      <td>
-                        <Link className="row-action" href={`/assets/${asset.id}`}>
-                          <span>Ver ativo</span>
-                          <span aria-hidden="true">→</span>
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                  {result.items.map((asset) => {
+                    const expanded = expandedAssetId === asset.id;
+
+                    return (
+                      <Fragment key={asset.id}>
+                        <tr>
+                          <td>
+                            <Link className="asset-name" href={`/assets/${asset.id}`}>
+                              {asset.hostname}
+                            </Link>
+                            <span className="cell-subtitle">
+                              {asset.manufacturer ?? 'Fabricante não informado'} ·{' '}
+                              {asset.model ?? 'Modelo não informado'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="type-chip">{getAssetTypeLabel(asset.type)}</span>
+                          </td>
+                          <td className="quality-os-cell">
+                            {asset.operatingSystem ?? 'Não identificado'}
+                          </td>
+                          <td className="number-column score-number">
+                            {score(asset.dataQualityScore)}
+                          </td>
+                          <td className="number-column score-number">
+                            {score(asset.confidenceScore)}
+                          </td>
+                          <td>
+                            <div className="score-analysis-summary">
+                              <span>Qualidade: {score(asset.scoreAnalysis.quality.score)}</span>
+                              <span>
+                                Confiabilidade: {score(asset.scoreAnalysis.confidence.score)}
+                              </span>
+                              <button
+                                className="table-link-button"
+                                type="button"
+                                aria-expanded={expanded}
+                                onClick={() => setExpandedAssetId(expanded ? null : asset.id)}
+                              >
+                                {expanded ? 'Ocultar análise' : 'Ver análise'}
+                              </button>
+                            </div>
+                          </td>
+                          <td>
+                            <time dateTime={asset.lastSeenAt ?? undefined}>
+                              {formatDateTime(asset.lastSeenAt)}
+                            </time>
+                            <RelativeTime className="cell-subtitle" value={asset.lastSeenAt} />
+                          </td>
+                          <td>
+                            <div className="quality-issue-list">
+                              {asset.issues.map((issue) => (
+                                <span key={issue}>{getDataQualityIssueLabel(issue)}</span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="quality-missing-cell">
+                            {asset.missingFields.length ? (
+                              <div className="quality-missing-list">
+                                {asset.missingFields.map((field) => (
+                                  <span key={field}>{field}</span>
+                                ))}
+                              </div>
+                            ) : (
+                              'Nenhum campo essencial ausente'
+                            )}
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr className="quality-analysis-row">
+                            <td colSpan={9}>
+                              <div className="score-analysis-expanded">
+                                <ScoreAnalysisBlock analysis={asset.scoreAnalysis.quality} />
+                                <ScoreAnalysisBlock analysis={asset.scoreAnalysis.confidence} />
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

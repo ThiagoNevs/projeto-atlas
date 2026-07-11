@@ -17,6 +17,7 @@ describe('Data quality with an empty database (e2e)', () => {
     const prismaMock = {
       asset: {
         count: jest.fn<() => Promise<number>>().mockResolvedValue(0),
+        findMany: jest.fn<() => Promise<unknown[]>>().mockResolvedValue([]),
         aggregate: jest
           .fn<
             () => Promise<{
@@ -62,5 +63,13 @@ describe('Data quality with an empty database (e2e)', () => {
       averageDataQualityScore: 0,
       averageConfidenceScore: 0,
     });
+  });
+
+  it('returns a safe CSV export without assets', async () => {
+    const response = await request(httpServer).get('/data-quality/assets/export').expect(200);
+
+    expect(response.headers['content-type']).toContain('text/csv');
+    expect(response.text).toContain('"Atlas ID";"Nome";"Hostname";"Tipo"');
+    expect(response.text.trim().split('\n')).toHaveLength(1);
   });
 });
