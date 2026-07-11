@@ -43,11 +43,11 @@ export const DATA_SOURCE_CATALOG: DataSourceCatalogItem[] = [
     id: 'csv-import',
     name: 'Importação CSV',
     category: 'Arquivo',
-    status: 'PLANNED',
+    status: 'AVAILABLE',
     description:
-      'Permitirá importar ativos em massa com pré-validação, pré-visualização e auditoria.',
-    evidenceType: null,
-    current: false,
+      'Permite importar ativos em massa por hostname e IP como declaração manual controlada.',
+    evidenceType: 'CSV_MANUAL_IMPORT',
+    current: true,
   },
   {
     id: 'microsoft-intune',

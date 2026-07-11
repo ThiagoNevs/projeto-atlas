@@ -129,6 +129,13 @@ type ManualAssetResponse = {
   auditLogId: string;
 };
 
+type CsvImportResponse = {
+  importedCount: number;
+  warningCount: number;
+  warnings: Array<{ line: number; field: string; message: string }>;
+  assets: Array<{ id: string; name: string; operationalStatus: string; firstSeenAt: string | null; lastSeenAt: string | null }>;
+};
+
 type ManualEnrichmentResponse = {
   asset: { id: string; dataQualityScore: number | null; confidenceScore: number | null };
   createdAttributes: string[];
@@ -154,12 +161,15 @@ describe('Asset ingestion idempotency (e2e)', () => {
   let disabledDiscoveryProfileId: string;
   let discoveryRunId: string;
   let dataQualityAssetId: string;
+  let dataQualityCsvAssetId: string;
   let manualAssetId: string;
+  const csvImportAssetIds: string[] = [];
   let initialAttributeCount: number;
   const sourceAssetId = `e2e-${randomUUID()}`;
   const querySerialNumber = `QUERY-SERIAL-${sourceAssetId}`;
   const canonicalKey = `e2e-tests:${sourceAssetId}`;
   const queryPrefix = `query-${sourceAssetId.slice(-8)}`;
+  const csvAssetName = `=CSV-${sourceAssetId.slice(-8)}`;
   const basePayload = {
     source: 'e2e-tests',
     sourceAssetId,
@@ -317,6 +327,58 @@ describe('Asset ingestion idempotency (e2e)', () => {
         observedAt: new Date('2020-01-01T10:00:00.000Z'),
       },
     });
+
+    const dataQualityCsvAsset = await prisma.asset.create({
+      data: {
+        canonicalKey: `${canonicalKey}:data-quality-csv`,
+        name: csvAssetName,
+        kind: 'SERVER',
+        operationalStatus: 'SEEN_RECENTLY',
+        administrativeStatus: 'IN_USE',
+        confidenceScore: 45,
+        dataQualityScore: 55,
+        firstSeenAt: new Date('2026-07-04T10:00:00.000Z'),
+        lastSeenAt: new Date('2026-07-04T10:00:00.000Z'),
+        attributes: {
+          create: [
+            {
+              key: 'serialNumber',
+              value: 'CSV-SERIAL-001',
+              valueText: 'CSV-SERIAL-001',
+              valueType: 'STRING',
+              observedAt: new Date('2026-07-04T10:00:00.000Z'),
+            },
+            {
+              key: 'manufacturer',
+              value: 'Fabricante, "Teste"\nLinha',
+              valueText: 'Fabricante, "Teste"\nLinha',
+              valueType: 'STRING',
+              observedAt: new Date('2026-07-04T10:00:00.000Z'),
+            },
+            {
+              key: 'model',
+              value: '+Modelo Seguro',
+              valueText: '+Modelo Seguro',
+              valueType: 'STRING',
+              observedAt: new Date('2026-07-04T10:00:00.000Z'),
+            },
+          ],
+        },
+        networkInterfaces: {
+          create: {
+            identityKey: 'mac:02:42:ac:11:77:10',
+            name: 'eth0',
+            macAddress: '02:42:ac:11:77:10',
+            ipAddresses: ['10.77.0.10'],
+            isPrimary: true,
+            observedAt: new Date('2026-07-04T10:00:00.000Z'),
+            firstSeenAt: new Date('2026-07-04T10:00:00.000Z'),
+            lastSeenAt: new Date('2026-07-04T10:00:00.000Z'),
+          },
+        },
+      },
+    });
+    dataQualityCsvAssetId = dataQualityCsvAsset.id;
   });
 
   afterAll(async () => {
@@ -328,6 +390,10 @@ describe('Asset ingestion idempotency (e2e)', () => {
     if (manualAssetId) {
       await prisma.auditLog.deleteMany({ where: { entityId: manualAssetId } });
       await prisma.asset.deleteMany({ where: { id: manualAssetId } });
+    }
+    if (csvImportAssetIds.length) {
+      await prisma.auditLog.deleteMany({ where: { entityId: { in: csvImportAssetIds } } });
+      await prisma.asset.deleteMany({ where: { id: { in: csvImportAssetIds } } });
     }
     await prisma.auditLog.deleteMany({
       where: {
@@ -1674,6 +1740,84 @@ describe('Asset ingestion idempotency (e2e)', () => {
     await request(httpServer).get('/data-quality/assets').query({ pageSize: 101 }).expect(400);
   });
 
+  it('exports data quality assets as CSV with Portuguese headers', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ search: csvAssetName, sortBy: 'name', sortDirection: 'asc' })
+      .expect(200);
+
+    expect(response.headers['content-type']).toContain('text/csv');
+    expect(response.headers['content-disposition']).toContain(
+      'filename="atlas-qualidade-dos-dados.csv"',
+    );
+    expect(response.text).toContain('"Atlas ID";"Nome";"Hostname";"Tipo"');
+    expect(response.text).toContain('"Qualidade dos dados";"Confiabilidade"');
+    expect(response.text).toContain('"Fatores positivos de qualidade"');
+    expect(response.text).toContain('"Fatores negativos de confiabilidade"');
+    expect(response.text).toContain(
+      `ATLAS-${dataQualityCsvAssetId.replaceAll('-', '').slice(0, 8).toUpperCase()}`,
+    );
+  });
+
+  it('applies LOW_CONFIDENCE and MISSING_OPERATING_SYSTEM filters to the CSV export', async () => {
+    const lowConfidence = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ issue: 'LOW_CONFIDENCE', search: csvAssetName })
+      .expect(200);
+    const missingOperatingSystem = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ issue: 'MISSING_OPERATING_SYSTEM', search: csvAssetName })
+      .expect(200);
+
+    expect(lowConfidence.text).toContain(csvAssetName);
+    expect(lowConfidence.text).toContain('Baixa confiabilidade');
+    expect(missingOperatingSystem.text).toContain(csvAssetName);
+    expect(missingOperatingSystem.text).toContain('Sem sistema operacional');
+  });
+
+  it('uses Portuguese labels instead of technical enums in the CSV export', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ search: csvAssetName })
+      .expect(200);
+
+    expect(response.text).toContain('"Servidor"');
+    expect(response.text).toContain('"Em uso"');
+    expect(response.text).toContain('"Visto recentemente"');
+    expect(response.text).not.toContain('"SERVER"');
+    expect(response.text).not.toContain('"IN_USE"');
+    expect(response.text).not.toContain('"SEEN_RECENTLY"');
+  });
+
+  it('escapes commas, quotes and newlines in CSV fields', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ search: csvAssetName })
+      .expect(200);
+
+    expect(response.text).toContain('"Fabricante, ""Teste""\nLinha"');
+  });
+
+  it('protects CSV cells against formula injection', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ search: csvAssetName })
+      .expect(200);
+
+    expect(response.text).toContain(`"'${csvAssetName}"`);
+    expect(response.text).toContain('"\'+Modelo Seguro"');
+  });
+
+  it('returns a valid CSV with only headers when no data matches', async () => {
+    const response = await request(httpServer)
+      .get('/data-quality/assets/export')
+      .query({ search: `no-match-${randomUUID()}` })
+      .expect(200);
+
+    expect(response.text).toContain('"Atlas ID";"Nome";"Hostname";"Tipo"');
+    expect(response.text.trim().split('\n')).toHaveLength(1);
+  });
+
   it('requires the mandatory manual declaration fields', async () => {
     await request(httpServer).post('/assets/manual').send({}).expect(400);
   });
@@ -1799,6 +1943,110 @@ describe('Asset ingestion idempotency (e2e)', () => {
     expect(asset).toBeDefined();
     expect(asset?.issues).toEqual(
       expect.arrayContaining(['LOW_CONFIDENCE', 'MISSING_NETWORK_INFO', 'WITHOUT_RECENT_EVIDENCE']),
+    );
+  });
+
+  it('rejects CSV asset import without hostname', async () => {
+    await request(httpServer)
+      .post('/assets/import/csv')
+      .send({
+        csv: 'hostname;ipAddress;comment\n;10.20.1.15;linha sem hostname',
+      })
+      .expect(400);
+  });
+
+  it('rejects CSV asset import without ipAddress', async () => {
+    await request(httpServer)
+      .post('/assets/import/csv')
+      .send({
+        csv: `hostname;ipAddress;comment\nCSV-NO-IP-${sourceAssetId.slice(-8)};;linha sem ip`,
+      })
+      .expect(400);
+  });
+
+  it('rejects CSV asset import with invalid ipAddress', async () => {
+    await request(httpServer)
+      .post('/assets/import/csv')
+      .send({
+        csv: `hostname;ipAddress;comment\nCSV-BAD-IP-${sourceAssetId.slice(-8)};999.1.1.1;ip inválido`,
+      })
+      .expect(400);
+  });
+
+  it('rejects CSV asset import with duplicate hostname', async () => {
+    const csv = [
+      'hostname;ipAddress;comment',
+      `CSV-DUP-${sourceAssetId.slice(-8)};10.20.1.10;primeira linha`,
+      `CSV-DUP-${sourceAssetId.slice(-8)};10.20.1.11;segunda linha`,
+    ].join('\n');
+
+    await request(httpServer).post('/assets/import/csv').send({ csv }).expect(409);
+  });
+
+  it('imports CSV assets using hostname as identity and ipAddress as network information', async () => {
+    const csv = [
+      'hostname;ipAddress;operatingSystem;osVersion;location;owner;department;type;administrativeStatus;comment',
+      `CSV-NB-${sourceAssetId.slice(-8)};10.20.1.15;Windows 11;23H2;Rio de Janeiro;Ana Silva;RH;Notebook;Em uso;Notebook da Ana / máquina do RH`,
+      `CSV-SRV-${sourceAssetId.slice(-8)};10.30.1.20;Windows Server;2019;Datacenter;Infraestrutura;TI;Servidor;Em uso;Servidor de aplicação principal`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+
+    expect(body.importedCount).toBe(2);
+    expect(body.warningCount).toBe(0);
+    expect(body.assets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: `CSV-NB-${sourceAssetId.slice(-8)}`,
+          operationalStatus: 'UNKNOWN',
+          firstSeenAt: null,
+          lastSeenAt: null,
+        }),
+      ]),
+    );
+
+    const firstImportedAsset = body.assets[0];
+    if (!firstImportedAsset) throw new Error('CSV import did not return the first asset.');
+
+    const networkInterface = await prisma.networkInterface.findFirstOrThrow({
+      where: { assetId: firstImportedAsset.id },
+    });
+    expect(networkInterface.ipAddresses).toContain('10.20.1.15');
+    expect(networkInterface.identityKey).not.toBe('ip:10.20.1.15');
+
+    const evidence = await prisma.assetEvidence.findFirstOrThrow({
+      where: { assetId: firstImportedAsset.id },
+    });
+    expect(evidence).toEqual(
+      expect.objectContaining({
+        source: 'MANUAL',
+        evidenceType: 'CSV_MANUAL_IMPORT',
+      }),
+    );
+  });
+
+  it('imports duplicate ipAddress from CSV as a warning instead of absolute duplicate', async () => {
+    const csv = [
+      'hostname;ipAddress;type;administrativeStatus;comment',
+      `CSV-IP-A-${sourceAssetId.slice(-8)};10.20.1.99;Notebook;Em uso;IP compartilhado em troca`,
+      `CSV-IP-B-${sourceAssetId.slice(-8)};10.20.1.99;Notebook;Em uso;IP reutilizado`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+
+    expect(body.importedCount).toBe(2);
+    expect(body.warningCount).toBeGreaterThan(0);
+    expect(body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'ipAddress',
+          message: expect.stringContaining('não será tratado como identidade absoluta'),
+        }),
+      ]),
     );
   });
 

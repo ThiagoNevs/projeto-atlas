@@ -39,6 +39,12 @@ describe('Data sources catalog (e2e)', () => {
           current: true,
         }),
         expect.objectContaining({
+          id: 'csv-import',
+          status: 'AVAILABLE',
+          current: true,
+          evidenceType: 'CSV_MANUAL_IMPORT',
+        }),
+        expect.objectContaining({
           id: 'microsoft-intune',
           status: 'PLANNED',
           current: false,
@@ -57,8 +63,8 @@ describe('Data sources catalog (e2e)', () => {
     const body = response.body as DataSourcesResponse;
 
     expect(body.summary).toEqual({
-      available: 3,
-      planned: 4,
+      available: 4,
+      planned: 3,
       future: 3,
       total: 10,
     });
