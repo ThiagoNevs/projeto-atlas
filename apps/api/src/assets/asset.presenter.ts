@@ -13,6 +13,14 @@ export const assetSummarySelect = {
   lastSeenAt: true,
   createdAt: true,
   updatedAt: true,
+  networkInterfaces: {
+    where: { isCurrent: true },
+    orderBy: [{ isPrimary: 'desc' }, { interfaceIndex: 'asc' }],
+    select: {
+      macAddress: true,
+      ipAddresses: true,
+    },
+  },
   _count: {
     select: {
       evidence: true,
@@ -88,14 +96,21 @@ function presentAtlasId(id: string): string {
 }
 
 export function presentAssetSummary(asset: AssetSummaryRecord) {
+  const primaryNetworkInterface = asset.networkInterfaces.find(
+    (networkInterface) => networkInterface.ipAddresses.length > 0 || networkInterface.macAddress,
+  );
+
   return {
     ...asset,
     atlasId: presentAtlasId(asset.id),
     type: asset.kind,
+    primaryIp: primaryNetworkInterface?.ipAddresses[0] ?? null,
+    primaryMac: primaryNetworkInterface?.macAddress ?? null,
     confidenceScore: presentScore(asset.confidenceScore),
     dataQualityScore: presentScore(asset.dataQualityScore),
     evidenceCount: asset._count.evidence,
     eventCount: asset._count.events,
+    networkInterfaces: undefined,
     kind: undefined,
     _count: undefined,
   };

@@ -338,6 +338,9 @@ export default function AssetsPage() {
                         >
                           {asset.name}
                         </Link>
+                        <span className="asset-primary-ip">
+                          IP principal: {asset.primaryIp ?? 'não identificado'}
+                        </span>
                         <span
                           className="cell-subtitle canonical-key"
                           title={asset.canonicalKey ?? undefined}
