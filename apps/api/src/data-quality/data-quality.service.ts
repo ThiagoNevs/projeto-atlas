@@ -10,13 +10,39 @@ import {
 
 const QUALITY_THRESHOLD = 70;
 const RECENT_EVIDENCE_DAYS = 30;
+const DATA_QUALITY_CSV_EXPORT_LIMIT = 5_000;
 const ATTRIBUTE_KEYS = {
   serialNumber: ['serialNumber', 'SERIALNUMBER'],
   manufacturer: ['manufacturer', 'MANUFACTURER'],
   model: ['model', 'MODEL'],
   operatingSystem: ['operatingSystem', 'OPERATINGSYSTEM', 'os', 'OS'],
+  operatingSystemVersion: ['osVersion', 'OSVERSION', 'operatingSystemVersion'],
 } as const;
 const SEARCH_ATTRIBUTE_KEYS = Object.values(ATTRIBUTE_KEYS).flat();
+const CSV_HEADERS = [
+  'Atlas ID',
+  'Nome',
+  'Hostname',
+  'Tipo',
+  'Status administrativo',
+  'Status operacional',
+  'Sistema operacional',
+  'Versão do sistema operacional',
+  'Fabricante',
+  'Modelo',
+  'Número de série',
+  'IP principal',
+  'MAC principal',
+  'Qualidade dos dados',
+  'Confiabilidade',
+  'Problemas',
+  'Campos ausentes',
+  'Última evidência',
+  'Fatores positivos de qualidade',
+  'Fatores negativos de qualidade',
+  'Fatores positivos de confiabilidade',
+  'Fatores negativos de confiabilidade',
+] as const;
 const MISSING_FIELD_LABELS: Partial<Record<DataQualityIssue, string>> = {
   MISSING_SERIAL_NUMBER: 'Número de série',
   MISSING_MANUFACTURER: 'Fabricante',
@@ -24,6 +50,49 @@ const MISSING_FIELD_LABELS: Partial<Record<DataQualityIssue, string>> = {
   MISSING_OPERATING_SYSTEM: 'Sistema operacional',
   MISSING_NETWORK_INFO: 'Informações de rede',
   MISSING_ADMINISTRATIVE_STATUS: 'Status administrativo',
+};
+const DATA_QUALITY_ISSUE_LABELS: Record<DataQualityIssue, string> = {
+  LOW_DATA_QUALITY: 'Baixa qualidade',
+  LOW_CONFIDENCE: 'Baixa confiabilidade',
+  MISSING_SERIAL_NUMBER: 'Sem número de série',
+  MISSING_MANUFACTURER: 'Sem fabricante',
+  MISSING_MODEL: 'Sem modelo',
+  MISSING_OPERATING_SYSTEM: 'Sem sistema operacional',
+  MISSING_NETWORK_INFO: 'Sem rede identificada',
+  MISSING_ADMINISTRATIVE_STATUS: 'Sem status administrativo',
+  WITHOUT_RECENT_EVIDENCE: 'Sem evidência recente',
+};
+const ASSET_TYPE_LABELS: Record<string, string> = {
+  SERVER: 'Servidor',
+  NOTEBOOK: 'Notebook',
+  DESKTOP: 'Desktop',
+  WORKSTATION: 'Estação de trabalho',
+  VM: 'Máquina virtual',
+  NETWORK_DEVICE: 'Dispositivo de rede',
+  PRINTER: 'Impressora',
+  STORAGE: 'Armazenamento',
+  UNKNOWN: 'Desconhecido',
+};
+const ADMINISTRATIVE_STATUS_LABELS: Record<string, string> = {
+  UNKNOWN: 'Desconhecido',
+  IN_USE: 'Em uso',
+  IN_STOCK: 'Em estoque',
+  PLANNED: 'Planejado',
+  ACTIVE: 'Ativo',
+  MAINTENANCE: 'Em manutenção',
+  DEACTIVATED: 'Desativado',
+  DISCARDED: 'Descartado',
+  LOST: 'Perdido',
+  STOLEN: 'Roubado/Furtado',
+  ARCHIVED: 'Arquivado',
+  RETIRED: 'Retirado',
+};
+const OPERATIONAL_STATUS_LABELS: Record<string, string> = {
+  UNKNOWN: 'Desconhecido',
+  SEEN_RECENTLY: 'Visto recentemente',
+  OPERATIONAL: 'Operacional',
+  DEGRADED: 'Operação degradada',
+  UNAVAILABLE: 'Indisponível',
 };
 
 const qualityAssetSelect = {
@@ -66,6 +135,42 @@ type ScoreFactorImpact = 'positive' | 'negative';
 type AttributeSnapshot = {
   value: string;
   evidenceId: string | null;
+};
+type PresentedScoreFactor = {
+  label: string;
+};
+type PresentedScoreAnalysis = {
+  metric: string;
+  score: number | null;
+  note: string;
+  positiveFactors: PresentedScoreFactor[];
+  negativeFactors: PresentedScoreFactor[];
+  relatedEvidence: unknown[];
+};
+type PresentedQualityAsset = {
+  id: string;
+  atlasId: string;
+  name: string;
+  hostname: string;
+  type: string;
+  administrativeStatus: string;
+  operationalStatus: string;
+  dataQualityScore: number | null;
+  confidenceScore: number | null;
+  lastSeenAt: Date | null;
+  issues: DataQualityIssue[];
+  missingFields: string[];
+  primaryIp: string | null;
+  primaryMac: string | null;
+  operatingSystem: string | null;
+  operatingSystemVersion: string | null;
+  serialNumber: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  scoreAnalysis: {
+    quality: PresentedScoreAnalysis;
+    confidence: PresentedScoreAnalysis;
+  };
 };
 
 @Injectable()
@@ -142,6 +247,19 @@ export class DataQualityService {
       pageSize: query.pageSize,
       totalPages: Math.ceil(total / query.pageSize),
     };
+  }
+
+  async exportAssets(query: QueryDataQualityAssetsDto): Promise<string> {
+    this.validateScoreRanges(query);
+    const recentCutoff = this.recentCutoff();
+    const assets = await this.prisma.asset.findMany({
+      where: this.buildWhere(query, recentCutoff),
+      select: qualityAssetSelect,
+      orderBy: [this.buildOrderBy(query), { id: 'asc' }],
+      take: DATA_QUALITY_CSV_EXPORT_LIMIT,
+    });
+
+    return this.buildCsv(assets.map((asset) => this.presentAsset(asset, recentCutoff)));
   }
 
   private buildWhere(query: QueryDataQualityAssetsDto, recentCutoff: Date): Prisma.AssetWhereInput {
@@ -240,15 +358,20 @@ export class DataQualityService {
     };
   }
 
-  private presentAsset(asset: QualityAsset, recentCutoff: Date) {
+  private presentAsset(asset: QualityAsset, recentCutoff: Date): PresentedQualityAsset {
     const serialNumberAttribute = this.attributeSnapshot(asset, ATTRIBUTE_KEYS.serialNumber);
     const manufacturerAttribute = this.attributeSnapshot(asset, ATTRIBUTE_KEYS.manufacturer);
     const modelAttribute = this.attributeSnapshot(asset, ATTRIBUTE_KEYS.model);
     const operatingSystemAttribute = this.attributeSnapshot(asset, ATTRIBUTE_KEYS.operatingSystem);
+    const operatingSystemVersionAttribute = this.attributeSnapshot(
+      asset,
+      ATTRIBUTE_KEYS.operatingSystemVersion,
+    );
     const serialNumber = serialNumberAttribute?.value ?? null;
     const manufacturer = manufacturerAttribute?.value ?? null;
     const model = modelAttribute?.value ?? null;
     const operatingSystem = operatingSystemAttribute?.value ?? null;
+    const operatingSystemVersion = operatingSystemVersionAttribute?.value ?? null;
     const networkInterface = asset.networkInterfaces.find(
       (item) => item.macAddress || item.ipAddresses.length > 0,
     );
@@ -266,6 +389,7 @@ export class DataQualityService {
 
     return {
       id: asset.id,
+      atlasId: `ATLAS-${asset.id.replaceAll('-', '').slice(0, 8).toUpperCase()}`,
       name: asset.name,
       hostname: asset.name,
       type: asset.kind,
@@ -281,6 +405,7 @@ export class DataQualityService {
       primaryIp: networkInterface?.ipAddresses[0] ?? null,
       primaryMac: networkInterface?.macAddress ?? null,
       operatingSystem,
+      operatingSystemVersion,
       serialNumber,
       manufacturer,
       model,
@@ -565,6 +690,60 @@ export class DataQualityService {
         confidenceScore: item.confidenceScore?.toNumber() ?? null,
         dataQualityScore: item.dataQualityScore?.toNumber() ?? null,
       }));
+  }
+
+  private buildCsv(assets: PresentedQualityAsset[]): string {
+    const rows = assets.map((asset) => [
+      asset.atlasId,
+      asset.name,
+      asset.hostname,
+      this.labelFrom(ASSET_TYPE_LABELS, asset.type),
+      this.labelFrom(ADMINISTRATIVE_STATUS_LABELS, asset.administrativeStatus),
+      this.labelFrom(OPERATIONAL_STATUS_LABELS, asset.operationalStatus),
+      asset.operatingSystem ?? 'Não identificado',
+      asset.operatingSystemVersion ?? 'Não identificado',
+      asset.manufacturer ?? 'Não informado',
+      asset.model ?? 'Não informado',
+      asset.serialNumber ?? 'Não informado',
+      asset.primaryIp ?? 'Não informado',
+      asset.primaryMac ?? 'Não informado',
+      this.scoreToCsv(asset.dataQualityScore),
+      this.scoreToCsv(asset.confidenceScore),
+      this.joinCsvList(asset.issues.map((issue) => DATA_QUALITY_ISSUE_LABELS[issue])),
+      this.joinCsvList(asset.missingFields),
+      asset.lastSeenAt?.toISOString() ?? 'Não informado',
+      this.joinCsvList(asset.scoreAnalysis.quality.positiveFactors.map((factor) => factor.label)),
+      this.joinCsvList(asset.scoreAnalysis.quality.negativeFactors.map((factor) => factor.label)),
+      this.joinCsvList(
+        asset.scoreAnalysis.confidence.positiveFactors.map((factor) => factor.label),
+      ),
+      this.joinCsvList(
+        asset.scoreAnalysis.confidence.negativeFactors.map((factor) => factor.label),
+      ),
+    ]);
+
+    return [
+      `\uFEFF${CSV_HEADERS.map((header) => this.escapeCsvCell(header)).join(';')}`,
+      ...rows.map((row) => row.map((value) => this.escapeCsvCell(value)).join(';')),
+    ].join('\n');
+  }
+
+  private escapeCsvCell(value: string | number): string {
+    const stringValue = String(value);
+    const protectedValue = /^[=+\-@\t]/.test(stringValue) ? `'${stringValue}` : stringValue;
+    return `"${protectedValue.replace(/"/g, '""')}"`;
+  }
+
+  private joinCsvList(values: string[]): string {
+    return values.length ? values.join(' | ') : 'Não informado';
+  }
+
+  private scoreToCsv(value: number | null): string {
+    return value === null ? 'Não informado' : String(Math.round(value));
+  }
+
+  private labelFrom(labels: Record<string, string>, value: string): string {
+    return labels[value.trim().toUpperCase()] ?? value;
   }
 
   private normalizeKey(key: string): string {

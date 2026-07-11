@@ -33,6 +33,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Persistência e auditoria de execuções concluídas, rejeitadas e com falha.
 - Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
+- Exportação CSV da tela de Qualidade dos Dados com filtros aplicados, labels em português e proteção contra fórmulas em planilhas.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
 - Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.

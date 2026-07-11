@@ -41,6 +41,8 @@ Explique que **Qualidade** e **Confiabilidade** são métricas diferentes: a pri
 completude/recência/consistência dos dados, enquanto a segunda reflete confiança nas fontes e
 evidências. Mostre os fatores positivos e negativos e destaque que o score é derivado, não é uma
 decisão administrativa e não pode ser editado diretamente.
+Use **Exportar CSV** para mostrar que a visão filtrada pode ser levada para análise operacional
+fora do Atlas sem expor enums técnicos na planilha.
 
 Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um equipamento em
 estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado

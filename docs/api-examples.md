@@ -378,6 +378,16 @@ curl.exe "http://localhost:3001/data-quality/assets?issue=MISSING_OPERATING_SYST
 Os problemas aceitos incluem baixa qualidade ou confiança, ausência de série, fabricante,
 modelo, sistema operacional, rede, status administrativo e evidência recente.
 
+### Exportar CSV da qualidade dos dados
+
+```powershell
+curl.exe -OJ "http://localhost:3001/data-quality/assets/export?issue=LOW_CONFIDENCE&sortBy=dataQualityScore&sortDirection=asc"
+```
+
+O CSV usa delimitador `;`, cabeçalhos em português, labels amigáveis e aplica os mesmos filtros
+principais da listagem. A exportação não usa paginação, possui limite de 5000 registros e protege
+células contra execução acidental de fórmulas em planilhas.
+
 ## Declaração manual de ativo
 
 ```powershell

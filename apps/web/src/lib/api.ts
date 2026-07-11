@@ -363,6 +363,7 @@ export interface DataQualitySummary {
 }
 
 export interface DataQualityAsset {
+  atlasId: string;
   id: string;
   name: string;
   hostname: string;
@@ -377,6 +378,7 @@ export interface DataQualityAsset {
   primaryIp: string | null;
   primaryMac: string | null;
   operatingSystem: string | null;
+  operatingSystemVersion: string | null;
   serialNumber: string | null;
   manufacturer: string | null;
   model: string | null;
@@ -596,6 +598,23 @@ export class ApiError extends Error {
   }
 }
 
+async function readErrorMessage(response: Response): Promise<string> {
+  let message =
+    response.status === 404
+      ? 'O recurso solicitado não foi encontrado.'
+      : 'Não foi possível concluir a solicitação.';
+
+  try {
+    const errorBody = (await response.json()) as { message?: string | string[] };
+    if (Array.isArray(errorBody.message)) message = errorBody.message.join(' ');
+    else if (errorBody.message) message = errorBody.message;
+  } catch {
+    // Keep the controlled fallback when the API does not return JSON.
+  }
+
+  return message;
+}
+
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -604,20 +623,7 @@ async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    let message =
-      response.status === 404
-        ? 'O recurso solicitado não foi encontrado.'
-        : 'Não foi possível concluir a solicitação.';
-
-    try {
-      const errorBody = (await response.json()) as { message?: string | string[] };
-      if (Array.isArray(errorBody.message)) message = errorBody.message.join(' ');
-      else if (errorBody.message) message = errorBody.message;
-    } catch {
-      // Keep the controlled fallback when the API does not return JSON.
-    }
-
-    throw new ApiError(message, response.status);
+    throw new ApiError(await readErrorMessage(response), response.status);
   }
 
   const body: unknown = await response.json();
@@ -746,6 +752,35 @@ export function getDataQualityAssets(
   params: DataQualityQueryParams = {},
 ): Promise<PaginatedResponse<DataQualityAsset>> {
   return fetchJson(`/data-quality/assets${queryString(params)}`);
+}
+
+export async function exportDataQualityAssetsCsv(
+  params: DataQualityQueryParams = {},
+): Promise<void> {
+  const exportParams = { ...params };
+  delete exportParams.page;
+  delete exportParams.pageSize;
+  const response = await fetch(
+    `${API_URL}/data-quality/assets/export${queryString(exportParams)}`,
+    {
+      cache: 'no-store',
+      headers: { Accept: 'text/csv' },
+    },
+  );
+
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'atlas-qualidade-dos-dados.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function getDataSources(): Promise<DataSourcesResponse> {
