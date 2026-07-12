@@ -572,7 +572,13 @@ export interface ImportAssetsCsvWarning {
 }
 
 export interface ImportAssetsCsvResponse {
+  processedCount: number;
   importedCount: number;
+  createdCount: number;
+  skippedCount: number;
+  failedCount: number;
+  errors: ImportAssetsCsvWarning[];
+  format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
   warningCount: number;
   warnings: ImportAssetsCsvWarning[];
   assets: AssetDetail[];
@@ -702,6 +708,15 @@ export function importAssetsCsv(payload: ImportAssetsCsvPayload): Promise<Import
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+}
+
+export function importAssetsSpreadsheet(file: File): Promise<ImportAssetsCsvResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchJson('/assets/import/spreadsheet', {
+    method: 'POST',
+    body: form,
   });
 }
 

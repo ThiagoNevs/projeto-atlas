@@ -38,6 +38,7 @@ devem ser definidos após validação com usuários e priorização de mercado.
 - tela de auditoria;
 - narrativa visual de Fontes de Dados e conectores planejados;
 - exportação CSV do inventário e conflitos;
+- importação controlada de ativos por CSV, XLSX, XLSM e conteúdo colado;
 - melhorias de usabilidade no Resolution Center;
 - documentação visual e mensagens explícitas sobre funcionalidades simuladas;
 - testes automatizados dos principais fluxos de frontend.

@@ -388,7 +388,9 @@ O CSV usa delimitador `;`, cabeçalhos em português, labels amigáveis e aplica
 principais da listagem. A exportação não usa paginação, possui limite de 5000 registros e protege
 células contra execução acidental de fórmulas em planilhas.
 
-## Importação CSV de ativos
+## Importação de ativos
+
+O endpoint CSV permanece compatível e também aceita conteúdo colado separado por TAB:
 
 ```powershell
 curl.exe -X POST http://localhost:3001/assets/import/csv `
@@ -407,6 +409,19 @@ IP repetido gera warning/sinal de atenção e não bloqueia a importação.
 Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `department`,
 `type`, `administrativeStatus`, `manufacturer`, `model`, `serialNumber`, `macAddress`,
 `environment`, `criticality` e `comment`.
+
+### Importar XLSX ou XLSM
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/import/spreadsheet `
+  -F "file=@C:\caminho\ativos.xlsx"
+```
+
+São aceitos `.xlsx` e `.xlsm`, com limite de 2 MB, 500 linhas úteis e 30 colunas. Somente a
+primeira aba é lida. O arquivo é processado em memória e não é armazenado. Arquivos XLSM são
+aceitos apenas para leitura tabular: macros nunca são executadas, fórmulas nunca são avaliadas e
+somente o resultado já armazenado na célula é utilizado. Arquivos vazios, corrompidos, com MIME
+incompatível ou que excedam os limites seguros de descompactação são rejeitados.
 
 ## Declaração manual de ativo
 

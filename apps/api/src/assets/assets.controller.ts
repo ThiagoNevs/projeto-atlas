@@ -1,5 +1,18 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
+import { ASSET_IMPORT_MAX_FILE_BYTES } from './asset-import-parser.service';
 import { AssetsService } from './assets.service';
 import { CreateManualAssetDto } from './dto/create-manual-asset.dto';
 import { ImportAssetsCsvDto } from './dto/import-assets-csv.dto';
@@ -45,5 +58,15 @@ export class AssetsController {
   @Post('import/csv')
   importCsv(@Body() payload: ImportAssetsCsvDto) {
     return this.assetsService.importCsv(payload);
+  }
+
+  @Post('import/spreadsheet')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: ASSET_IMPORT_MAX_FILE_BYTES, files: 1 },
+    }),
+  )
+  importSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
+    return this.assetsService.importSpreadsheet(file);
   }
 }

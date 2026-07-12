@@ -152,7 +152,7 @@ corepack pnpm dev:web
 
 - Dashboard: [http://localhost:3000](http://localhost:3000)
 - Inventário: [http://localhost:3000/assets](http://localhost:3000/assets)
-- Importação CSV de ativos: [http://localhost:3000/assets/import](http://localhost:3000/assets/import)
+- Importação de ativos (CSV, XLSX, XLSM e conteúdo colado): [http://localhost:3000/assets/import](http://localhost:3000/assets/import)
 - Resolution Center: [http://localhost:3000/conflicts](http://localhost:3000/conflicts)
 - Network Discovery Lite: [http://localhost:3000/network-discovery](http://localhost:3000/network-discovery)
 - Auditoria: [http://localhost:3000/audit](http://localhost:3000/audit)
@@ -163,6 +163,7 @@ corepack pnpm dev:web
 - Resumo do dashboard: [http://localhost:3001/dashboard/summary](http://localhost:3001/dashboard/summary)
 - Catálogo de fontes de dados: [http://localhost:3001/data-sources](http://localhost:3001/data-sources)
 - Importação CSV de ativos: [http://localhost:3001/assets/import/csv](http://localhost:3001/assets/import/csv)
+- Importação de planilhas XLSX/XLSM: [http://localhost:3001/assets/import/spreadsheet](http://localhost:3001/assets/import/spreadsheet)
 - Exportação CSV de qualidade: [http://localhost:3001/data-quality/assets/export](http://localhost:3001/data-quality/assets/export)
 
 ## Comandos úteis

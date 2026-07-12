@@ -160,7 +160,7 @@ export default function AssetsPage() {
         </div>
         <div className="page-heading-actions">
           <Link className="button button-secondary" href="/assets/import">
-            Importar CSV
+            Importar ativos
           </Link>
           <Link className="button button-primary" href="/assets/new">
             Adicionar ativo
