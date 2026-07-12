@@ -48,16 +48,17 @@ Em **Ativos**, use **Adicionar ativo** para explicar a declaração humana de um
 estoque ou isolado. Reforce que ela cria evidência, timeline e auditoria, mas não confirma estado
 operacional até que uma fonte técnica observe o equipamento.
 
-Use **Importar CSV** para mostrar a entrada em massa controlada. Explique que `hostname` e
-`ipAddress` são obrigatórios, que o hostname é a identidade forte da importação e que IP repetido
-vira aviso porque pode mudar ou ser reutilizado.
+Use **Importar ativos** para mostrar a entrada em massa controlada por CSV, conteúdo colado, XLSX
+ou XLSM. Explique que `hostname` e `ipAddress` são obrigatórios, que o hostname é a identidade forte
+da importação e que IP repetido vira aviso porque pode mudar ou ser reutilizado. Destaque que XLSM
+é somente leitura: macros e fórmulas nunca são executadas.
 
 No detalhe de um ativo incompleto, use **Adicionar informação manual** para preencher um campo
 ausente. Mostre a nova evidência e timeline e destaque que valores técnicos existentes não são
 sobrescritos.
 
 Abra **Fontes de Dados** para explicar que o Atlas não depende exclusivamente de conectores reais.
-Mostre cadastro manual, importação CSV, enriquecimento manual e Network Discovery Lite como fontes
+Mostre cadastro manual, importação de planilhas, enriquecimento manual e Network Discovery Lite como fontes
 disponíveis, e posicione Microsoft, segurança, cloud e CMDB/ITSM como evolução planejada.
 
 Apresente o Atlas como uma camada de inteligência que:

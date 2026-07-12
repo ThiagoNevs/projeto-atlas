@@ -6,6 +6,7 @@ import { describe, expect, it, beforeAll, afterAll, jest } from '@jest/globals';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { config as loadEnv } from 'dotenv';
+import ExcelJS from 'exceljs';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
@@ -130,7 +131,9 @@ type ManualAssetResponse = {
 };
 
 type CsvImportResponse = {
+  processedCount: number;
   importedCount: number;
+  format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
   warningCount: number;
   warnings: Array<{ line: number; field: string; message: string }>;
   assets: Array<{ id: string; name: string; operationalStatus: string; firstSeenAt: string | null; lastSeenAt: string | null }>;
@@ -2048,6 +2051,100 @@ describe('Asset ingestion idempotency (e2e)', () => {
         }),
       ]),
     );
+  });
+
+  it('imports TAB-separated pasted spreadsheet content through the compatible CSV endpoint', async () => {
+    const hostname = `PASTED-${sourceAssetId.slice(-8)}`;
+    const csv = `hostname\tipAddress\toperatingSystem\tcomment\n${hostname}\t10.20.2.15\tWindows 11\tCopiado do Excel`;
+    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+
+    expect(body.format).toBe('PASTED');
+    expect(body.processedCount).toBe(1);
+    expect(body.assets[0]?.name).toBe(hostname);
+  });
+
+  it('imports XLSX through the spreadsheet endpoint and preserves audit artifacts', async () => {
+    const hostname = `XLSX-${sourceAssetId.slice(-8)}`;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Ativos');
+    sheet.addRow(['hostname', 'ipAddress', 'operatingSystem', 'type', 'comment']);
+    sheet.addRow([hostname, '10.20.2.20', 'Ubuntu Server 24.04', 'Servidor', 'Planilha E2E']);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const response = await request(httpServer)
+      .post('/assets/import/spreadsheet')
+      .attach('file', buffer, {
+        filename: 'ativos.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+    const imported = body.assets[0];
+    if (!imported) throw new Error('Spreadsheet import did not create an asset.');
+
+    expect(body).toEqual(expect.objectContaining({ format: 'XLSX', importedCount: 1 }));
+    await expect(
+      prisma.networkInterface.findFirstOrThrow({ where: { assetId: imported.id } }),
+    ).resolves.toEqual(expect.objectContaining({ ipAddresses: ['10.20.2.20'] }));
+    await expect(
+      prisma.assetEvidence.findFirstOrThrow({ where: { assetId: imported.id } }),
+    ).resolves.toEqual(expect.objectContaining({ evidenceType: 'SPREADSHEET_MANUAL_IMPORT' }));
+    await expect(
+      prisma.assetEvent.findFirstOrThrow({ where: { assetId: imported.id } }),
+    ).resolves.toEqual(expect.objectContaining({ eventType: 'ASSET_IMPORTED_FROM_SPREADSHEET' }));
+    await expect(
+      prisma.auditLog.findFirstOrThrow({ where: { assetId: imported.id } }),
+    ).resolves.toEqual(expect.objectContaining({ action: 'ASSET_IMPORTED_FROM_SPREADSHEET' }));
+  });
+
+  it('reads XLSM tabular values without executing macros', async () => {
+    const hostname = `XLSM-${sourceAssetId.slice(-8)}`;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Ativos');
+    sheet.addRow(['hostname', 'ipAddress', 'comment']);
+    sheet.addRow([hostname, '10.20.2.21', { formula: '1+1', result: 'valor armazenado' }]);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    const response = await request(httpServer)
+      .post('/assets/import/spreadsheet')
+      .attach('file', buffer, {
+        filename: 'ativos.xlsm',
+        contentType: 'application/vnd.ms-excel.sheet.macroenabled.12',
+      })
+      .expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+    expect(body.format).toBe('XLSM');
+  });
+
+  it('rejects spreadsheet with invalid IP, corrupted content or unsupported extension', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Ativos');
+    sheet.addRow(['hostname', 'ipAddress']);
+    sheet.addRow([`XLSX-BAD-${sourceAssetId.slice(-8)}`, '999.1.1.1']);
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+    await request(httpServer)
+      .post('/assets/import/spreadsheet')
+      .attach('file', buffer, {
+        filename: 'invalid-ip.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(400);
+    await request(httpServer)
+      .post('/assets/import/spreadsheet')
+      .attach('file', Buffer.from('arquivo corrompido'), {
+        filename: 'corrompido.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(400);
+    await request(httpServer)
+      .post('/assets/import/spreadsheet')
+      .attach('file', buffer, { filename: 'ativos.ods', contentType: 'application/vnd.oasis.opendocument.spreadsheet' })
+      .expect(400);
   });
 
   it('requires a reason for manual enrichment', async () => {

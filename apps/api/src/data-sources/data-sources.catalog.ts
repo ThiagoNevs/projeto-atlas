@@ -41,11 +41,11 @@ export const DATA_SOURCE_CATALOG: DataSourceCatalogItem[] = [
   },
   {
     id: 'csv-import',
-    name: 'Importação CSV',
+    name: 'Importação de arquivos',
     category: 'Arquivo',
     status: 'AVAILABLE',
     description:
-      'Permite importar ativos em massa por hostname e IP como declaração manual controlada.',
+      'Permite importar ativos por CSV, XLSX, XLSM ou conteúdo tabular colado, usando hostname e IP como declaração manual controlada.',
     evidenceType: 'CSV_MANUAL_IMPORT',
     current: true,
   },

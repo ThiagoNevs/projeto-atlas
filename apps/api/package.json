@@ -25,9 +25,11 @@
     "@prisma/client": "^7.8.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
+    "exceljs": "^4.4.0",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
@@ -36,8 +38,10 @@
     "@nestjs/testing": "^11.1.18",
     "@swc/core": "^1.15.43",
     "@swc/jest": "^0.2.39",
+    "@types/multer": "^2.2.0",
     "@types/node": "^22.15.0",
     "@types/supertest": "^7.2.0",
+    "@types/yauzl": "^3.4.0",
     "dotenv": "^17.4.2",
     "eslint": "^9.39.0",
     "globals": "^16.5.0",

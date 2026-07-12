@@ -25,6 +25,11 @@ import { QueryAssetsDto } from './dto/query-assets.dto';
 import { CreateManualAssetDto, MANUAL_ASSET_TYPES } from './dto/create-manual-asset.dto';
 import { ImportAssetsCsvDto } from './dto/import-assets-csv.dto';
 import { ManualEnrichmentDto } from './dto/manual-enrichment.dto';
+import {
+  AssetImportParserService,
+  AssetImportRow,
+  ParsedAssetImport,
+} from './asset-import-parser.service';
 
 const SIMULATED_ACTOR_USER_ID = 'atlas-mvp-user';
 const MANUAL_CONFIDENCE_SCORE = 60;
@@ -35,25 +40,6 @@ const MANUAL_ENRICHMENT_EVIDENCE_TYPE = 'MANUAL_ENRICHMENT';
 const MANUAL_ENRICHMENT_EVENT_TYPE = 'ASSET_MANUALLY_ENRICHED';
 const CSV_IMPORT_EVIDENCE_TYPE = 'CSV_MANUAL_IMPORT';
 const CSV_IMPORT_EVENT_TYPE = 'ASSET_IMPORTED_FROM_CSV';
-const CSV_IMPORT_REQUIRED_HEADERS = ['hostname', 'ipAddress'] as const;
-const CSV_IMPORT_ALLOWED_HEADERS = [
-  'hostname',
-  'ipAddress',
-  'operatingSystem',
-  'osVersion',
-  'location',
-  'owner',
-  'department',
-  'type',
-  'administrativeStatus',
-  'manufacturer',
-  'model',
-  'serialNumber',
-  'macAddress',
-  'environment',
-  'criticality',
-  'comment',
-] as const;
 const CSV_IMPORT_ASSET_TYPE_LABELS: Record<string, string> = {
   SERVIDOR: 'SERVER',
   NOTEBOOK: 'NOTEBOOK',
@@ -92,8 +78,6 @@ const CSV_IMPORT_ADMIN_STATUS_LABELS: Record<string, AdministrativeStatus> = {
   ARCHIVED: AdministrativeStatus.ARCHIVED,
 };
 
-type CsvImportHeader = (typeof CSV_IMPORT_ALLOWED_HEADERS)[number];
-type CsvImportRow = Record<CsvImportHeader, string>;
 type CsvImportValidationIssue = {
   line: number;
   field: string;
@@ -102,7 +86,10 @@ type CsvImportValidationIssue = {
 
 @Injectable()
 export class AssetsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly importParser: AssetImportParserService,
+  ) {}
 
   async findAll(query: QueryAssetsDto) {
     this.validateScoreRanges(query);
@@ -536,7 +523,14 @@ export class AssetsService {
   }
 
   async importCsv(payload: ImportAssetsCsvDto) {
-    const parsed = this.parseAssetsCsv(payload.csv);
+    return this.importAssetRows(this.importParser.parseText(payload.csv));
+  }
+
+  async importSpreadsheet(file: Express.Multer.File | undefined) {
+    return this.importAssetRows(await this.importParser.parseSpreadsheet(file));
+  }
+
+  private async importAssetRows(parsed: ParsedAssetImport) {
     const validation = await this.validateCsvImport(parsed.rows);
 
     if (validation.errors.length) {
@@ -553,6 +547,10 @@ export class AssetsService {
     }
 
     const occurredAt = new Date();
+    const spreadsheet = parsed.format === 'XLSX' || parsed.format === 'XLSM';
+    const source = spreadsheet ? 'spreadsheet-import' : 'csv-import';
+    const evidenceType = spreadsheet ? 'SPREADSHEET_MANUAL_IMPORT' : CSV_IMPORT_EVIDENCE_TYPE;
+    const eventType = spreadsheet ? 'ASSET_IMPORTED_FROM_SPREADSHEET' : CSV_IMPORT_EVENT_TYPE;
     const created = await this.prisma.$transaction(async (transaction) => {
       const createdAssets: Array<ReturnType<typeof presentAssetDetail>> = [];
 
@@ -564,7 +562,9 @@ export class AssetsService {
         const dataQualityScore = this.calculateCsvDataQuality(row.data);
         const hostname = row.data.hostname.trim();
         const evidencePayload = {
-          source: 'csv-import',
+          source,
+          format: parsed.format,
+          fileName: parsed.fileName,
           line: row.line,
           ...row.data,
         };
@@ -574,7 +574,9 @@ export class AssetsService {
 
         const asset = await transaction.asset.create({
           data: {
-            canonicalKey: `manual:csv:hostname:${hostname.toLocaleLowerCase()}`,
+            canonicalKey: spreadsheet
+              ? `manual:spreadsheet:hostname:${hostname.toLocaleLowerCase()}`
+              : `manual:csv:hostname:${hostname.toLocaleLowerCase()}`,
             name: hostname,
             kind: type,
             operationalStatus: OperationalStatus.UNKNOWN,
@@ -590,7 +592,7 @@ export class AssetsService {
             assetId: asset.id,
             source: MANUAL_SOURCE,
             sourceRecordId: hostname,
-            evidenceType: CSV_IMPORT_EVIDENCE_TYPE,
+            evidenceType,
             payload: evidencePayload,
             fingerprint,
             confidenceScore,
@@ -624,8 +626,10 @@ export class AssetsService {
             evidenceId: evidence.id,
             identityKey: row.data.macAddress
               ? `mac:${this.normalizeMac(row.data.macAddress)}`
-              : `csv-hostname:${hostname.toLocaleLowerCase()}:primary`,
-            name: 'csv-import-primary',
+              : spreadsheet
+                ? `spreadsheet-hostname:${hostname.toLocaleLowerCase()}:primary`
+                : `csv-hostname:${hostname.toLocaleLowerCase()}:primary`,
+            name: spreadsheet ? 'spreadsheet-import-primary' : 'csv-import-primary',
             macAddress: row.data.macAddress ? this.normalizeMac(row.data.macAddress) : null,
             ipAddresses: [row.data.ipAddress.trim()],
             isPrimary: true,
@@ -634,7 +638,9 @@ export class AssetsService {
         });
 
         const eventData = {
-          source: 'csv-import',
+          source,
+          format: parsed.format,
+          fileName: parsed.fileName,
           line: row.line,
           hostname,
           ipAddress: row.data.ipAddress.trim(),
@@ -645,9 +651,13 @@ export class AssetsService {
           data: {
             assetId: asset.id,
             evidenceId: evidence.id,
-            eventType: CSV_IMPORT_EVENT_TYPE,
-            title: 'Ativo importado por CSV',
-            description: row.data.comment || 'Declaração manual controlada via importação CSV.',
+            eventType,
+            title: spreadsheet ? 'Ativo importado por planilha' : 'Ativo importado por CSV',
+            description:
+              row.data.comment ||
+              (spreadsheet
+                ? 'Declaração manual controlada via importação de planilha.'
+                : 'Declaração manual controlada via importação CSV.'),
             data: eventData,
             occurredAt,
           },
@@ -658,7 +668,7 @@ export class AssetsService {
             assetId: asset.id,
             actorType: 'USER',
             actorId: SIMULATED_ACTOR_USER_ID,
-            action: CSV_IMPORT_EVENT_TYPE,
+            action: eventType,
             entityType: 'Asset',
             entityId: asset.id,
             after: {
@@ -671,7 +681,7 @@ export class AssetsService {
               ...eventData,
               eventId: event.id,
               fieldsProvided: attributes.map((attribute) => attribute.key),
-              origin: 'csv-import',
+              origin: source,
             },
             occurredAt,
           },
@@ -688,7 +698,13 @@ export class AssetsService {
     });
 
     return {
+      processedCount: parsed.rows.length,
       importedCount: created.length,
+      createdCount: created.length,
+      skippedCount: 0,
+      failedCount: 0,
+      errors: [],
+      format: parsed.format,
       warningCount: validation.warnings.length,
       warnings: validation.warnings,
       assets: created,
@@ -881,49 +897,7 @@ export class AssetsService {
     });
   }
 
-  private parseAssetsCsv(csv: string): { rows: Array<{ line: number; data: CsvImportRow }> } {
-    const records = this.parseCsvRecords(csv);
-    const [headerRecord, ...dataRecords] = records;
-    if (!headerRecord) {
-      throw new BadRequestException('A importação CSV precisa conter cabeçalho.');
-    }
-
-    const headers = headerRecord.cells.map((header) => this.csvHeader(header));
-    const missingHeaders = CSV_IMPORT_REQUIRED_HEADERS.filter((header) => !headers.includes(header));
-    if (missingHeaders.length) {
-      throw new BadRequestException(
-        `A importação CSV precisa conter os headers obrigatórios: ${missingHeaders.join(', ')}.`,
-      );
-    }
-
-    const allowedHeaders = CSV_IMPORT_ALLOWED_HEADERS as readonly string[];
-    const unknownHeaders = headers.filter((header) => !allowedHeaders.includes(header));
-    if (unknownHeaders.length) {
-      throw new BadRequestException(
-        `A importação CSV contém headers não suportados: ${unknownHeaders.join(', ')}.`,
-      );
-    }
-
-    const rows = dataRecords.flatMap((record) => {
-      if (record.cells.every((cell) => cell.trim() === '')) return [];
-      const data = Object.fromEntries(
-        CSV_IMPORT_ALLOWED_HEADERS.map((header) => [header, '']),
-      ) as CsvImportRow;
-      headers.forEach((header, index) => {
-        if (!allowedHeaders.includes(header)) return;
-        data[header as CsvImportHeader] = record.cells[index]?.trim() ?? '';
-      });
-      return [{ line: record.line, data }];
-    });
-
-    if (!rows.length) {
-      throw new BadRequestException('A importação CSV precisa conter ao menos uma linha de ativo.');
-    }
-
-    return { rows };
-  }
-
-  private async validateCsvImport(rows: Array<{ line: number; data: CsvImportRow }>) {
+  private async validateCsvImport(rows: Array<{ line: number; data: AssetImportRow }>) {
     const errors: CsvImportValidationIssue[] = [];
     const duplicates: CsvImportValidationIssue[] = [];
     const warnings: CsvImportValidationIssue[] = [];
@@ -1048,77 +1022,6 @@ export class AssetsService {
     return { errors, duplicates, warnings };
   }
 
-  private parseCsvRecords(csv: string): Array<{ line: number; cells: string[] }> {
-    const delimiter = this.detectCsvDelimiter(csv);
-    const records: Array<{ line: number; cells: string[] }> = [];
-    let cells: string[] = [];
-    let cell = '';
-    let inQuotes = false;
-    let line = 1;
-    let recordLine = 1;
-
-    for (let index = 0; index < csv.length; index += 1) {
-      const char = csv[index];
-      const nextChar = csv[index + 1];
-
-      if (char === '"') {
-        if (inQuotes && nextChar === '"') {
-          cell += '"';
-          index += 1;
-        } else {
-          inQuotes = !inQuotes;
-        }
-        continue;
-      }
-
-      if (!inQuotes && char === delimiter) {
-        cells.push(cell);
-        cell = '';
-        continue;
-      }
-
-      if (!inQuotes && (char === '\n' || char === '\r')) {
-        cells.push(cell);
-        records.push({ line: recordLine, cells });
-        cells = [];
-        cell = '';
-        if (char === '\r' && nextChar === '\n') index += 1;
-        line += 1;
-        recordLine = line;
-        continue;
-      }
-
-      if (char === '\n') line += 1;
-      cell += char;
-    }
-
-    if (cell || cells.length) {
-      cells.push(cell);
-      records.push({ line: recordLine, cells });
-    }
-
-    return records;
-  }
-
-  private detectCsvDelimiter(csv: string): ';' | ',' {
-    const firstLine = csv.split(/\r?\n/, 1)[0] ?? '';
-    return (firstLine.match(/;/g)?.length ?? 0) >= (firstLine.match(/,/g)?.length ?? 0)
-      ? ';'
-      : ',';
-  }
-
-  private csvHeader(header: string): string {
-    const normalized = header
-      .trim()
-      .replace(/^\uFEFF/, '')
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .toLocaleLowerCase();
-    const match = CSV_IMPORT_ALLOWED_HEADERS.find(
-      (allowed) => allowed.toLocaleLowerCase() === normalized,
-    );
-    return match ?? header.trim();
-  }
-
   private csvAssetType(value: string): string {
     if (!value.trim()) return 'UNKNOWN';
     return CSV_IMPORT_ASSET_TYPE_LABELS[this.normalizeCsvLabel(value)] ?? value.trim().toUpperCase();
@@ -1132,7 +1035,7 @@ export class AssetsService {
     );
   }
 
-  private csvAttributes(row: CsvImportRow): Array<{ key: string; value: string }> {
+  private csvAttributes(row: AssetImportRow): Array<{ key: string; value: string }> {
     const candidates: Array<[string, string]> = [
       ['hostname', row.hostname],
       ['operatingSystem', row.operatingSystem],
@@ -1154,7 +1057,7 @@ export class AssetsService {
     );
   }
 
-  private calculateCsvDataQuality(row: CsvImportRow): number {
+  private calculateCsvDataQuality(row: AssetImportRow): number {
     const values = [
       row.hostname,
       row.ipAddress,
