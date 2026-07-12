@@ -78,10 +78,29 @@ const CSV_IMPORT_ADMIN_STATUS_LABELS: Record<string, AdministrativeStatus> = {
   ARCHIVED: AdministrativeStatus.ARCHIVED,
 };
 
-type CsvImportValidationIssue = {
+type AssetImportRelatedAsset = {
+  id: string;
+  hostname: string;
+  primaryIp: string | null;
+};
+
+type AssetImportValidationIssue = {
   line: number;
+  rowNumber: number;
   field: string;
+  code: string;
   message: string;
+  relatedAssets?: AssetImportRelatedAsset[];
+};
+
+type AssetImportPreviewRow = {
+  rowNumber: number;
+  hostname: string;
+  ipAddress: string;
+  status: 'VALID' | 'INVALID' | 'DUPLICATE' | 'VALID_WITH_WARNINGS';
+  errors: AssetImportValidationIssue[];
+  warnings: AssetImportValidationIssue[];
+  existingAsset?: AssetImportRelatedAsset;
 };
 
 @Injectable()
@@ -523,44 +542,94 @@ export class AssetsService {
   }
 
   async importCsv(payload: ImportAssetsCsvDto) {
-    return this.importAssetRows(this.importParser.parseText(payload.csv));
+    return this.commitAssetImport(this.importParser.parseText(payload.csv));
   }
 
   async importSpreadsheet(file: Express.Multer.File | undefined) {
-    return this.importAssetRows(await this.importParser.parseSpreadsheet(file));
+    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file));
   }
 
-  private async importAssetRows(parsed: ParsedAssetImport) {
-    const validation = await this.validateCsvImport(parsed.rows);
+  async previewCsv(payload: ImportAssetsCsvDto) {
+    return this.buildImportPreview(this.importParser.parseText(payload.csv));
+  }
 
-    if (validation.errors.length) {
-      throw new BadRequestException({
-        message: 'A importação CSV contém linhas inválidas.',
-        errors: validation.errors,
-      });
-    }
-    if (validation.duplicates.length) {
-      throw new ConflictException({
-        message: 'A importação CSV contém hostnames duplicados.',
-        errors: validation.duplicates,
-      });
-    }
+  async previewSpreadsheet(file: Express.Multer.File | undefined) {
+    return this.buildImportPreview(await this.importParser.parseSpreadsheet(file));
+  }
 
-    const occurredAt = new Date();
+  async commitCsv(payload: ImportAssetsCsvDto) {
+    return this.commitAssetImport(this.importParser.parseText(payload.csv));
+  }
+
+  async commitSpreadsheet(file: Express.Multer.File | undefined) {
+    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file));
+  }
+
+  private async commitAssetImport(parsed: ParsedAssetImport) {
+    const preview = await this.buildImportPreview(parsed);
     const spreadsheet = parsed.format === 'XLSX' || parsed.format === 'XLSM';
     const source = spreadsheet ? 'spreadsheet-import' : 'csv-import';
     const evidenceType = spreadsheet ? 'SPREADSHEET_MANUAL_IMPORT' : CSV_IMPORT_EVIDENCE_TYPE;
     const eventType = spreadsheet ? 'ASSET_IMPORTED_FROM_SPREADSHEET' : CSV_IMPORT_EVENT_TYPE;
-    const created = await this.prisma.$transaction(async (transaction) => {
-      const createdAssets: Array<ReturnType<typeof presentAssetDetail>> = [];
+    const previewByRow = new Map(preview.rows.map((row) => [row.rowNumber, row]));
+    const createdAssets: Array<ReturnType<typeof presentAssetDetail>> = [];
+    const skippedRows = preview.rows
+      .filter((row) => row.status === 'DUPLICATE')
+      .map((row) => ({
+        rowNumber: row.rowNumber,
+        hostname: row.hostname,
+        ipAddress: row.ipAddress,
+        reason: row.errors[0]?.message ?? 'Hostname já cadastrado.',
+        existingAssetId: row.existingAsset?.id ?? null,
+      }));
+    const invalidRows = preview.rows
+      .filter((row) => row.status === 'INVALID')
+      .map((row) => ({
+        rowNumber: row.rowNumber,
+        hostname: row.hostname,
+        ipAddress: row.ipAddress,
+        errors: row.errors,
+      }));
+    const failedRows: Array<{
+      rowNumber: number;
+      hostname: string;
+      ipAddress: string;
+      reason: string;
+    }> = [];
 
-      for (const row of parsed.rows) {
+    for (const row of parsed.rows) {
+      const rowPreview = previewByRow.get(row.line);
+      if (!rowPreview || !['VALID', 'VALID_WITH_WARNINGS'].includes(rowPreview.status)) continue;
+
+      try {
+        const outcome = await this.prisma.$transaction(async (transaction) => {
+          const hostname = row.data.hostname.trim();
+          const existing = await transaction.asset.findFirst({
+            where: { name: { equals: hostname, mode: 'insensitive' } },
+            select: {
+              id: true,
+              name: true,
+              networkInterfaces: {
+                where: { isCurrent: true },
+                orderBy: [{ isPrimary: 'desc' }, { createdAt: 'desc' }],
+                take: 1,
+                select: { ipAddresses: true },
+              },
+            },
+          });
+          if (existing) {
+            return {
+              kind: 'duplicate' as const,
+              existingAsset: this.presentImportRelatedAsset(existing),
+            };
+          }
+
+          const occurredAt = new Date();
         const type = this.csvAssetType(row.data.type);
         const administrativeStatus = this.csvAdministrativeStatus(row.data.administrativeStatus);
         const attributes = this.csvAttributes(row.data);
         const confidenceScore = MANUAL_CONFIDENCE_SCORE;
         const dataQualityScore = this.calculateCsvDataQuality(row.data);
-        const hostname = row.data.hostname.trim();
         const evidencePayload = {
           source,
           format: parsed.format,
@@ -691,23 +760,56 @@ export class AssetsService {
           where: { id: asset.id },
           select: assetDetailSelect,
         });
-        createdAssets.push(presentAssetDetail(detail));
-      }
+          return { kind: 'created' as const, asset: presentAssetDetail(detail) };
+        });
 
-      return createdAssets;
-    });
+        if (outcome.kind === 'duplicate') {
+          skippedRows.push({
+            rowNumber: row.line,
+            hostname: row.data.hostname.trim(),
+            ipAddress: row.data.ipAddress.trim(),
+            reason: `O hostname ${row.data.hostname.trim()} já está cadastrado no Atlas.`,
+            existingAssetId: outcome.existingAsset.id,
+          });
+        } else {
+          createdAssets.push(outcome.asset);
+        }
+      } catch {
+        failedRows.push({
+          rowNumber: row.line,
+          hostname: row.data.hostname.trim(),
+          ipAddress: row.data.ipAddress.trim(),
+          reason: 'Não foi possível importar esta linha com segurança.',
+        });
+      }
+    }
+
+    const warnings = preview.rows.flatMap((row) => row.warnings);
+    const uniqueSkippedRows = [...new Map(skippedRows.map((row) => [row.rowNumber, row])).values()];
 
     return {
       processedCount: parsed.rows.length,
-      importedCount: created.length,
-      createdCount: created.length,
-      skippedCount: 0,
-      failedCount: 0,
-      errors: [],
+      importedCount: createdAssets.length,
+      createdCount: createdAssets.length,
+      skippedCount: uniqueSkippedRows.length,
+      failedCount: invalidRows.length + failedRows.length,
+      errors: invalidRows.flatMap((row) => row.errors),
       format: parsed.format,
-      warningCount: validation.warnings.length,
-      warnings: validation.warnings,
-      assets: created,
+      warningCount: warnings.length,
+      warnings,
+      assets: createdAssets,
+      summary: {
+        total: parsed.rows.length,
+        created: createdAssets.length,
+        skipped: uniqueSkippedRows.length,
+        invalid: invalidRows.length,
+        failed: failedRows.length,
+        warnings: warnings.length,
+      },
+      createdAssets,
+      skippedRows: uniqueSkippedRows,
+      invalidRows,
+      failedRows,
     };
   }
 
@@ -897,129 +999,199 @@ export class AssetsService {
     });
   }
 
-  private async validateCsvImport(rows: Array<{ line: number; data: AssetImportRow }>) {
-    const errors: CsvImportValidationIssue[] = [];
-    const duplicates: CsvImportValidationIssue[] = [];
-    const warnings: CsvImportValidationIssue[] = [];
-    const hostnames = new Map<string, number>();
-    const ipAddresses = new Map<string, number>();
+  private async buildImportPreview(parsed: ParsedAssetImport) {
+    const hostnames = [...new Set(parsed.rows.map((row) => row.data.hostname.trim().toLocaleLowerCase()).filter(Boolean))];
+    const ipAddresses = [...new Set(parsed.rows.map((row) => row.data.ipAddress.trim()).filter((ip) => isIP(ip) > 0))];
+    const [existingAssets, existingInterfaces] = await Promise.all([
+      hostnames.length
+        ? this.prisma.asset.findMany({
+            where: {
+              OR: hostnames.map((hostname) => ({
+                name: { equals: hostname, mode: 'insensitive' as const },
+              })),
+            },
+            select: {
+              id: true,
+              name: true,
+              networkInterfaces: {
+                where: { isCurrent: true },
+                orderBy: [{ isPrimary: 'desc' as const }, { createdAt: 'desc' as const }],
+                take: 1,
+                select: { ipAddresses: true },
+              },
+            },
+          })
+        : [],
+      ipAddresses.length
+        ? this.prisma.networkInterface.findMany({
+            where: { ipAddresses: { hasSome: ipAddresses } },
+            select: {
+              ipAddresses: true,
+              asset: {
+                select: {
+                  id: true,
+                  name: true,
+                  networkInterfaces: {
+                    where: { isCurrent: true },
+                    orderBy: [{ isPrimary: 'desc' as const }, { createdAt: 'desc' as const }],
+                    take: 1,
+                    select: { ipAddresses: true },
+                  },
+                },
+              },
+            },
+          })
+        : [],
+    ]);
+    const existingByHostname = new Map(
+      existingAssets.map((asset) => [asset.name.toLocaleLowerCase(), this.presentImportRelatedAsset(asset)]),
+    );
+    const assetsByIp = new Map<string, AssetImportRelatedAsset[]>();
+    for (const networkInterface of existingInterfaces) {
+      const relatedAsset = this.presentImportRelatedAsset(networkInterface.asset);
+      for (const ipAddress of networkInterface.ipAddresses) {
+        if (!ipAddresses.includes(ipAddress)) continue;
+        const current = assetsByIp.get(ipAddress) ?? [];
+        if (!current.some((asset) => asset.id === relatedAsset.id)) current.push(relatedAsset);
+        assetsByIp.set(ipAddress, current);
+      }
+    }
 
-    rows.forEach((row) => {
+    const firstHostnameRows = new Map<string, number>();
+    const firstIpRows = new Map<string, { line: number; hostname: string }>();
+    const rows: AssetImportPreviewRow[] = parsed.rows.map((row) => {
       const hostname = row.data.hostname.trim();
       const ipAddress = row.data.ipAddress.trim();
-      if (!hostname) {
-        errors.push({
-          line: row.line,
-          field: 'hostname',
-          message: 'Hostname é obrigatório.',
-        });
-      }
-      if (!ipAddress) {
-        errors.push({
-          line: row.line,
-          field: 'ipAddress',
-          message: 'ipAddress é obrigatório.',
-        });
-      } else if (isIP(ipAddress) === 0) {
-        errors.push({
-          line: row.line,
-          field: 'ipAddress',
-          message: 'ipAddress possui formato inválido.',
-        });
+      const errors: AssetImportValidationIssue[] = [];
+      const warnings: AssetImportValidationIssue[] = [];
+      const addError = (field: string, code: string, message: string) =>
+        errors.push({ line: row.line, rowNumber: row.line, field, code, message });
+      const addWarning = (
+        field: string,
+        code: string,
+        message: string,
+        relatedAssets?: AssetImportRelatedAsset[],
+      ) => warnings.push({ line: row.line, rowNumber: row.line, field, code, message, relatedAssets });
+
+      if (!hostname) addError('hostname', 'REQUIRED_HOSTNAME', 'Hostname é obrigatório.');
+      if (!ipAddress) addError('ipAddress', 'REQUIRED_IP_ADDRESS', 'ipAddress é obrigatório.');
+      else if (isIP(ipAddress) === 0) addError('ipAddress', 'INVALID_IP_ADDRESS', `O IP ${ipAddress} possui formato inválido.`);
+
+      const lengthLimits: Partial<Record<keyof AssetImportRow, number>> = {
+        hostname: 255,
+        ipAddress: 45,
+        operatingSystem: 255,
+        osVersion: 100,
+        location: 255,
+        owner: 255,
+        department: 255,
+        type: 100,
+        administrativeStatus: 100,
+        manufacturer: 255,
+        model: 255,
+        serialNumber: 255,
+        macAddress: 64,
+        environment: 100,
+        criticality: 100,
+        comment: 1000,
+      };
+      for (const [field, limit] of Object.entries(lengthLimits) as Array<[keyof AssetImportRow, number]>) {
+        if (row.data[field].length > limit) {
+          addError(field, 'VALUE_TOO_LONG', `O campo ${field} excede o limite de ${limit} caracteres.`);
+        }
       }
       if (
         row.data.type.trim() &&
-        !MANUAL_ASSET_TYPES.includes(
-          this.csvAssetType(row.data.type) as (typeof MANUAL_ASSET_TYPES)[number],
-        )
+        !MANUAL_ASSET_TYPES.includes(this.csvAssetType(row.data.type) as (typeof MANUAL_ASSET_TYPES)[number])
       ) {
-        errors.push({
-          line: row.line,
-          field: 'type',
-          message: 'Tipo de ativo inválido.',
-        });
+        addError('type', 'INVALID_ASSET_TYPE', 'Tipo de ativo inválido.');
       }
       if (
         row.data.administrativeStatus.trim() &&
-        !Object.values(AdministrativeStatus).includes(
-          this.csvAdministrativeStatus(row.data.administrativeStatus),
-        )
+        !Object.values(AdministrativeStatus).includes(this.csvAdministrativeStatus(row.data.administrativeStatus))
       ) {
-        errors.push({
-          line: row.line,
-          field: 'administrativeStatus',
-          message: 'Status administrativo inválido.',
-        });
+        addError('administrativeStatus', 'INVALID_ADMINISTRATIVE_STATUS', 'Status administrativo inválido.');
       }
 
+      let existingAsset: AssetImportRelatedAsset | undefined;
+      let duplicateInFile = false;
       if (hostname) {
         const normalizedHostname = hostname.toLocaleLowerCase();
-        const firstLine = hostnames.get(normalizedHostname);
+        const firstLine = firstHostnameRows.get(normalizedHostname);
         if (firstLine) {
-          duplicates.push({
-            line: row.line,
-            field: 'hostname',
-            message: `Hostname duplicado na linha ${firstLine}.`,
-          });
+          duplicateInFile = true;
+          addError(
+            'hostname',
+            'DUPLICATE_HOSTNAME_IN_FILE',
+            `O hostname ${hostname} já aparece na linha ${firstLine} desta importação.`,
+          );
         } else {
-          hostnames.set(normalizedHostname, row.line);
+          firstHostnameRows.set(normalizedHostname, row.line);
+          existingAsset = existingByHostname.get(normalizedHostname);
+          if (existingAsset) {
+            addError('hostname', 'DUPLICATE_HOSTNAME', `O hostname ${hostname} já está cadastrado no Atlas.`);
+          }
         }
       }
 
-      if (ipAddress) {
-        const firstLine = ipAddresses.get(ipAddress);
-        if (firstLine) {
-          warnings.push({
-            line: row.line,
-            field: 'ipAddress',
-            message: `ipAddress também aparece na linha ${firstLine}; IP pode mudar ou ser reutilizado e não será tratado como identidade absoluta.`,
-          });
+      if (ipAddress && isIP(ipAddress) > 0) {
+        const firstIp = firstIpRows.get(ipAddress);
+        if (firstIp) {
+          addWarning(
+            'ipAddress',
+            'DUPLICATE_IP_IN_FILE',
+            `O IP ${ipAddress} também aparece na linha ${firstIp.line} (${firstIp.hostname || 'hostname não informado'}), mas esta linha pode ser importada.`,
+          );
         } else {
-          ipAddresses.set(ipAddress, row.line);
+          firstIpRows.set(ipAddress, { line: row.line, hostname });
+        }
+        const relatedAssets = assetsByIp.get(ipAddress) ?? [];
+        if (relatedAssets.length) {
+          addWarning(
+            'ipAddress',
+            'DUPLICATE_IP',
+            `O IP ${ipAddress} também está associado a ${relatedAssets.map((asset) => asset.hostname).join(', ')}, mas esta linha pode ser importada porque IP não é identidade absoluta.`,
+            relatedAssets,
+          );
         }
       }
+
+      const duplicate = Boolean(existingAsset) || duplicateInFile;
+      const hasInvalidField = errors.some((error) => !error.code.startsWith('DUPLICATE_HOSTNAME'));
+      const status: AssetImportPreviewRow['status'] = hasInvalidField
+        ? 'INVALID'
+        : duplicate
+          ? 'DUPLICATE'
+          : warnings.length
+            ? 'VALID_WITH_WARNINGS'
+            : 'VALID';
+      return { rowNumber: row.line, hostname, ipAddress, status, errors, warnings, existingAsset };
     });
 
-    if (!errors.length && hostnames.size) {
-      const existing = await this.prisma.asset.findMany({
-        where: {
-          OR: [...hostnames.keys()].map((hostname) => ({
-            name: { equals: hostname, mode: 'insensitive' as const },
-          })),
-        },
-        select: { name: true },
-      });
-      const existingNames = new Set(existing.map((asset) => asset.name.toLocaleLowerCase()));
-      for (const [hostname, line] of hostnames.entries()) {
-        if (existingNames.has(hostname)) {
-          duplicates.push({
-            line,
-            field: 'hostname',
-            message: 'Já existe um ativo com este hostname.',
-          });
-        }
-      }
-    }
+    return {
+      format: parsed.format,
+      fileName: parsed.fileName,
+      summary: {
+        total: rows.length,
+        valid: rows.filter((row) => ['VALID', 'VALID_WITH_WARNINGS'].includes(row.status)).length,
+        duplicates: rows.filter((row) => row.status === 'DUPLICATE').length,
+        invalid: rows.filter((row) => row.status === 'INVALID').length,
+        warnings: rows.reduce((total, row) => total + row.warnings.length, 0),
+      },
+      rows,
+    };
+  }
 
-    if (!errors.length && ipAddresses.size) {
-      const existingInterfaces = await this.prisma.networkInterface.findMany({
-        where: { ipAddresses: { hasSome: [...ipAddresses.keys()] } },
-        select: { ipAddresses: true },
-      });
-      const existingIps = new Set(existingInterfaces.flatMap((item) => item.ipAddresses));
-      for (const [ipAddress, line] of ipAddresses.entries()) {
-        if (existingIps.has(ipAddress)) {
-          warnings.push({
-            line,
-            field: 'ipAddress',
-            message:
-              'ipAddress já aparece em outro ativo; será registrado como sinal de atenção, não como duplicidade absoluta.',
-          });
-        }
-      }
-    }
-
-    return { errors, duplicates, warnings };
+  private presentImportRelatedAsset(asset: {
+    id: string;
+    name: string;
+    networkInterfaces: Array<{ ipAddresses: string[] }>;
+  }): AssetImportRelatedAsset {
+    return {
+      id: asset.id,
+      hostname: asset.name,
+      primaryIp: asset.networkInterfaces[0]?.ipAddresses[0] ?? null,
+    };
   }
 
   private csvAssetType(value: string): string {

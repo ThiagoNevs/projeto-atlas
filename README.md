@@ -164,6 +164,8 @@ corepack pnpm dev:web
 - Catálogo de fontes de dados: [http://localhost:3001/data-sources](http://localhost:3001/data-sources)
 - Importação CSV de ativos: [http://localhost:3001/assets/import/csv](http://localhost:3001/assets/import/csv)
 - Importação de planilhas XLSX/XLSM: [http://localhost:3001/assets/import/spreadsheet](http://localhost:3001/assets/import/spreadsheet)
+- Pré-validação de importação: [http://localhost:3001/assets/import/preview](http://localhost:3001/assets/import/preview)
+- Confirmação parcial da importação: [http://localhost:3001/assets/import/commit](http://localhost:3001/assets/import/commit)
 - Exportação CSV de qualidade: [http://localhost:3001/data-quality/assets/export](http://localhost:3001/data-quality/assets/export)
 
 ## Comandos úteis

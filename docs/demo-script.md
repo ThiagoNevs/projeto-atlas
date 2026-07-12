@@ -51,7 +51,9 @@ operacional até que uma fonte técnica observe o equipamento.
 Use **Importar ativos** para mostrar a entrada em massa controlada por CSV, conteúdo colado, XLSX
 ou XLSM. Explique que `hostname` e `ipAddress` são obrigatórios, que o hostname é a identidade forte
 da importação e que IP repetido vira aviso porque pode mudar ou ser reutilizado. Destaque que XLSM
-é somente leitura: macros e fórmulas nunca são executadas.
+é somente leitura: macros e fórmulas nunca são executadas. Clique em **Analisar arquivo** e mostre a
+prévia por linha: ativos válidos podem ser confirmados mesmo quando outra linha está duplicada ou
+inválida. Use **Ver ativo existente** para explicar uma duplicidade de hostname.
 
 No detalhe de um ativo incompleto, use **Adicionar informação manual** para preencher um campo
 ausente. Mostre a nova evidência e timeline e destaque que valores técnicos existentes não são

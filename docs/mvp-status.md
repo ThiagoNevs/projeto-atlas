@@ -34,7 +34,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
 - Exportação CSV da tela de Qualidade dos Dados com filtros aplicados, labels em português e proteção contra fórmulas em planilhas.
-- Importação de ativos por CSV, XLSX, XLSM ou conteúdo colado, como declaração manual controlada, exigindo `hostname` e `ipAddress`; macros e fórmulas nunca são executadas.
+- Importação de ativos por CSV, XLSX, XLSM ou conteúdo colado, com pré-validação por linha, importação parcial controlada e identificação detalhada de duplicidades, inválidos e avisos; macros e fórmulas nunca são executadas.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
 - Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.

@@ -135,8 +135,37 @@ type CsvImportResponse = {
   importedCount: number;
   format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
   warningCount: number;
-  warnings: Array<{ line: number; field: string; message: string }>;
+  warnings: Array<{ line: number; rowNumber?: number; field: string; code?: string; message: string }>;
   assets: Array<{ id: string; name: string; operationalStatus: string; firstSeenAt: string | null; lastSeenAt: string | null }>;
+  summary: {
+    total: number;
+    created: number;
+    skipped: number;
+    invalid: number;
+    failed: number;
+    warnings: number;
+  };
+  skippedRows: Array<{ rowNumber: number; hostname: string; existingAssetId: string | null }>;
+  invalidRows: Array<{ rowNumber: number; hostname: string; errors: Array<{ code: string }> }>;
+};
+
+type ImportPreviewResponse = {
+  format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
+  summary: { total: number; valid: number; duplicates: number; invalid: number; warnings: number };
+  rows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    status: 'VALID' | 'INVALID' | 'DUPLICATE' | 'VALID_WITH_WARNINGS';
+    errors: Array<{ code: string; field: string; message: string }>;
+    warnings: Array<{
+      code: string;
+      field: string;
+      message: string;
+      relatedAssets?: Array<{ id: string; hostname: string; primaryIp: string | null }>;
+    }>;
+    existingAsset?: { id: string; hostname: string; primaryIp: string | null };
+  }>;
 };
 
 type ManualEnrichmentResponse = {
@@ -1949,41 +1978,60 @@ describe('Asset ingestion idempotency (e2e)', () => {
     );
   });
 
-  it('rejects CSV asset import without hostname', async () => {
-    await request(httpServer)
+  it('reports a CSV row without hostname without blocking the request', async () => {
+    const response = await request(httpServer)
       .post('/assets/import/csv')
       .send({
         csv: 'hostname;ipAddress;comment\n;10.20.1.15;linha sem hostname',
       })
-      .expect(400);
+      .expect(201);
+
+    expect((response.body as CsvImportResponse).summary).toEqual(
+      expect.objectContaining({ created: 0, invalid: 1 }),
+    );
   });
 
-  it('rejects CSV asset import without ipAddress', async () => {
-    await request(httpServer)
+  it('reports a CSV row without ipAddress without blocking the request', async () => {
+    const response = await request(httpServer)
       .post('/assets/import/csv')
       .send({
         csv: `hostname;ipAddress;comment\nCSV-NO-IP-${sourceAssetId.slice(-8)};;linha sem ip`,
       })
-      .expect(400);
+      .expect(201);
+
+    expect((response.body as CsvImportResponse).invalidRows[0]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'REQUIRED_IP_ADDRESS' })]),
+    );
   });
 
-  it('rejects CSV asset import with invalid ipAddress', async () => {
-    await request(httpServer)
+  it('reports a CSV row with invalid ipAddress without blocking the request', async () => {
+    const response = await request(httpServer)
       .post('/assets/import/csv')
       .send({
         csv: `hostname;ipAddress;comment\nCSV-BAD-IP-${sourceAssetId.slice(-8)};999.1.1.1;ip inválido`,
       })
-      .expect(400);
+      .expect(201);
+
+    expect((response.body as CsvImportResponse).invalidRows[0]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'INVALID_IP_ADDRESS' })]),
+    );
   });
 
-  it('rejects CSV asset import with duplicate hostname', async () => {
+  it('skips a duplicate hostname inside the CSV without blocking valid rows', async () => {
     const csv = [
       'hostname;ipAddress;comment',
       `CSV-DUP-${sourceAssetId.slice(-8)};10.20.1.10;primeira linha`,
       `CSV-DUP-${sourceAssetId.slice(-8)};10.20.1.11;segunda linha`,
     ].join('\n');
 
-    await request(httpServer).post('/assets/import/csv').send({ csv }).expect(409);
+    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+
+    expect(body.summary).toEqual(expect.objectContaining({ created: 1, skipped: 1 }));
+    expect(body.skippedRows[0]).toEqual(
+      expect.objectContaining({ rowNumber: 3, hostname: `CSV-DUP-${sourceAssetId.slice(-8)}` }),
+    );
   });
 
   it('imports CSV assets using hostname as identity and ipAddress as network information', async () => {
@@ -2030,6 +2078,149 @@ describe('Asset ingestion idempotency (e2e)', () => {
     );
   });
 
+  it('previews and partially imports four valid rows while skipping an existing hostname', async () => {
+    const suffix = sourceAssetId.slice(-8);
+    const duplicateHostname = `PREVIEW-EXISTING-${suffix}`;
+    const existingResponse = await request(httpServer)
+      .post('/assets/import/csv')
+      .send({ csv: `hostname;ipAddress;comment\n${duplicateHostname};10.40.1.10;Ativo existente` })
+      .expect(201);
+    const existingBody = existingResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...existingBody.assets.map((asset) => asset.id));
+    const existingAsset = existingBody.assets[0];
+    if (!existingAsset) throw new Error('Preview fixture asset was not created.');
+
+    const csv = [
+      'hostname;ipAddress;type;comment',
+      `BETO-PC-${suffix};10.40.1.11;Desktop;Linha válida`,
+      `AURET-A-${suffix};10.40.1.12;Notebook;Linha válida`,
+      `${duplicateHostname};10.40.1.13;Servidor;Hostname já cadastrado`,
+      `WPADOGIEC-${suffix};10.40.1.14;Desktop;Linha válida`,
+      `SRV-DB-${suffix};10.40.1.15;Servidor;Linha válida`,
+    ].join('\n');
+
+    const previewResponse = await request(httpServer)
+      .post('/assets/import/preview')
+      .send({ csv })
+      .expect(201);
+    const preview = previewResponse.body as ImportPreviewResponse;
+    expect(preview.summary).toEqual({ total: 5, valid: 4, duplicates: 1, invalid: 0, warnings: 0 });
+    expect(preview.rows[2]).toEqual(
+      expect.objectContaining({
+        rowNumber: 4,
+        hostname: duplicateHostname,
+        status: 'DUPLICATE',
+        existingAsset: expect.objectContaining({ id: existingAsset.id, hostname: duplicateHostname }),
+      }),
+    );
+    expect(preview.rows[2]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'DUPLICATE_HOSTNAME' })]),
+    );
+
+    const commitResponse = await request(httpServer)
+      .post('/assets/import/commit')
+      .send({ csv })
+      .expect(201);
+    const committed = commitResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
+    expect(committed.summary).toEqual({ total: 5, created: 4, skipped: 1, invalid: 0, failed: 0, warnings: 0 });
+    expect(committed.skippedRows[0]).toEqual(
+      expect.objectContaining({ rowNumber: 4, hostname: duplicateHostname, existingAssetId: existingAsset.id }),
+    );
+    expect(await prisma.asset.count({ where: { name: { equals: duplicateHostname, mode: 'insensitive' } } })).toBe(1);
+
+    for (const asset of committed.assets) {
+      await expect(prisma.networkInterface.count({ where: { assetId: asset.id } })).resolves.toBe(1);
+      await expect(prisma.assetEvidence.count({ where: { assetId: asset.id } })).resolves.toBe(1);
+      await expect(prisma.assetEvent.count({ where: { assetId: asset.id } })).resolves.toBe(1);
+      await expect(prisma.auditLog.count({ where: { assetId: asset.id } })).resolves.toBe(1);
+    }
+  });
+
+  it('imports a row with duplicate IP and identifies the related asset in the warning', async () => {
+    const suffix = sourceAssetId.slice(-8);
+    const existingHostname = `IP-OWNER-${suffix}`;
+    const existingResponse = await request(httpServer)
+      .post('/assets/import/csv')
+      .send({ csv: `hostname;ipAddress\n${existingHostname};10.40.2.20` })
+      .expect(201);
+    const existingBody = existingResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...existingBody.assets.map((asset) => asset.id));
+    const existingAsset = existingBody.assets[0];
+    if (!existingAsset) throw new Error('Duplicate IP fixture asset was not created.');
+    const csv = `hostname;ipAddress\nIP-REUSE-${suffix};10.40.2.20`;
+
+    const previewResponse = await request(httpServer)
+      .post('/assets/import/preview')
+      .send({ csv })
+      .expect(201);
+    const preview = previewResponse.body as ImportPreviewResponse;
+    expect(preview.rows[0]).toEqual(expect.objectContaining({ status: 'VALID_WITH_WARNINGS' }));
+    expect(preview.rows[0]?.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'DUPLICATE_IP',
+          message: expect.stringContaining(existingHostname),
+          relatedAssets: expect.arrayContaining([expect.objectContaining({ id: existingAsset.id })]),
+        }),
+      ]),
+    );
+
+    const commitResponse = await request(httpServer)
+      .post('/assets/import/commit')
+      .send({ csv })
+      .expect(201);
+    const committed = commitResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
+    expect(committed.summary).toEqual(expect.objectContaining({ created: 1, warnings: 1 }));
+  });
+
+  it('keeps valid rows when other rows have missing hostname or invalid IP', async () => {
+    const suffix = sourceAssetId.slice(-8);
+    const validHostname = `PARTIAL-VALID-${suffix}`;
+    const csv = [
+      'hostname;ipAddress;comment',
+      `${validHostname};10.40.3.30;Linha válida`,
+      ';10.40.3.31;Hostname ausente',
+      `PARTIAL-BAD-IP-${suffix};999.1.1.1;IP inválido`,
+    ].join('\n');
+
+    const response = await request(httpServer)
+      .post('/assets/import/commit')
+      .send({ csv })
+      .expect(201);
+    const body = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
+    expect(body.summary).toEqual(expect.objectContaining({ total: 3, created: 1, invalid: 2, failed: 0 }));
+    expect(body.invalidRows.map((row) => row.rowNumber)).toEqual([3, 4]);
+    expect(body.assets[0]?.name).toBe(validHostname);
+  });
+
+  it('revalidates rows during commit instead of trusting an earlier preview', async () => {
+    const hostname = `REVALIDATE-${sourceAssetId.slice(-8)}`;
+    const csv = `hostname;ipAddress\n${hostname};10.40.4.40`;
+    const previewResponse = await request(httpServer)
+      .post('/assets/import/preview')
+      .send({ csv })
+      .expect(201);
+    expect((previewResponse.body as ImportPreviewResponse).rows[0]?.status).toBe('VALID');
+
+    const competingResponse = await request(httpServer)
+      .post('/assets/import/csv')
+      .send({ csv })
+      .expect(201);
+    const competingBody = competingResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...competingBody.assets.map((asset) => asset.id));
+
+    const commitResponse = await request(httpServer)
+      .post('/assets/import/commit')
+      .send({ csv })
+      .expect(201);
+    const committed = commitResponse.body as CsvImportResponse;
+    expect(committed.summary).toEqual(expect.objectContaining({ created: 0, skipped: 1 }));
+    expect(await prisma.asset.count({ where: { name: { equals: hostname, mode: 'insensitive' } } })).toBe(1);
+  });
+
   it('imports duplicate ipAddress from CSV as a warning instead of absolute duplicate', async () => {
     const csv = [
       'hostname;ipAddress;type;administrativeStatus;comment',
@@ -2047,7 +2238,8 @@ describe('Asset ingestion idempotency (e2e)', () => {
       expect.arrayContaining([
         expect.objectContaining({
           field: 'ipAddress',
-          message: expect.stringContaining('não será tratado como identidade absoluta'),
+          code: 'DUPLICATE_IP_IN_FILE',
+          message: expect.stringContaining('pode ser importada'),
         }),
       ]),
     );
@@ -2073,8 +2265,22 @@ describe('Asset ingestion idempotency (e2e)', () => {
     sheet.addRow([hostname, '10.20.2.20', 'Ubuntu Server 24.04', 'Servidor', 'Planilha E2E']);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
+    const previewResponse = await request(httpServer)
+      .post('/assets/import/preview/spreadsheet')
+      .attach('file', buffer, {
+        filename: 'ativos.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      .expect(201);
+    expect(previewResponse.body).toEqual(
+      expect.objectContaining({
+        format: 'XLSX',
+        summary: expect.objectContaining({ valid: 1, invalid: 0 }),
+      }),
+    );
+
     const response = await request(httpServer)
-      .post('/assets/import/spreadsheet')
+      .post('/assets/import/commit/spreadsheet')
       .attach('file', buffer, {
         filename: 'ativos.xlsx',
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -2127,13 +2333,16 @@ describe('Asset ingestion idempotency (e2e)', () => {
     sheet.addRow([`XLSX-BAD-${sourceAssetId.slice(-8)}`, '999.1.1.1']);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    await request(httpServer)
+    const invalidIpResponse = await request(httpServer)
       .post('/assets/import/spreadsheet')
       .attach('file', buffer, {
         filename: 'invalid-ip.xlsx',
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })
-      .expect(400);
+      .expect(201);
+    expect((invalidIpResponse.body as CsvImportResponse).summary).toEqual(
+      expect.objectContaining({ created: 0, invalid: 1 }),
+    );
     await request(httpServer)
       .post('/assets/import/spreadsheet')
       .attach('file', Buffer.from('arquivo corrompido'), {

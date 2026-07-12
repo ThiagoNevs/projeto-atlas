@@ -567,8 +567,46 @@ export interface ImportAssetsCsvPayload {
 
 export interface ImportAssetsCsvWarning {
   line: number;
+  rowNumber?: number;
   field: string;
+  code?: string;
   message: string;
+  relatedAssets?: ImportAssetReference[];
+}
+
+export interface ImportAssetReference {
+  id: string;
+  hostname: string;
+  primaryIp: string | null;
+}
+
+export type ImportPreviewRowStatus =
+  | 'VALID'
+  | 'INVALID'
+  | 'DUPLICATE'
+  | 'VALID_WITH_WARNINGS';
+
+export interface ImportPreviewRow {
+  rowNumber: number;
+  hostname: string;
+  ipAddress: string;
+  status: ImportPreviewRowStatus;
+  errors: ImportAssetsCsvWarning[];
+  warnings: ImportAssetsCsvWarning[];
+  existingAsset?: ImportAssetReference;
+}
+
+export interface ImportAssetsPreviewResponse {
+  format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
+  fileName?: string;
+  summary: {
+    total: number;
+    valid: number;
+    duplicates: number;
+    invalid: number;
+    warnings: number;
+  };
+  rows: ImportPreviewRow[];
 }
 
 export interface ImportAssetsCsvResponse {
@@ -582,6 +620,34 @@ export interface ImportAssetsCsvResponse {
   warningCount: number;
   warnings: ImportAssetsCsvWarning[];
   assets: AssetDetail[];
+  summary: {
+    total: number;
+    created: number;
+    skipped: number;
+    invalid: number;
+    failed: number;
+    warnings: number;
+  };
+  createdAssets: AssetDetail[];
+  skippedRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    reason: string;
+    existingAssetId: string | null;
+  }>;
+  invalidRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    errors: ImportAssetsCsvWarning[];
+  }>;
+  failedRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    reason: string;
+  }>;
 }
 
 export interface ManualEnrichmentAttributes {
@@ -715,6 +781,40 @@ export function importAssetsSpreadsheet(file: File): Promise<ImportAssetsCsvResp
   const form = new FormData();
   form.append('file', file);
   return fetchJson('/assets/import/spreadsheet', {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export function previewAssetsCsv(payload: ImportAssetsCsvPayload): Promise<ImportAssetsPreviewResponse> {
+  return fetchJson('/assets/import/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewAssetsSpreadsheet(file: File): Promise<ImportAssetsPreviewResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchJson('/assets/import/preview/spreadsheet', {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export function commitAssetsCsv(payload: ImportAssetsCsvPayload): Promise<ImportAssetsCsvResponse> {
+  return fetchJson('/assets/import/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function commitAssetsSpreadsheet(file: File): Promise<ImportAssetsCsvResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchJson('/assets/import/commit/spreadsheet', {
     method: 'POST',
     body: form,
   });

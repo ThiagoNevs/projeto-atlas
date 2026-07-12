@@ -60,6 +60,16 @@ export class AssetsController {
     return this.assetsService.importCsv(payload);
   }
 
+  @Post('import/preview')
+  previewCsv(@Body() payload: ImportAssetsCsvDto) {
+    return this.assetsService.previewCsv(payload);
+  }
+
+  @Post('import/commit')
+  commitCsv(@Body() payload: ImportAssetsCsvDto) {
+    return this.assetsService.commitCsv(payload);
+  }
+
   @Post('import/spreadsheet')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -68,5 +78,25 @@ export class AssetsController {
   )
   importSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
     return this.assetsService.importSpreadsheet(file);
+  }
+
+  @Post('import/preview/spreadsheet')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: ASSET_IMPORT_MAX_FILE_BYTES, files: 1 },
+    }),
+  )
+  previewSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
+    return this.assetsService.previewSpreadsheet(file);
+  }
+
+  @Post('import/commit/spreadsheet')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: ASSET_IMPORT_MAX_FILE_BYTES, files: 1 },
+    }),
+  )
+  commitSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
+    return this.assetsService.commitSpreadsheet(file);
   }
 }
