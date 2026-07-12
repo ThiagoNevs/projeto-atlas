@@ -858,6 +858,23 @@ input {
   max-width: 100%;
 }
 
+.asset-primary-ip {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(79, 201, 240, 0.25);
+  border-radius: 999px;
+  background: rgba(79, 201, 240, 0.08);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .assets-inventory-table .row-action {
   width: 100%;
   padding-right: 0.5rem;

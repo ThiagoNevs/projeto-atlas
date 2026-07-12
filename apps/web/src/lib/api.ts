@@ -34,6 +34,8 @@ export interface AssetSummary {
   dataQualityScore: number | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
+  primaryIp: string | null;
+  primaryMac: string | null;
   createdAt: string;
   updatedAt: string;
   evidenceCount: number;
