@@ -1,3 +1,7 @@
+import { ApiError, normalizeApiError } from './api-error';
+
+export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error';
+
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const API_URL = configuredApiUrl.replace(/\/$/, '');
@@ -679,13 +683,11 @@ export interface ManualEnrichmentResponse {
   auditLogId: string;
 }
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = 'ApiError';
+async function fetchWithNetworkHandling(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    throw normalizeApiError(error);
   }
 }
 
@@ -707,7 +709,7 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchWithNetworkHandling(`${API_URL}${path}`, {
     ...init,
     cache: 'no-store',
     headers: { Accept: 'application/json', ...init.headers },
@@ -902,7 +904,7 @@ export async function exportDataQualityAssetsCsv(
   const exportParams = { ...params };
   delete exportParams.page;
   delete exportParams.pageSize;
-  const response = await fetch(
+  const response = await fetchWithNetworkHandling(
     `${API_URL}/data-quality/assets/export${queryString(exportParams)}`,
     {
       cache: 'no-store',

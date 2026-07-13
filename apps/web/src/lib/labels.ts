@@ -10,6 +10,7 @@ const eventLabels: Record<string, string> = {
   NETWORK_DISCOVERY_RUN_FINISHED: 'Descoberta de rede concluída',
   ASSET_MANUALLY_DECLARED: 'Ativo declarado manualmente',
   ASSET_MANUALLY_ENRICHED: 'Ativo enriquecido manualmente',
+  ASSET_IMPORTED_FROM_CSV: 'Ativo importado',
 };
 
 const conflictStatusLabels: Record<string, string> = {
@@ -101,6 +102,7 @@ const auditActionLabels: Record<string, string> = {
   NETWORK_DISCOVERY_RUN_FAILED: 'Descoberta de rede com falha',
   ASSET_MANUALLY_DECLARED: 'Ativo declarado manualmente',
   ASSET_MANUALLY_ENRICHED: 'Ativo enriquecido manualmente',
+  ASSET_IMPORTED_FROM_CSV: 'Ativo importado',
 };
 
 const manualIdentifierTypeLabels: Record<string, string> = {
