@@ -633,6 +633,12 @@ export interface ImportAssetsCsvResponse {
     warnings: number;
   };
   createdAssets: AssetDetail[];
+  createdRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    assetId: string;
+  }>;
   skippedRows: Array<{
     rowNumber: number;
     hostname: string;

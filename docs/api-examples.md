@@ -460,6 +460,18 @@ Arquivo vazio, corrompido, sem headers obrigatórios, em formato incompatível o
 continua sendo rejeitado integralmente. Os endpoints anteriores `/assets/import/csv` e
 `/assets/import/spreadsheet` permanecem compatíveis e usam a mesma lógica de commit parcial.
 
+### Relatórios da importação
+
+A página `/assets/import` permite baixar dois relatórios sem criar arquivos no servidor:
+
+- **Relatório da análise:** inclui todas as linhas do preview, suas classificações, avisos, erros e
+  referências ao ativo existente.
+- **Relatório final:** correlaciona as linhas pelo número original e informa criações, duplicidades,
+  invalidações, warnings e falhas, incluindo IDs quando disponíveis.
+
+Os CSVs são gerados em memória no navegador, em UTF-8 com BOM, separador `;` e quebra de linha
+CRLF. Valores potencialmente interpretáveis como fórmulas são neutralizados antes do download.
+
 ## Declaração manual de ativo
 
 ```powershell

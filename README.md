@@ -168,6 +168,10 @@ corepack pnpm dev:web
 - Confirmação parcial da importação: [http://localhost:3001/assets/import/commit](http://localhost:3001/assets/import/commit)
 - Exportação CSV de qualidade: [http://localhost:3001/data-quality/assets/export](http://localhost:3001/data-quality/assets/export)
 
+Na tela de importação, o resultado da análise e o resultado final podem ser baixados em CSV. Os
+relatórios são gerados em memória no navegador, não são armazenados e neutralizam valores que
+poderiam ser interpretados como fórmulas por Excel ou LibreOffice.
+
 ## Comandos úteis
 
 ```powershell
