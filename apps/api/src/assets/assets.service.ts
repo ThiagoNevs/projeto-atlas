@@ -1115,7 +1115,8 @@ export class AssetsService {
 
       let existingAsset: AssetImportRelatedAsset | undefined;
       let duplicateInFile = false;
-      if (hostname) {
+      const hasIntrinsicErrors = errors.length > 0;
+      if (hostname && !hasIntrinsicErrors) {
         const normalizedHostname = hostname.toLocaleLowerCase();
         const firstLine = firstHostnameRows.get(normalizedHostname);
         if (firstLine) {

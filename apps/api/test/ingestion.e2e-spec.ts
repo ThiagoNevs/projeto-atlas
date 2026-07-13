@@ -2137,6 +2137,131 @@ describe('Asset ingestion idempotency (e2e)', () => {
     }
   });
 
+  it('keeps a valid hostname importable when an earlier occurrence has an invalid IP', async () => {
+    const hostname = `PREVIEW-INVALID-FIRST-${sourceAssetId.slice(-8)}`;
+    const csv = [
+      'hostname;ipAddress',
+      `${hostname};999.1.1.1`,
+      `${hostname};10.40.5.10`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const preview = response.body as ImportPreviewResponse;
+
+    expect(preview.summary).toEqual({ total: 2, valid: 1, duplicates: 0, invalid: 1, warnings: 0 });
+    expect(preview.rows[0]).toEqual(expect.objectContaining({ rowNumber: 2, status: 'INVALID' }));
+    expect(preview.rows[0]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'INVALID_IP_ADDRESS' })]),
+    );
+    expect(preview.rows[1]).toEqual(expect.objectContaining({ rowNumber: 3, status: 'VALID' }));
+  });
+
+  it('marks only the second of two valid rows with the same hostname as duplicate', async () => {
+    const hostname = `PREVIEW-TWO-VALID-${sourceAssetId.slice(-8)}`;
+    const csv = [
+      'hostname;ipAddress',
+      `${hostname};10.40.5.20`,
+      `${hostname};10.40.5.21`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const preview = response.body as ImportPreviewResponse;
+
+    expect(preview.rows[0]).toEqual(expect.objectContaining({ rowNumber: 2, status: 'VALID' }));
+    expect(preview.rows[1]).toEqual(expect.objectContaining({ rowNumber: 3, status: 'DUPLICATE' }));
+    expect(preview.rows[1]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'DUPLICATE_HOSTNAME_IN_FILE' })]),
+    );
+  });
+
+  it('keeps the intrinsic error when a valid row is followed by an invalid row with the same hostname', async () => {
+    const hostname = `PREVIEW-VALID-FIRST-${sourceAssetId.slice(-8)}`;
+    const csv = [
+      'hostname;ipAddress',
+      `${hostname};10.40.5.30`,
+      `${hostname};999.1.1.1`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const preview = response.body as ImportPreviewResponse;
+
+    expect(preview.rows[0]).toEqual(expect.objectContaining({ rowNumber: 2, status: 'VALID' }));
+    expect(preview.rows[1]).toEqual(expect.objectContaining({ rowNumber: 3, status: 'INVALID' }));
+    expect(preview.rows[1]?.errors).toEqual([
+      expect.objectContaining({ code: 'INVALID_IP_ADDRESS' }),
+    ]);
+  });
+
+  it('allows a valid hostname after two intrinsically invalid occurrences', async () => {
+    const hostname = `PREVIEW-TWO-INVALID-${sourceAssetId.slice(-8)}`;
+    const csv = [
+      'hostname;ipAddress',
+      `${hostname};999.1.1.1`,
+      `${hostname};`,
+      `${hostname};10.40.5.40`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const preview = response.body as ImportPreviewResponse;
+
+    expect(preview.summary).toEqual({ total: 3, valid: 1, duplicates: 0, invalid: 2, warnings: 0 });
+    expect(preview.rows.map((row) => row.status)).toEqual(['INVALID', 'INVALID', 'VALID']);
+    expect(preview.rows[1]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'REQUIRED_IP_ADDRESS' })]),
+    );
+  });
+
+  it('continues blocking an intrinsically valid hostname that already exists in the database', async () => {
+    const hostname = `PREVIEW-DB-DUPLICATE-${sourceAssetId.slice(-8)}`;
+    const existingResponse = await request(httpServer)
+      .post('/assets/import/csv')
+      .send({ csv: `hostname;ipAddress\n${hostname};10.40.5.50` })
+      .expect(201);
+    const existingBody = existingResponse.body as CsvImportResponse;
+    csvImportAssetIds.push(...existingBody.assets.map((asset) => asset.id));
+    const existingAsset = existingBody.assets[0];
+    if (!existingAsset) throw new Error('Existing hostname fixture was not created.');
+
+    const response = await request(httpServer)
+      .post('/assets/import/preview')
+      .send({ csv: `hostname;ipAddress\n${hostname};10.40.5.51` })
+      .expect(201);
+    const preview = response.body as ImportPreviewResponse;
+
+    expect(preview.rows[0]).toEqual(
+      expect.objectContaining({
+        status: 'DUPLICATE',
+        existingAsset: expect.objectContaining({ id: existingAsset.id, hostname }),
+      }),
+    );
+    expect(preview.rows[0]?.errors).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'DUPLICATE_HOSTNAME' })]),
+    );
+  });
+
+  it('commits the valid occurrence after an invalid hostname occurrence and creates audit artifacts', async () => {
+    const hostname = `COMMIT-INVALID-FIRST-${sourceAssetId.slice(-8)}`;
+    const csv = [
+      'hostname;ipAddress',
+      `${hostname};999.1.1.1`,
+      `${hostname};10.40.5.60`,
+    ].join('\n');
+
+    const response = await request(httpServer).post('/assets/import/commit').send({ csv }).expect(201);
+    const committed = response.body as CsvImportResponse;
+    csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
+    const imported = committed.assets[0];
+    if (!imported) throw new Error('The valid occurrence was not imported.');
+
+    expect(committed.summary).toEqual({ total: 2, created: 1, skipped: 0, invalid: 1, failed: 0, warnings: 0 });
+    expect(imported.name).toBe(hostname);
+    expect(committed.invalidRows[0]).toEqual(expect.objectContaining({ rowNumber: 2, hostname }));
+    await expect(prisma.networkInterface.count({ where: { assetId: imported.id } })).resolves.toBe(1);
+    await expect(prisma.assetEvidence.count({ where: { assetId: imported.id } })).resolves.toBe(1);
+    await expect(prisma.assetEvent.count({ where: { assetId: imported.id } })).resolves.toBe(1);
+    await expect(prisma.auditLog.count({ where: { assetId: imported.id } })).resolves.toBe(1);
+  });
+
   it('imports a row with duplicate IP and identifies the related asset in the warning', async () => {
     const suffix = sourceAssetId.slice(-8);
     const existingHostname = `IP-OWNER-${suffix}`;
