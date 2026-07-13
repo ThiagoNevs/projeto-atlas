@@ -1,3 +1,7 @@
+import { ApiError, normalizeApiError } from './api-error';
+
+export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error';
+
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const API_URL = configuredApiUrl.replace(/\/$/, '');
@@ -567,8 +571,46 @@ export interface ImportAssetsCsvPayload {
 
 export interface ImportAssetsCsvWarning {
   line: number;
+  rowNumber?: number;
   field: string;
+  code?: string;
   message: string;
+  relatedAssets?: ImportAssetReference[];
+}
+
+export interface ImportAssetReference {
+  id: string;
+  hostname: string;
+  primaryIp: string | null;
+}
+
+export type ImportPreviewRowStatus =
+  | 'VALID'
+  | 'INVALID'
+  | 'DUPLICATE'
+  | 'VALID_WITH_WARNINGS';
+
+export interface ImportPreviewRow {
+  rowNumber: number;
+  hostname: string;
+  ipAddress: string;
+  status: ImportPreviewRowStatus;
+  errors: ImportAssetsCsvWarning[];
+  warnings: ImportAssetsCsvWarning[];
+  existingAsset?: ImportAssetReference;
+}
+
+export interface ImportAssetsPreviewResponse {
+  format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
+  fileName?: string;
+  summary: {
+    total: number;
+    valid: number;
+    duplicates: number;
+    invalid: number;
+    warnings: number;
+  };
+  rows: ImportPreviewRow[];
 }
 
 export interface ImportAssetsCsvResponse {
@@ -582,6 +624,34 @@ export interface ImportAssetsCsvResponse {
   warningCount: number;
   warnings: ImportAssetsCsvWarning[];
   assets: AssetDetail[];
+  summary: {
+    total: number;
+    created: number;
+    skipped: number;
+    invalid: number;
+    failed: number;
+    warnings: number;
+  };
+  createdAssets: AssetDetail[];
+  skippedRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    reason: string;
+    existingAssetId: string | null;
+  }>;
+  invalidRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    errors: ImportAssetsCsvWarning[];
+  }>;
+  failedRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    reason: string;
+  }>;
 }
 
 export interface ManualEnrichmentAttributes {
@@ -613,13 +683,11 @@ export interface ManualEnrichmentResponse {
   auditLogId: string;
 }
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = 'ApiError';
+async function fetchWithNetworkHandling(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    throw normalizeApiError(error);
   }
 }
 
@@ -641,7 +709,7 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchWithNetworkHandling(`${API_URL}${path}`, {
     ...init,
     cache: 'no-store',
     headers: { Accept: 'application/json', ...init.headers },
@@ -715,6 +783,40 @@ export function importAssetsSpreadsheet(file: File): Promise<ImportAssetsCsvResp
   const form = new FormData();
   form.append('file', file);
   return fetchJson('/assets/import/spreadsheet', {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export function previewAssetsCsv(payload: ImportAssetsCsvPayload): Promise<ImportAssetsPreviewResponse> {
+  return fetchJson('/assets/import/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewAssetsSpreadsheet(file: File): Promise<ImportAssetsPreviewResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchJson('/assets/import/preview/spreadsheet', {
+    method: 'POST',
+    body: form,
+  });
+}
+
+export function commitAssetsCsv(payload: ImportAssetsCsvPayload): Promise<ImportAssetsCsvResponse> {
+  return fetchJson('/assets/import/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function commitAssetsSpreadsheet(file: File): Promise<ImportAssetsCsvResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchJson('/assets/import/commit/spreadsheet', {
     method: 'POST',
     body: form,
   });
@@ -802,7 +904,7 @@ export async function exportDataQualityAssetsCsv(
   const exportParams = { ...params };
   delete exportParams.page;
   delete exportParams.pageSize;
-  const response = await fetch(
+  const response = await fetchWithNetworkHandling(
     `${API_URL}/data-quality/assets/export${queryString(exportParams)}`,
     {
       cache: 'no-store',

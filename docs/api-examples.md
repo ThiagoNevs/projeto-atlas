@@ -402,9 +402,9 @@ curl.exe -X POST http://localhost:3001/assets/import/csv `
 
 Nesta primeira versão, `hostname` e `ipAddress` são obrigatórios. O `hostname` é usado como
 identificador principal da importação. O `ipAddress` é registrado como informação de rede do ativo,
-mas não é identidade absoluta porque IP pode mudar ou ser reutilizado. Linhas sem `hostname`, sem
-`ipAddress` ou com IP inválido retornam HTTP `400`; hostnames duplicados retornam HTTP `409`;
-IP repetido gera warning/sinal de atenção e não bloqueia a importação.
+mas não é identidade absoluta porque IP pode mudar ou ser reutilizado. Erros e duplicidades
+localizados são informados por linha e não bloqueiam as demais: hostname duplicado é ignorado, linha
+inválida não é criada e IP repetido gera warning sem impedir a importação.
 
 Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `department`,
 `type`, `administrativeStatus`, `manufacturer`, `model`, `serialNumber`, `macAddress`,
@@ -422,6 +422,43 @@ primeira aba é lida. O arquivo é processado em memória e não é armazenado. 
 aceitos apenas para leitura tabular: macros nunca são executadas, fórmulas nunca são avaliadas e
 somente o resultado já armazenado na célula é utilizado. Arquivos vazios, corrompidos, com MIME
 incompatível ou que excedam os limites seguros de descompactação são rejeitados.
+
+### Analisar antes de importar
+
+Para CSV ou conteúdo colado, use o preview JSON:
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/import/preview `
+  -H "Content-Type: application/json" `
+  -d '{"csv":"hostname;ipAddress\nNB-RH-001;10.20.1.15"}'
+```
+
+Para XLSX ou XLSM, use o preview multipart:
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/import/preview/spreadsheet `
+  -F "file=@C:\caminho\ativos.xlsx"
+```
+
+A resposta classifica cada linha como pronta, importável com aviso, duplicada ou inválida, incluindo
+número da linha, hostname, IP, motivo e ativo existente quando aplicável.
+
+### Confirmar importação parcial
+
+O commit sempre repete a validação no backend e cria cada linha válida em transação própria:
+
+```powershell
+curl.exe -X POST http://localhost:3001/assets/import/commit `
+  -H "Content-Type: application/json" `
+  -d '{"csv":"hostname;ipAddress\nNB-RH-001;10.20.1.15"}'
+
+curl.exe -X POST http://localhost:3001/assets/import/commit/spreadsheet `
+  -F "file=@C:\caminho\ativos.xlsx"
+```
+
+Arquivo vazio, corrompido, sem headers obrigatórios, em formato incompatível ou acima dos limites
+continua sendo rejeitado integralmente. Os endpoints anteriores `/assets/import/csv` e
+`/assets/import/spreadsheet` permanecem compatíveis e usam a mesma lógica de commit parcial.
 
 ## Declaração manual de ativo
 
