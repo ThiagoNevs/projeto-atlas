@@ -573,6 +573,12 @@ export class AssetsService {
     const eventType = spreadsheet ? 'ASSET_IMPORTED_FROM_SPREADSHEET' : CSV_IMPORT_EVENT_TYPE;
     const previewByRow = new Map(preview.rows.map((row) => [row.rowNumber, row]));
     const createdAssets: Array<ReturnType<typeof presentAssetDetail>> = [];
+    const createdRows: Array<{
+      rowNumber: number;
+      hostname: string;
+      ipAddress: string;
+      assetId: string;
+    }> = [];
     const skippedRows = preview.rows
       .filter((row) => row.status === 'DUPLICATE')
       .map((row) => ({
@@ -773,6 +779,12 @@ export class AssetsService {
           });
         } else {
           createdAssets.push(outcome.asset);
+          createdRows.push({
+            rowNumber: row.line,
+            hostname: row.data.hostname.trim(),
+            ipAddress: row.data.ipAddress.trim(),
+            assetId: outcome.asset.id,
+          });
         }
       } catch {
         failedRows.push({
@@ -807,6 +819,7 @@ export class AssetsService {
         warnings: warnings.length,
       },
       createdAssets,
+      createdRows,
       skippedRows: uniqueSkippedRows,
       invalidRows,
       failedRows,

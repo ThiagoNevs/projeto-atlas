@@ -145,6 +145,12 @@ type CsvImportResponse = {
     failed: number;
     warnings: number;
   };
+  createdRows: Array<{
+    rowNumber: number;
+    hostname: string;
+    ipAddress: string;
+    assetId: string;
+  }>;
   skippedRows: Array<{ rowNumber: number; hostname: string; existingAssetId: string | null }>;
   invalidRows: Array<{ rowNumber: number; hostname: string; errors: Array<{ code: string }> }>;
 };
@@ -2255,6 +2261,14 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
     expect(committed.summary).toEqual({ total: 2, created: 1, skipped: 0, invalid: 1, failed: 0, warnings: 0 });
     expect(imported.name).toBe(hostname);
+    expect(committed.createdRows).toEqual([
+      expect.objectContaining({
+        rowNumber: 3,
+        hostname,
+        ipAddress: '10.40.5.60',
+        assetId: imported.id,
+      }),
+    ]);
     expect(committed.invalidRows[0]).toEqual(expect.objectContaining({ rowNumber: 2, hostname }));
     await expect(prisma.networkInterface.count({ where: { assetId: imported.id } })).resolves.toBe(1);
     await expect(prisma.assetEvidence.count({ where: { assetId: imported.id } })).resolves.toBe(1);

@@ -456,9 +456,42 @@ curl.exe -X POST http://localhost:3001/assets/import/commit/spreadsheet `
   -F "file=@C:\caminho\ativos.xlsx"
 ```
 
+A resposta de commit inclui a extensão aditiva `createdRows`, que correlaciona somente as linhas
+realmente criadas com o número original da planilha e o ID do novo ativo:
+
+```json
+{
+  "createdRows": [
+    {
+      "rowNumber": 2,
+      "hostname": "NB-RH-001",
+      "ipAddress": "10.20.1.15",
+      "assetId": "00000000-0000-4000-8000-000000000000"
+    }
+  ]
+}
+```
+
+Linhas duplicadas, inválidas ou com falha não aparecem em `createdRows`. Durante uma implantação
+desacoplada, consumidores devem tolerar temporariamente a ausência desse campo. Nesse caso, o CSV
+final continua sendo gerado e apenas o ID do ativo criado fica vazio, pois o frontend não tenta
+correlacionar IDs por hostname nem pela ordem de criação.
+
 Arquivo vazio, corrompido, sem headers obrigatórios, em formato incompatível ou acima dos limites
 continua sendo rejeitado integralmente. Os endpoints anteriores `/assets/import/csv` e
 `/assets/import/spreadsheet` permanecem compatíveis e usam a mesma lógica de commit parcial.
+
+### Relatórios da importação
+
+A página `/assets/import` permite baixar dois relatórios sem criar arquivos no servidor:
+
+- **Relatório da análise:** inclui todas as linhas do preview, suas classificações, avisos, erros e
+  referências ao ativo existente.
+- **Relatório final:** correlaciona as linhas pelo número original e informa criações, duplicidades,
+  invalidações, warnings e falhas, incluindo IDs quando disponíveis.
+
+Os CSVs são gerados em memória no navegador, em UTF-8 com BOM, separador `;` e quebra de linha
+CRLF. Valores potencialmente interpretáveis como fórmulas são neutralizados antes do download.
 
 ## Declaração manual de ativo
 

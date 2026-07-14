@@ -12,6 +12,14 @@ import {
   previewAssetsCsv,
   previewAssetsSpreadsheet,
 } from '@/lib/api';
+import { downloadCsvFile } from '@/lib/file-download';
+import {
+  attemptImportReportDownload,
+  buildImportAnalysisCsv,
+  buildImportFinalCsv,
+  buildImportReportFilename,
+  importReportAvailability,
+} from '@/lib/import-report';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const csvExample = `hostname;ipAddress;operatingSystem;osVersion;location;owner;department;type;administrativeStatus;comment
@@ -33,10 +41,12 @@ export default function ImportAssetsPage() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportAssetsPreviewResponse | null>(null);
   const [result, setResult] = useState<ImportAssetsCsvResponse | null>(null);
+  const [committedPreview, setCommittedPreview] = useState<ImportAssetsPreviewResponse | null>(null);
 
   function resetAnalysis(): void {
     setPreview(null);
     setResult(null);
+    setCommittedPreview(null);
     setError(null);
   }
 
@@ -69,6 +79,7 @@ export default function ImportAssetsPage() {
     setAnalyzing(true);
     setError(null);
     setResult(null);
+    setCommittedPreview(null);
 
     try {
       setPreview(
@@ -90,6 +101,7 @@ export default function ImportAssetsPage() {
 
   async function commit(): Promise<void> {
     if (!preview?.summary.valid) return;
+    const analyzedPreview = preview;
     setCommitting(true);
     setError(null);
 
@@ -98,6 +110,7 @@ export default function ImportAssetsPage() {
         ? await commitAssetsSpreadsheet(selectedFile)
         : await commitAssetsCsv({ csv: content });
       setResult(response);
+      setCommittedPreview(analyzedPreview);
       setPreview(null);
     } catch (commitError) {
       setError(
@@ -110,7 +123,29 @@ export default function ImportAssetsPage() {
     }
   }
 
+  function downloadAnalysisReport(): void {
+    if (!preview) return;
+    setError(
+      attemptImportReportDownload(() =>
+        downloadCsvFile(buildImportAnalysisCsv(preview), buildImportReportFilename('analysis')),
+      ),
+    );
+  }
+
+  function downloadFinalReport(): void {
+    if (!result || !committedPreview) return;
+    setError(
+      attemptImportReportDownload(() =>
+        downloadCsvFile(
+          buildImportFinalCsv(committedPreview, result),
+          buildImportReportFilename('final'),
+        ),
+      ),
+    );
+  }
+
   const isXlsm = selectedFile?.name.toLocaleLowerCase().endsWith('.xlsm') ?? false;
+  const reportAvailability = importReportAvailability(preview, result);
 
   return (
     <main className="page-shell manual-asset-page">
@@ -144,7 +179,13 @@ export default function ImportAssetsPage() {
         </div>
       ) : null}
 
-      {result ? <ImportResult result={result} /> : null}
+      {result && committedPreview ? (
+        <ImportResult
+          canDownloadReport={reportAvailability.final}
+          result={result}
+          onDownloadReport={downloadFinalReport}
+        />
+      ) : null}
 
       <form className="manual-asset-form" onSubmit={analyze}>
         <section className="panel import-entry-grid">
@@ -204,19 +245,31 @@ export default function ImportAssetsPage() {
         </div>
       </form>
 
-      {preview ? <ImportPreview preview={preview} committing={committing} onCommit={commit} /> : null}
+      {preview ? (
+        <ImportPreview
+          canDownloadReport={reportAvailability.analysis}
+          preview={preview}
+          committing={committing}
+          onCommit={commit}
+          onDownloadReport={downloadAnalysisReport}
+        />
+      ) : null}
     </main>
   );
 }
 
 function ImportPreview({
+  canDownloadReport,
   preview,
   committing,
   onCommit,
+  onDownloadReport,
 }: {
+  canDownloadReport: boolean;
   preview: ImportAssetsPreviewResponse;
   committing: boolean;
   onCommit: () => Promise<void>;
+  onDownloadReport: () => void;
 }) {
   const cards = [
     ['Total de linhas', preview.summary.total],
@@ -267,6 +320,11 @@ function ImportPreview({
         </table>
       </div>
       <div className="manual-form-actions">
+        {canDownloadReport ? (
+          <button className="button button-secondary" type="button" onClick={onDownloadReport}>
+            Baixar relatório da análise
+          </button>
+        ) : null}
         <button
           className="button button-primary"
           type="button"
@@ -280,7 +338,15 @@ function ImportPreview({
   );
 }
 
-function ImportResult({ result }: { result: ImportAssetsCsvResponse }) {
+function ImportResult({
+  canDownloadReport,
+  result,
+  onDownloadReport,
+}: {
+  canDownloadReport: boolean;
+  result: ImportAssetsCsvResponse;
+  onDownloadReport: () => void;
+}) {
   const hasCaveats = result.summary.skipped || result.summary.invalid || result.summary.failed || result.summary.warnings;
   return (
     <section className="form-message form-message-success import-result" role="status">
@@ -302,6 +368,13 @@ function ImportResult({ result }: { result: ImportAssetsCsvResponse }) {
             {result.failedRows.map((row) => <li key={`failed-${row.rowNumber}`}>Linha {row.rowNumber} — {row.hostname}: {row.reason}</li>)}
           </ul>
         </details>
+      ) : null}
+      {canDownloadReport ? (
+        <div className="manual-form-actions">
+          <button className="button button-secondary" type="button" onClick={onDownloadReport}>
+            Baixar relatório final
+          </button>
+        </div>
       ) : null}
     </section>
   );
