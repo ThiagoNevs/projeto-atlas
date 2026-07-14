@@ -584,3 +584,20 @@ Exemplo resumido de resposta:
 
 Fonte de dados é qualquer origem controlada que gera evidências para o Atlas. Integração real é uma
 implementação futura que conecta uma fonte externa, com autenticação, escopo e segurança próprios.
+
+## Evidence Engine em modo sombra
+
+### Consultar a proveniência dos atributos de um ativo
+
+```powershell
+curl.exe http://localhost:3001/assets/ASSET_ID/evidence-analysis
+```
+
+A resposta organiza, em memória, os valores atuais e históricos já persistidos para cada atributo.
+O campo `selectedCandidate` apenas reflete o registro marcado como atual no modelo existente. Nesta
+etapa, nenhum algoritmo de decisão, ranking de fontes ou recálculo de score é executado; a resposta
+mantém `mode: "SHADOW"`, `decisionsChanged: false` e `explanation.decisionApplied: false`.
+
+`source.trustScore`, `confidence` e `dataQuality` representam conceitos distintos. O Trust Score da
+fonte ainda não é calculado e, portanto, é retornado como `null`. Confiança e qualidade preservam os
+valores legados persistidos, sem alteração de comportamento.

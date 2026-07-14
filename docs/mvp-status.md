@@ -68,6 +68,14 @@ quando disponíveis. Os scores são derivados, não representam decisão adminis
 editados diretamente. Os critérios ainda são simples e não configuráveis por fonte ou política
 organizacional.
 
+### Evidence Engine
+
+O núcleo inicial organiza em memória a proveniência dos atributos e expõe uma consulta somente
+leitura em modo sombra. Ele separa os contratos de Trust Score da fonte, Confidence Score da decisão
+e Data Quality, mas ainda não executa algoritmo de seleção, ranking de fontes, recálculo de scores ou
+alteração do valor atual. O candidato selecionado apenas reflete o registro vigente persistido pelo
+fluxo legado.
+
 ### Tipos compartilhados
 
 Existe `packages/shared`, mas alguns enums e contratos ainda são reproduzidos manualmente no
