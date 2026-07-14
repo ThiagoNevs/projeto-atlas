@@ -633,7 +633,7 @@ export interface ImportAssetsCsvResponse {
     warnings: number;
   };
   createdAssets: AssetDetail[];
-  createdRows: Array<{
+  createdRows?: Array<{
     rowNumber: number;
     hostname: string;
     ipAddress: string;

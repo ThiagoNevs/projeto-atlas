@@ -49,6 +49,12 @@ const result = (overrides: Partial<ImportReportResult> = {}): ImportReportResult
   ...overrides,
 });
 
+const finalReportRow = (csv: string, rowNumber: number): string[] => {
+  const line = csv.split('\r\n').find((candidate) => candidate.startsWith(`"${rowNumber}";`));
+  expect(line).toBeDefined();
+  return line!.split(';').map((cell) => cell.slice(1, -1).replace(/""/g, '"'));
+};
+
 describe('Import CSV reports', () => {
   it('exports a row ready for import', () => {
     const csv = buildImportAnalysisCsv(preview(previewRow()));
@@ -113,6 +119,125 @@ describe('Import CSV reports', () => {
     expect(csv).toContain('"Criado com aviso";"Sim";"IP compartilhado."');
   });
 
+  it('does not reuse a preview warning removed by commit revalidation', () => {
+    const previewWarning = issue('Aviso antigo do preview.');
+    const csv = buildImportFinalCsv(
+      preview(previewRow({ status: 'VALID_WITH_WARNINGS', warnings: [previewWarning] })),
+      result({
+        createdRows: [
+          { rowNumber: 2, hostname: 'NB-RH-001', ipAddress: '10.20.1.15', assetId: 'new-asset' },
+        ],
+        warnings: [],
+      }),
+    );
+    const row = finalReportRow(csv, 2);
+
+    expect(row[4]).toBe('Criado');
+    expect(row[5]).toBe('Sim');
+    expect(row[6]).toBe('');
+    expect(csv).not.toContain(previewWarning.message);
+  });
+
+  it('uses a warning introduced by commit revalidation', () => {
+    const commitWarning = issue('Aviso novo do commit.');
+    const csv = buildImportFinalCsv(
+      preview(previewRow()),
+      result({
+        createdRows: [
+          { rowNumber: 2, hostname: 'NB-RH-001', ipAddress: '10.20.1.15', assetId: 'new-asset' },
+        ],
+        warnings: [commitWarning],
+      }),
+    );
+    const row = finalReportRow(csv, 2);
+
+    expect(row[4]).toBe('Criado com aviso');
+    expect(row[6]).toBe(commitWarning.message);
+  });
+
+  it('generates a final report without createdRows during a decoupled rollout', () => {
+    const csv = buildImportFinalCsv(
+      preview(previewRow()),
+      result({ createdRows: undefined, createdCount: 1, summary: { created: 1 } }),
+    );
+    const row = finalReportRow(csv, 2);
+
+    expect(row[4]).toBe('Criado');
+    expect(row[5]).toBe('Sim');
+    expect(row[9]).toBe('');
+    expect(csv).not.toContain('undefined');
+    expect(csv).not.toContain('null');
+    expect(csv).not.toContain('[object Object]');
+  });
+
+  it('keeps other outcomes when createdRows is absent', () => {
+    const invalidIssue = issue('IP inválido.', 4);
+    const csv = buildImportFinalCsv(
+      preview(
+        previewRow(),
+        previewRow({ rowNumber: 3, hostname: 'DUPLICATE-01', status: 'DUPLICATE' }),
+        previewRow({ rowNumber: 4, hostname: 'INVALID-01', status: 'INVALID', errors: [invalidIssue] }),
+      ),
+      result({
+        createdRows: undefined,
+        createdCount: 1,
+        summary: { created: 1 },
+        skippedRows: [
+          {
+            rowNumber: 3,
+            hostname: 'DUPLICATE-01',
+            ipAddress: '10.20.1.15',
+            reason: 'Hostname já cadastrado.',
+            existingAssetId: 'existing-id',
+          },
+        ],
+        invalidRows: [
+          {
+            rowNumber: 4,
+            hostname: 'INVALID-01',
+            ipAddress: '999.1.1.1',
+            errors: [invalidIssue],
+          },
+        ],
+      }),
+    );
+
+    expect(csv.split('\r\n')).toHaveLength(4);
+    expect(finalReportRow(csv, 2)[4]).toBe('Criado');
+    expect(finalReportRow(csv, 2)[9]).toBe('');
+    expect(finalReportRow(csv, 3)[4]).toBe('Ignorado por duplicidade');
+    expect(finalReportRow(csv, 4)[4]).toBe('Linha inválida');
+  });
+
+  it('keeps row correlation after an unexpected intermediate failure', () => {
+    const csv = buildImportFinalCsv(
+      preview(
+        previewRow({ rowNumber: 2, hostname: 'CREATED-BEFORE' }),
+        previewRow({ rowNumber: 3, hostname: 'FAILED-MIDDLE' }),
+        previewRow({ rowNumber: 4, hostname: 'CREATED-AFTER' }),
+      ),
+      result({
+        createdRows: [
+          { rowNumber: 2, hostname: 'CREATED-BEFORE', ipAddress: '10.20.1.15', assetId: 'asset-before' },
+          { rowNumber: 4, hostname: 'CREATED-AFTER', ipAddress: '10.20.1.15', assetId: 'asset-after' },
+        ],
+        failedRows: [
+          {
+            rowNumber: 3,
+            hostname: 'FAILED-MIDDLE',
+            ipAddress: '10.20.1.15',
+            reason: 'Falha segura.',
+          },
+        ],
+      }),
+    );
+
+    expect(finalReportRow(csv, 2)[9]).toBe('asset-before');
+    expect(finalReportRow(csv, 3)[4]).toBe('Falha na importação');
+    expect(finalReportRow(csv, 3)[9]).toBe('');
+    expect(finalReportRow(csv, 4)[9]).toBe('asset-after');
+  });
+
   it('exports a row ignored because of duplication', () => {
     const csv = buildImportFinalCsv(
       preview(previewRow({ status: 'DUPLICATE' })),
@@ -172,6 +297,28 @@ describe('Import CSV reports', () => {
     expect(csv).toContain('\r\n"";"";""');
     expect(csv).not.toContain('undefined');
     expect(csv).not.toContain('null');
+  });
+
+  it('serializes an unexpected object as an empty cell', () => {
+    const csv = serializeCsv(['Valor'], [[{ internal: 'value' }]]);
+    expect(csv).toContain('\r\n""');
+    expect(csv).not.toContain('[object Object]');
+    expect(csv).not.toContain('internal');
+  });
+
+  it('serializes arrays using only controlled primitive values', () => {
+    expect(protectCsvCell(['texto', 2, true, { internal: 'value' }])).toBe(
+      'texto | 2 | true | ',
+    );
+  });
+
+  it('keeps null and undefined as empty protected values', () => {
+    expect(protectCsvCell(null)).toBe('');
+    expect(protectCsvCell(undefined)).toBe('');
+  });
+
+  it('protects a formula after controlled array conversion', () => {
+    expect(protectCsvCell(['=1+1', 'texto'])).toBe("'=1+1 | texto");
   });
 
   it('joins multiple warnings and errors with a readable separator', () => {

@@ -62,7 +62,11 @@ export interface ImportReportPreview {
 }
 
 export interface ImportReportResult {
-  createdRows: Array<{
+  createdCount?: number;
+  summary?: {
+    created: number;
+  };
+  createdRows?: Array<{
     rowNumber: number;
     hostname: string;
     ipAddress: string;
@@ -106,9 +110,23 @@ function firstMeaningful(...values: string[]): string {
 }
 
 export function protectCsvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const text = String(value);
+  const text = csvCellText(value);
   return /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
+}
+
+function csvCellText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (['string', 'number', 'boolean'].includes(typeof value)) return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) =>
+        item === null || item === undefined || !['string', 'number', 'boolean'].includes(typeof item)
+          ? ''
+          : String(item),
+      )
+      .join(' | ');
+  }
+  return '';
 }
 
 export function escapeCsvCell(value: unknown): string {
@@ -147,7 +165,7 @@ export function buildImportFinalCsv(
   preview: ImportReportPreview,
   result: ImportReportResult,
 ): string {
-  const createdByRow = new Map(result.createdRows.map((row) => [row.rowNumber, row]));
+  const createdByRow = new Map((result.createdRows ?? []).map((row) => [row.rowNumber, row]));
   const skippedByRow = new Map(result.skippedRows.map((row) => [row.rowNumber, row]));
   const invalidByRow = new Map(result.invalidRows.map((row) => [row.rowNumber, row]));
   const failedByRow = new Map(result.failedRows.map((row) => [row.rowNumber, row]));
@@ -158,12 +176,25 @@ export function buildImportFinalCsv(
     warningsByRow.set(rowNumber, [...(warningsByRow.get(rowNumber) ?? []), warning]);
   }
 
+  const rowsWithoutFinalOutcome = preview.rows.filter(
+    (row) =>
+      ['VALID', 'VALID_WITH_WARNINGS'].includes(row.status) &&
+      !skippedByRow.has(row.rowNumber) &&
+      !invalidByRow.has(row.rowNumber) &&
+      !failedByRow.has(row.rowNumber),
+  );
+  const reportedCreatedCount = result.summary?.created ?? result.createdCount;
+  const createdWithoutCorrelation =
+    result.createdRows === undefined && reportedCreatedCount === rowsWithoutFinalOutcome.length
+      ? new Set(rowsWithoutFinalOutcome.map((row) => row.rowNumber))
+      : new Set<number>();
+
   const rows = preview.rows.map((row) => {
     const created = createdByRow.get(row.rowNumber);
     const skipped = skippedByRow.get(row.rowNumber);
     const invalid = invalidByRow.get(row.rowNumber);
     const failed = failedByRow.get(row.rowNumber);
-    const finalWarnings = warningsByRow.get(row.rowNumber) ?? row.warnings;
+    const finalWarnings = warningsByRow.get(row.rowNumber) ?? [];
     const warningMessages = messages(finalWarnings);
     const invalidMessages = messages(invalid?.errors ?? row.errors);
 
@@ -175,11 +206,11 @@ export function buildImportFinalCsv(
     let existingAssetName = row.existingAsset?.hostname ?? '';
     let existingAssetId = row.existingAsset?.id ?? '';
 
-    if (created) {
+    if (created || createdWithoutCorrelation.has(row.rowNumber)) {
       finalResult = warningMessages ? 'Criado com aviso' : 'Criado';
       imported = 'Sim';
       reason = warningMessages;
-      createdAssetId = created.assetId;
+      createdAssetId = created?.assetId ?? '';
     } else if (skipped) {
       finalResult = 'Ignorado por duplicidade';
       reason = skipped.reason;
