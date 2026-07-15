@@ -6,6 +6,7 @@ import {
 } from '../src/evidence-engine/shadow-decision.policy';
 import { EvidenceCandidate } from '../src/evidence-engine/types/evidence-candidate';
 import { EvidenceSourceKind } from '../src/evidence-engine/types/evidence-source';
+import { normalizeCandidateValue } from '../src/evidence-engine/utils/attribute-utils';
 
 const REFERENCE_TIME = new Date('2026-07-15T12:00:00.000Z');
 const policy = new ShadowDecisionPolicy();
@@ -45,6 +46,19 @@ function source(kind: EvidenceSourceKind) {
   };
 }
 
+function candidateWithValue(
+  value: unknown,
+  valueText: string | null,
+  overrides: Partial<EvidenceCandidate> = {},
+): EvidenceCandidate {
+  return candidate({
+    value,
+    valueText,
+    normalizedValue: normalizeCandidateValue(valueText, value),
+    ...overrides,
+  });
+}
+
 function evaluate(
   candidates: EvidenceCandidate[],
   currentValue: unknown = 'Windows 11',
@@ -65,6 +79,125 @@ function assessmentCriterion(
 }
 
 describe('Evidence Engine shadow decision policy 2026-07-v1', () => {
+  it.each([
+    ['string vazia', '', ''],
+    ['um espaço', ' ', ' '],
+    ['vários espaços', '   ', '   '],
+    ['tabs e quebras de linha', ' \t\n ', ' \t\n '],
+    ['valor nulo', null, null],
+    ['valor ausente', undefined, null],
+  ])('keeps %s visible but ineligible as an absent value', (_label, value, valueText) => {
+    const result = evaluate(
+      [candidateWithValue(value, valueText, { isCurrent: false })],
+      null,
+      null,
+    );
+    const assessment = result.assessments[0];
+
+    expect(result.status).toBe('INSUFFICIENT_EVIDENCE');
+    expect(result.recommendedCandidate).toBeNull();
+    expect(result.tiedValues).toHaveLength(0);
+    expect(assessment).toEqual(
+      expect.objectContaining({ normalizedValue: null, eligible: false, policyScore: null }),
+    );
+    expect(assessment?.criteria.every((criterion) => criterion.points === 0)).toBe(true);
+    expect(assessment?.limitations).toContain('O candidato não possui valor normalizado válido.');
+  });
+
+  it.each(['', '   '])(
+    'treats currentValue %p as absent when a valid candidate can be recommended',
+    (currentValue) => {
+      const result = evaluate(
+        [candidate({ isCurrent: false })],
+        currentValue,
+        normalizeCandidateValue(currentValue, currentValue),
+      );
+
+      expect(result.currentValue).toBeNull();
+      expect(result.status).toBe('RECOMMENDED');
+      expect(result.recommendedCandidate?.normalizedValue).toBe('windows 11');
+      expect(result.divergesFromCurrentValue).toBeNull();
+      expect(result.explanation).toContain(
+        'Não existe valor atual para comparação; nenhuma alteração foi aplicada.',
+      );
+    },
+  );
+
+  it('does not score a recent technical current candidate with an empty value', () => {
+    const result = evaluate([candidateWithValue('', '', { isCurrent: true })], null, null);
+    const assessment = result.assessments[0];
+
+    expect(assessment?.sourceType).toBe('TECHNICAL');
+    expect(assessment?.eligible).toBe(false);
+    expect(assessment?.policyScore).toBeNull();
+    expect(assessment?.criteria.every((criterion) => criterion.points === 0)).toBe(true);
+    expect(result.recommendedCandidate).toBeNull();
+  });
+
+  it('keeps multiple empty candidates out of consolidation and artificial ties', () => {
+    const result = evaluate(
+      [
+        candidateWithValue('', '', { attributeId: 'empty-a', evidenceId: 'evidence-empty-a' }),
+        candidateWithValue('   ', '   ', {
+          attributeId: 'empty-b',
+          evidenceId: 'evidence-empty-b',
+          isCurrent: false,
+        }),
+      ],
+      null,
+      null,
+    );
+
+    expect(result.assessments).toHaveLength(2);
+    expect(result.assessments.every((assessment) => !assessment.eligible)).toBe(true);
+    expect(result.status).toBe('INSUFFICIENT_EVIDENCE');
+    expect(result.recommendedCandidate).toBeNull();
+    expect(result.tiedValues).toHaveLength(0);
+  });
+
+  it('allows a valid candidate to win without points from an empty technical candidate', () => {
+    const result = evaluate(
+      [
+        candidateWithValue('', '', { attributeId: 'empty-technical', isCurrent: false }),
+        candidate({
+          attributeId: 'valid-manual',
+          evidenceId: 'valid-manual-evidence',
+          value: 'Linux',
+          valueText: 'Linux',
+          normalizedValue: 'linux',
+          source: source('MANUAL'),
+          isManual: true,
+          isCurrent: false,
+        }),
+      ],
+      null,
+      null,
+    );
+
+    expect(result.recommendedCandidate?.normalizedValue).toBe('linux');
+    expect(result.assessments.find((item) => item.candidateId === 'empty-technical')).toEqual(
+      expect.objectContaining({ eligible: false, policyScore: null }),
+    );
+  });
+
+  it.each([
+    ['string zero', '0', '0', '0'],
+    ['zero numérico', 0, null, '0'],
+    ['string false', 'false', 'false', 'false'],
+    ['false booleano', false, null, 'false'],
+  ])('preserves %s as a valid value', (_label, value, valueText, normalizedValue) => {
+    const result = evaluate(
+      [candidateWithValue(value, valueText, { isCurrent: false })],
+      null,
+      null,
+    );
+
+    expect(result.recommendedCandidate?.normalizedValue).toBe(normalizedValue);
+    expect(result.assessments[0]).toEqual(
+      expect.objectContaining({ normalizedValue, eligible: true }),
+    );
+  });
+
   it('recommends one recent technical source', () => {
     const result = evaluate([candidate()]);
     expect(result.status).toBe('CURRENT_VALUE_CONFIRMED');
@@ -193,6 +326,34 @@ describe('Evidence Engine shadow decision policy 2026-07-v1', () => {
     expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(0);
   });
 
+  it('assigns no recency advantage to evidence observed in the future', () => {
+    const candidates = [
+      candidate({
+        attributeId: 'future',
+        evidenceId: 'future-evidence',
+        evidenceObservedAt: new Date(REFERENCE_TIME.getTime() + 1),
+        isCurrent: false,
+      }),
+      candidate({
+        attributeId: 'recent',
+        evidenceId: 'recent-evidence',
+        value: 'Linux',
+        valueText: 'Linux',
+        normalizedValue: 'linux',
+        evidenceObservedAt: new Date(REFERENCE_TIME.getTime() - 1),
+        isCurrent: false,
+      }),
+    ];
+    const result = evaluate(candidates, null, null);
+
+    expect(assessmentCriterion(result, 'RECENCY', 'future')?.points).toBe(0);
+    expect(result.assessments.find((item) => item.candidateId === 'future')?.limitations).toContain(
+      'A evidência possui data futura em relação ao instante de referência.',
+    );
+    expect(result.recommendedCandidate?.normalizedValue).toBe('linux');
+    expect(evaluate(candidates, null, null)).toEqual(result);
+  });
+
   it('ignores the persisted legacy score in the decision', () => {
     const low = evaluate([candidate({ persistedConfidenceScore: 1 })]);
     const high = evaluate([candidate({ persistedConfidenceScore: 100 })]);
@@ -274,28 +435,77 @@ describe('Evidence Engine shadow decision policy 2026-07-v1', () => {
     expect(old.recommendedCandidate?.policyScore).toBe(60);
   });
 
-  it('assigns 30 points at the exact 30-day limit', () => {
-    const observedAt = new Date(REFERENCE_TIME.getTime() - 30 * 24 * 60 * 60 * 1000);
+  it.each([
+    ['exactly 30 days', 30, 0, 30],
+    ['30 days plus 1 ms', 30, 1, 20],
+    ['exactly 90 days', 90, 0, 20],
+    ['90 days plus 1 ms', 90, 1, 10],
+    ['exactly 180 days', 180, 0, 10],
+    ['180 days plus 1 ms', 180, 1, 0],
+  ])('assigns the expected recency at %s', (_label, days, extraMilliseconds, expectedPoints) => {
+    const observedAt = new Date(
+      REFERENCE_TIME.getTime() - days * 24 * 60 * 60 * 1000 - extraMilliseconds,
+    );
     const result = evaluate([candidate({ evidenceObservedAt: observedAt })]);
-    expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(30);
+    expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(expectedPoints);
   });
 
-  it('assigns 20 points at the exact 90-day limit', () => {
-    const observedAt = new Date(REFERENCE_TIME.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const result = evaluate([candidate({ evidenceObservedAt: observedAt })]);
-    expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(20);
+  it('does not inflate a consolidated value by the number of supporting candidates', () => {
+    const technical = candidate({ attributeId: 'technical', isCurrent: false });
+    const oldManuals = Array.from({ length: 10 }, (_, index) =>
+      candidate({
+        attributeId: `manual-${index}`,
+        evidenceId: `manual-evidence-${index}`,
+        value: 'Linux',
+        valueText: 'Linux',
+        normalizedValue: 'linux',
+        source: source('MANUAL'),
+        isManual: true,
+        isCurrent: false,
+        evidenceObservedAt: new Date('2025-01-01T00:00:00.000Z'),
+      }),
+    );
+    const result = evaluate([technical, ...oldManuals], null, null);
+    const manualScores = result.assessments
+      .filter((assessment) => assessment.normalizedValue === 'linux')
+      .map((assessment) => assessment.policyScore);
+
+    expect(result.recommendedCandidate?.normalizedValue).toBe('windows 11');
+    expect(result.recommendedCandidate?.policyScore).toBe(90);
+    expect(manualScores).toEqual(Array(10).fill(40));
+    expect(result.assessments.filter((item) => item.normalizedValue === 'linux')).toHaveLength(10);
   });
 
-  it('assigns 10 points at the exact 180-day limit', () => {
-    const observedAt = new Date(REFERENCE_TIME.getTime() - 180 * 24 * 60 * 60 * 1000);
-    const result = evaluate([candidate({ evidenceObservedAt: observedAt })]);
-    expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(10);
-  });
+  it('chooses a deterministic representative without changing the consolidated score', () => {
+    const candidates = [
+      candidate({
+        attributeId: 'candidate-z',
+        evidenceId: 'evidence-z',
+        value: 'Windows 11',
+        isCurrent: false,
+      }),
+      candidate({
+        attributeId: 'candidate-a',
+        evidenceId: 'evidence-a',
+        value: 'Windows 11',
+        isCurrent: false,
+      }),
+    ];
+    const forward = evaluate(candidates, null, null);
+    const reversed = evaluate([...candidates].reverse(), null, null);
 
-  it('assigns zero points above 180 days', () => {
-    const observedAt = new Date(REFERENCE_TIME.getTime() - 181 * 24 * 60 * 60 * 1000);
-    const result = evaluate([candidate({ evidenceObservedAt: observedAt })]);
-    expect(assessmentCriterion(result, 'RECENCY')?.points).toBe(0);
+    expect(forward).toEqual(reversed);
+    expect(forward.recommendedCandidate).toEqual(
+      expect.objectContaining({
+        normalizedValue: 'windows 11',
+        policyScore: 90,
+        supportingCandidateIds: ['candidate-a', 'candidate-z'],
+      }),
+    );
+    expect(forward.assessments).toHaveLength(2);
+    expect(forward.explanation.join(' ').toLocaleLowerCase('pt-BR')).not.toMatch(
+      /melhor evidência|evidência vencedora/,
+    );
   });
 
   it('does not break a tie by candidate ID', () => {

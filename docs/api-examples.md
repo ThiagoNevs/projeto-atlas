@@ -605,6 +605,11 @@ candidatos e IDs de evidência que sustentam esse valor permanecem listados. A r
 `mode: "SHADOW"`, `decisionsChanged: false` e `explanation.decisionApplied: false`: nenhuma decisão é
 persistida ou aplicada.
 
+Strings vazias ou contendo somente espaços são normalizadas como ausência de valor. O candidato
+continua visível na avaliação, mas fica inelegível e não participa da recomendação. Evidências com
+data de observação futura recebem zero ponto de recência e uma limitação explícita. Essas regras são
+correções da elegibilidade já definida pela política `2026-07-v1` e não persistem decisões.
+
 Exemplo resumido:
 
 ```json

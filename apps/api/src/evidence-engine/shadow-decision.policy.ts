@@ -64,14 +64,21 @@ export class ShadowDecisionPolicy {
     }
 
     if (leaders.length === 0) {
+      const allCandidatesHaveInvalidValues = assessments.every(
+        (assessment) => assessment.normalizedValue === null,
+      );
       const status =
-        input.normalizedCurrentValue === null ? 'NO_CURRENT_VALUE' : 'INSUFFICIENT_EVIDENCE';
+        allCandidatesHaveInvalidValues || input.normalizedCurrentValue !== null
+          ? 'INSUFFICIENT_EVIDENCE'
+          : 'NO_CURRENT_VALUE';
       return this.decision({
         status,
         input,
         assessments,
         explanation: [
-          input.normalizedCurrentValue === null
+          allCandidatesHaveInvalidValues
+            ? 'Existem candidatos, mas nenhum possui valor válido após a normalização.'
+            : input.normalizedCurrentValue === null
             ? 'Não existe valor atual nem candidato elegível para produzir uma recomendação.'
             : 'Nenhum candidato atende aos critérios de elegibilidade da política atual.',
         ],
@@ -160,6 +167,19 @@ export class ShadowDecisionPolicy {
         'O score legado foi ignorado porque sua semântica varia entre os fluxos atuais.',
     });
 
+    const scoredCriteria =
+      candidate.normalizedValue === null
+        ? criteria.map((criterion) => ({
+            ...criterion,
+            result: 'NOT_APPLICABLE' as const,
+            points: 0,
+            explanation:
+              criterion.criterion === 'LEGACY_SCORE'
+                ? criterion.explanation
+                : 'O critério não foi pontuado porque o candidato não possui valor válido após a normalização.',
+          }))
+        : criteria;
+
     return {
       candidateId: candidate.attributeId,
       value: candidate.value,
@@ -167,8 +187,10 @@ export class ShadowDecisionPolicy {
       evidenceId: candidate.evidenceId,
       sourceType: candidate.source.kind,
       eligible,
-      policyScore: eligible ? criteria.reduce((total, criterion) => total + criterion.points, 0) : null,
-      criteria,
+      policyScore: eligible
+        ? scoredCriteria.reduce((total, criterion) => total + criterion.points, 0)
+        : null,
+      criteria: scoredCriteria,
       limitations,
     };
   }
@@ -376,7 +398,8 @@ export class ShadowDecisionPolicy {
     return {
       mode: 'SHADOW',
       status: input.status,
-      currentValue: input.input.currentValue,
+      currentValue:
+        input.input.normalizedCurrentValue === null ? null : input.input.currentValue,
       recommendedCandidate: input.recommendedCandidate ?? null,
       divergesFromCurrentValue: input.divergesFromCurrentValue ?? null,
       assessments: input.assessments,

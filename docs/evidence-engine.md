@@ -46,6 +46,13 @@ Fontes `SIMULATED` permanecem visíveis, mas não podem recomendar alterações 
 `UNKNOWN` também são inelegíveis porque a política não presume sua autoridade. Registros quebrados
 ou sem evidência ficam inelegíveis com limitação explícita.
 
+Strings vazias ou compostas somente por espaços, tabs e quebras de linha são normalizadas como
+ausência de valor. Esses candidatos permanecem visíveis nas avaliações individuais, mas são
+inelegíveis, não recebem pontos e não participam da consolidação, de empates ou de recomendações.
+Valores legítimos como `"0"`, `0`, `"false"` e `false` continuam válidos. A correção preserva a versão
+`2026-07-v1` porque aplica a regra já declarada de que todo candidato precisa possuir valor
+normalizado válido.
+
 ### Pontuação de prioridade
 
 | Critério | Regra | Pontos |
@@ -64,6 +71,8 @@ ou sem evidência ficam inelegíveis com limitação explícita.
 A recência usa exclusivamente `evidenceObservedAt`. `attributeObservedAt` e `evidenceIngestedAt`
 continuam disponíveis para proveniência, mas não substituem a data observada da evidência. O instante
 de referência é fornecido à política, permitindo testes estáveis nos limites de 30, 90 e 180 dias.
+Evidências com data de observação futura recebem zero ponto de recência e uma limitação explícita,
+pois não podem ser tratadas como observações recentes válidas.
 
 ## Consolidação e empates
 
@@ -84,7 +93,8 @@ Se valores lógicos diferentes empatam na maior pontuação:
 - `RECOMMENDED`: existe recomendação inequívoca diferente do atual ou não há valor atual.
 - `CURRENT_VALUE_CONFIRMED`: a política recomendaria manter o valor atual; isso não comprova correção.
 - `TIED`: valores diferentes empataram e nenhuma recomendação foi produzida.
-- `INSUFFICIENT_EVIDENCE`: há valor atual, mas nenhum candidato elegível.
+- `INSUFFICIENT_EVIDENCE`: nenhum candidato é elegível; também cobre registros existentes cujos
+  valores são todos ausentes após a normalização.
 - `NO_CURRENT_VALUE`: não há valor atual nem candidato elegível.
 - `NO_CANDIDATES`: não existem candidatos para avaliar.
 
