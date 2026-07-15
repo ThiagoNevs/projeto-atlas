@@ -8,6 +8,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { DataQualityModule } from './data-quality/data-quality.module';
 import { DataSourcesModule } from './data-sources/data-sources.module';
 import { EvidencesModule } from './evidences/evidences.module';
+import { EvidenceEngineModule } from './evidence-engine/evidence-engine.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { NetworkDiscoveryModule } from './network-discovery/network-discovery.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -19,6 +20,7 @@ import { TimelineModule } from './timeline/timeline.module';
     IngestionModule,
     AssetsModule,
     EvidencesModule,
+    EvidenceEngineModule,
     TimelineModule,
     ConflictsModule,
     NetworkDiscoveryModule,

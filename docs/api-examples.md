@@ -584,3 +584,37 @@ Exemplo resumido de resposta:
 
 Fonte de dados é qualquer origem controlada que gera evidências para o Atlas. Integração real é uma
 implementação futura que conecta uma fonte externa, com autenticação, escopo e segurança próprios.
+
+## Evidence Engine em modo sombra
+
+### Consultar a proveniência dos atributos de um ativo
+
+```powershell
+curl.exe http://localhost:3001/assets/ASSET_ID/evidence-analysis
+```
+
+A resposta organiza, em memória, os valores atuais e históricos já persistidos para cada atributo.
+`currentValue` representa um valor atual inequívoco persistido pelo modelo legado e permanece `null`
+quando registros atuais divergem. `selectedCandidate`
+só é preenchido quando existe exatamente um candidato atual, seu valor corresponde ao valor atual e
+a evidência vinculada está disponível. Sem evidência ou diante de múltiplos atuais, o campo permanece
+`null` e a limitação é declarada. Nesta etapa, nenhum algoritmo de decisão, ranking de fontes ou
+recálculo de score é executado; a resposta mantém `mode: "SHADOW"`,
+`decisionsChanged: false` e `explanation.decisionApplied: false`.
+
+`supportingEvidenceCount` considera somente IDs distintos de evidências disponíveis cujo valor
+normalizado corresponde ao `currentValue`. Evidências históricas conflitantes não são contadas como
+suporte. Quando não existe um valor atual inequívoco, a contagem é zero.
+
+Os timestamps possuem origens explícitas:
+
+- `attributeObservedAt`: data persistida no `AssetAttribute`;
+- `evidenceObservedAt`: data observada da `AssetEvidence` vinculada;
+- `evidenceIngestedAt`: entrada dessa evidência no Atlas.
+
+Uma data ausente permanece `null`; o endpoint não copia datas entre atributo e evidência.
+
+`source.trustScore`, `persistedConfidenceScore` e `dataQuality` representam conceitos distintos. O
+Trust Score da fonte ainda não é calculado e, portanto, é retornado como `null`.
+`persistedConfidenceScore` apenas expõe o score legado do atributo atual: não é confiança de uma
+decisão, não foi calculado pelo Evidence Engine e não altera dados persistidos.
