@@ -93,12 +93,17 @@ Mostre:
 - ID Atlas e identificação atual;
 - estados operacional e administrativo;
 - atributos normalizados;
+- Proveniência dos dados em modo sombra, diferenciando valor atual de origem comprovada;
+- candidatos atuais e históricos, fontes, timestamps e limitações sem ranking automático;
 - interfaces de rede;
 - evidências brutas;
 - timeline ordenada.
 
 Em `VM-WEB-02`, explique como uma mudança de hostname gera histórico sem apagar o valor
-anterior. Em `SRV-DB-01`, use a mudança de IP para ilustrar a evolução da interface.
+anterior. Expanda a proveniência do hostname para mostrar a evidência diretamente vinculada, o
+histórico divergente, o Trust Score ainda não definido e o score persistido como valor legado — não
+como confiança calculada pelo motor. Em `SRV-DB-01`, use a mudança de IP para ilustrar a evolução da
+interface; IP ainda não faz parte da análise de proveniência desta etapa.
 
 ## 5. Alteração administrativa auditável — 1 minuto
 

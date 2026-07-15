@@ -1649,6 +1649,542 @@ input {
   font-size: 0.62rem;
 }
 
+.provenance-panel {
+  overflow: hidden;
+  border-color: rgba(88, 202, 238, 0.28);
+}
+
+.provenance-panel-heading {
+  align-items: flex-start;
+}
+
+.provenance-intro {
+  max-width: 760px;
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.provenance-loading {
+  display: grid;
+  min-height: 132px;
+  padding: 1rem;
+  align-content: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: rgba(7, 16, 29, 0.28);
+}
+
+.provenance-loading p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.provenance-loading-bar {
+  width: min(100%, 520px);
+  height: 9px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--border-soft), rgba(88, 202, 238, 0.2), var(--border-soft));
+  background-size: 200% 100%;
+  animation: provenance-loading 1.4s ease-in-out infinite;
+}
+
+.provenance-loading-bar.short {
+  width: min(72%, 380px);
+}
+
+@keyframes provenance-loading {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provenance-loading-bar {
+    animation: none;
+  }
+}
+
+.provenance-error {
+  display: flex;
+  padding: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(255, 137, 137, 0.26);
+  border-radius: 11px;
+  background: rgba(54, 17, 23, 0.24);
+}
+
+.provenance-error strong {
+  color: #ffd3d3;
+  font-size: 0.8rem;
+}
+
+.provenance-error p,
+.provenance-error small {
+  display: block;
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.provenance-empty {
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 11px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.shadow-mode-note {
+  display: grid;
+  padding: 1rem;
+  align-items: start;
+  border: 1px solid rgba(88, 202, 238, 0.25);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(35, 111, 145, 0.18), rgba(7, 16, 29, 0.38));
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.9rem;
+}
+
+.shadow-mode-badge {
+  padding: 0.38rem 0.58rem;
+  border: 1px solid rgba(88, 202, 238, 0.44);
+  border-radius: 999px;
+  background: rgba(88, 202, 238, 0.1);
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.shadow-mode-note strong {
+  color: #e4f5ff;
+  font-size: 0.82rem;
+}
+
+.shadow-mode-note p {
+  max-width: 760px;
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.shadow-mode-note ul {
+  display: grid;
+  margin: 0;
+  padding-left: 1rem;
+  gap: 0.3rem;
+  color: var(--faint);
+  font-size: 0.66rem;
+}
+
+.provenance-attributes-list {
+  display: grid;
+  margin-top: 0.85rem;
+  gap: 0.65rem;
+}
+
+.provenance-attribute {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: rgba(7, 16, 29, 0.3);
+}
+
+.provenance-attribute summary {
+  display: grid;
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  align-items: center;
+  cursor: pointer;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 1rem;
+  list-style: none;
+}
+
+.provenance-attribute summary::-webkit-details-marker {
+  display: none;
+}
+
+.provenance-attribute summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.provenance-attribute[open] > summary {
+  border-bottom: 1px solid var(--border-soft);
+  background: rgba(88, 202, 238, 0.04);
+}
+
+.provenance-attribute-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.provenance-attribute-name > span {
+  color: var(--faint);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.provenance-attribute-name strong {
+  overflow-wrap: anywhere;
+  color: #e1ebf7;
+  font-size: 0.86rem;
+}
+
+.provenance-state,
+.source-kind-badge,
+.provenance-candidate-kind {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.provenance-state {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.state-positive {
+  border-color: rgba(75, 218, 166, 0.34);
+  background: rgba(75, 218, 166, 0.09);
+  color: var(--positive);
+}
+
+.state-warning {
+  border-color: rgba(255, 209, 141, 0.34);
+  background: rgba(255, 209, 141, 0.08);
+  color: #ffd18d;
+}
+
+.state-attention {
+  border-color: rgba(197, 157, 255, 0.34);
+  background: rgba(197, 157, 255, 0.08);
+  color: #d8b9ff;
+}
+
+.state-neutral {
+  color: var(--muted);
+}
+
+.provenance-expand-label {
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.provenance-attribute[open] .provenance-expand-label {
+  font-size: 0;
+}
+
+.provenance-attribute[open] .provenance-expand-label::after {
+  font-size: 0.68rem;
+  content: 'Ocultar análise';
+}
+
+.provenance-attribute-body {
+  display: grid;
+  padding: 1rem;
+  gap: 1rem;
+}
+
+.provenance-explanation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.45fr);
+  gap: 1rem;
+}
+
+.provenance-explanation h3,
+.provenance-candidates-section h3,
+.provenance-limitations h3 {
+  margin: 0;
+  color: #dce7f5;
+  font-size: 0.78rem;
+}
+
+.provenance-explanation p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.provenance-score {
+  display: grid;
+  padding: 0.75rem;
+  align-content: start;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: rgba(5, 12, 22, 0.42);
+  gap: 0.25rem;
+}
+
+.provenance-score > span {
+  color: var(--faint);
+  font-size: 0.61rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.provenance-score strong {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.provenance-score small {
+  color: var(--faint);
+  font-size: 0.61rem;
+  line-height: 1.45;
+}
+
+.provenance-support {
+  display: flex;
+  padding: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+  background: rgba(88, 202, 238, 0.06);
+}
+
+.provenance-support strong,
+.provenance-support span {
+  font-size: 0.7rem;
+}
+
+.provenance-support span {
+  color: var(--muted);
+  text-align: right;
+}
+
+.provenance-no-selection {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed rgba(255, 209, 141, 0.3);
+  border-radius: 9px;
+  color: #e7cfa9;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.provenance-candidates-section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.provenance-candidates-list,
+.provenance-linked-block {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.provenance-candidate {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(5, 12, 22, 0.38);
+}
+
+.provenance-candidate.candidate-linked {
+  border-color: rgba(75, 218, 166, 0.28);
+  background: rgba(75, 218, 166, 0.04);
+}
+
+.provenance-candidate-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.provenance-candidate-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.provenance-candidate-heading strong {
+  overflow-wrap: anywhere;
+  color: #dce7f5;
+  font-size: 0.8rem;
+}
+
+.provenance-candidate-kind {
+  color: var(--muted);
+}
+
+.source-kind-badge {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.source-manual {
+  color: #ffd18d;
+}
+
+.source-simulated {
+  color: #c9b0ff;
+}
+
+.source-technical {
+  color: var(--positive);
+}
+
+.source-unknown {
+  color: var(--muted);
+}
+
+.provenance-candidate-grid {
+  display: grid;
+  margin: 0.8rem 0 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.provenance-candidate-grid div {
+  min-width: 0;
+}
+
+.provenance-candidate-grid dt {
+  color: var(--faint);
+  font-size: 0.58rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.provenance-candidate-grid dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.mono-break {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.provenance-limitations {
+  padding: 0.8rem;
+  border: 1px solid rgba(255, 209, 141, 0.2);
+  border-radius: 9px;
+  background: rgba(52, 39, 17, 0.15);
+}
+
+.provenance-limitations ul {
+  display: grid;
+  margin: 0.6rem 0 0;
+  padding-left: 1rem;
+  gap: 0.35rem;
+}
+
+.provenance-limitations li,
+.provenance-limitations p {
+  color: #d4c5aa;
+  font-size: 0.67rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+  .shadow-mode-note {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .shadow-mode-note ul {
+    grid-column: 2;
+  }
+
+  .provenance-candidate-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .shadow-mode-note,
+  .provenance-explanation {
+    grid-template-columns: 1fr;
+  }
+
+  .shadow-mode-note ul {
+    grid-column: auto;
+  }
+
+  .provenance-attribute summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provenance-expand-label {
+    grid-column: 1 / -1;
+  }
+
+  .provenance-support {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .provenance-support span {
+    text-align: left;
+  }
+}
+
+@media (max-width: 520px) {
+  .provenance-panel {
+    padding: 1rem;
+  }
+
+  .provenance-error,
+  .provenance-candidate-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .provenance-error .button {
+    width: 100%;
+  }
+
+  .provenance-attribute summary,
+  .provenance-candidate-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provenance-state,
+  .provenance-expand-label {
+    grid-column: auto;
+  }
+
+  .provenance-state {
+    white-space: normal;
+  }
+}
+
 .network-list {
   display: grid;
   gap: 0.55rem;

@@ -38,6 +38,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Download dos relatórios CSV da análise e do resultado final da importação, gerados em memória e protegidos contra CSV Injection.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
+- Seção de Proveniência dos dados no detalhe do ativo, com modo sombra, origem, candidatos, histórico, timestamps separados e limitações explícitas.
 - Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.
 - Suíte E2E integrada ao PostgreSQL.
 
@@ -77,7 +78,11 @@ alteração do valor atual. `selectedCandidate` só é informado quando existe u
 com evidência disponível e valor correspondente; ausência de evidência ou múltiplos atuais produzem
 `null` e uma limitação explícita. Evidências históricas conflitantes não aumentam a contagem de
 suporte. Datas de observação do atributo e da evidência são expostas separadamente, e o score legado
-é identificado como `persistedConfidenceScore`. Trust Score permanece `null`.
+é identificado como `persistedConfidenceScore`. Trust Score permanece `null`. A página de detalhe do
+ativo representa essa análise em português, sem recalcular regras no frontend: valor atual e
+proveniência comprovada aparecem como conceitos distintos, fontes manuais, simuladas, técnicas e
+desconhecidas recebem identificação explícita, e falhas da análise permanecem isoladas das demais
+informações do ativo.
 
 ### Tipos compartilhados
 

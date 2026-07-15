@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { AdministrativeStatusForm } from '@/components/administrative-status-form';
+import { EvidenceProvenanceSection } from '@/components/evidence-provenance-section';
 import { LifecycleConflictAlert } from '@/components/lifecycle-conflict-alert';
 import { ManualEnrichmentForm } from '@/components/manual-enrichment-form';
 import { ErrorState, LoadingState } from '@/components/page-state';
@@ -83,6 +84,7 @@ export default function AssetDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [requestVersion, setRequestVersion] = useState(0);
+  const [provenanceVersion, setProvenanceVersion] = useState(0);
 
   function retry(): void {
     setLoading(true);
@@ -97,6 +99,7 @@ export default function AssetDetailPage() {
       getAssetTimeline(id),
     ]);
     setData({ asset, evidences, timeline });
+    setProvenanceVersion((version) => version + 1);
   }
 
   useEffect(() => {
@@ -314,6 +317,8 @@ export default function AssetDetailPage() {
           <p className="muted-copy">Nenhum atributo normalizado disponível.</p>
         )}
       </section>
+
+      <EvidenceProvenanceSection assetId={asset.id} refreshKey={provenanceVersion} />
 
       <section className="panel full-panel">
         <div className="panel-heading">
