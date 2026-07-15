@@ -77,21 +77,32 @@ const assetTypeLabels: Record<string, string> = {
 const attributeLabels: Record<string, string> = {
   ADMINISTRATIVESTATUS: 'Status administrativo',
   CATEGORY: 'Categoria',
+  COMMENT: 'Comentário',
+  CRITICALITY: 'Criticidade',
+  DEPARTMENT: 'Departamento',
+  ENVIRONMENT: 'Ambiente',
   HOSTNAME: 'Hostname atual',
+  LOCATION: 'Localização',
   MANUFACTURER: 'Fabricante',
   MODEL: 'Modelo',
   OPERATINGSYSTEM: 'Sistema operacional',
   OSVERSION: 'Versão do sistema operacional',
+  OWNER: 'Responsável',
   SERIALNUMBER: 'Número de série',
   TYPE: 'Tipo',
 };
 
 const evidenceTypeLabels: Record<string, string> = {
+  CSV_MANUAL_IMPORT: 'Importação manual por CSV',
+  DATA_QUALITY_FIXTURE: 'Registro de qualidade de dados',
   DEMO_ASSET_SNAPSHOT: 'Captura simulada do ativo',
   MANUAL_ASSET_SNAPSHOT: 'Captura manual do ativo',
   NETWORK_DISCOVERY: 'Descoberta de rede',
   MANUAL_DECLARATION: 'Declaração manual do ativo',
   MANUAL_ENRICHMENT: 'Enriquecimento manual',
+  SOURCE_SNAPSHOT: 'Captura da fonte',
+  SPREADSHEET_MANUAL_IMPORT: 'Importação manual por planilha',
+  TECHNICAL_AGENT: 'Agente técnico',
 };
 
 const auditActionLabels: Record<string, string> = {

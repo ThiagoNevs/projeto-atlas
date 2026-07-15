@@ -1,6 +1,19 @@
 import { ApiError, normalizeApiError } from './api-error';
+import {
+  parseEvidenceAnalysisResponse,
+  type AssetEvidenceAnalysisResponse,
+} from './evidence-provenance';
 
 export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error';
+export type {
+  AssetEvidenceAnalysisResponse,
+  AttributeEvidenceAnalysis,
+  EvidenceAnalysisCandidate,
+  EvidenceAnalysisExplanation,
+  EvidenceAnalysisSource,
+  EvidenceExplanationStatus,
+  EvidenceSourceKind,
+} from './evidence-provenance';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -754,6 +767,19 @@ export function getAssetEvidences(id: string): Promise<AssetEvidence[]> {
 
 export function getAssetTimeline(id: string): Promise<AssetTimelineEvent[]> {
   return fetchJson(`/assets/${encodeURIComponent(id)}/timeline`);
+}
+
+export async function getAssetEvidenceAnalysis(
+  id: string,
+): Promise<AssetEvidenceAnalysisResponse> {
+  const body = await fetchJson<unknown>(`/assets/${encodeURIComponent(id)}/evidence-analysis`);
+  const analysis = parseEvidenceAnalysisResponse(body);
+
+  if (!analysis) {
+    throw new ApiError('A API retornou uma análise de proveniência inválida.', 502);
+  }
+
+  return analysis;
 }
 
 export function updateAdministrativeStatus(
