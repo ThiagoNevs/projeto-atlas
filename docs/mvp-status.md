@@ -73,8 +73,11 @@ organizacional.
 O núcleo inicial organiza em memória a proveniência dos atributos e expõe uma consulta somente
 leitura em modo sombra. Ele separa os contratos de Trust Score da fonte, Confidence Score da decisão
 e Data Quality, mas ainda não executa algoritmo de seleção, ranking de fontes, recálculo de scores ou
-alteração do valor atual. O candidato selecionado apenas reflete o registro vigente persistido pelo
-fluxo legado.
+alteração do valor atual. `selectedCandidate` só é informado quando existe um único candidato atual
+com evidência disponível e valor correspondente; ausência de evidência ou múltiplos atuais produzem
+`null` e uma limitação explícita. Evidências históricas conflitantes não aumentam a contagem de
+suporte. Datas de observação do atributo e da evidência são expostas separadamente, e o score legado
+é identificado como `persistedConfidenceScore`. Trust Score permanece `null`.
 
 ### Tipos compartilhados
 

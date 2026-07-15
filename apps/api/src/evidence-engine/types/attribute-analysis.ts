@@ -6,6 +6,6 @@ export interface AttributeAnalysis {
   currentValue: unknown;
   candidates: EvidenceCandidate[];
   selectedCandidate: EvidenceCandidate | null;
-  confidence: number | null;
+  persistedConfidenceScore: number | null;
   explanation: EvidenceExplanation;
 }

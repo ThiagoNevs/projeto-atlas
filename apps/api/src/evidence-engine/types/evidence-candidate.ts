@@ -6,12 +6,14 @@ export interface EvidenceCandidate {
   valueText: string | null;
   normalizedValue: string | null;
   source: EvidenceSource;
-  observedAt: Date;
-  ingestedAt: Date | null;
-  confidence: number | null;
+  attributeObservedAt: Date | null;
+  evidenceObservedAt: Date | null;
+  evidenceIngestedAt: Date | null;
+  persistedConfidenceScore: number | null;
   dataQuality: number | null;
   isManual: boolean;
   evidenceId: string | null;
+  evidenceAvailable: boolean;
   isCurrent: boolean;
   confirmationCount: number;
 }

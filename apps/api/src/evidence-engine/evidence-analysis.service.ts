@@ -23,6 +23,7 @@ export class EvidenceAnalysisService {
           orderBy: [{ isCurrent: 'desc' }, { observedAt: 'desc' }, { createdAt: 'desc' }],
           select: {
             id: true,
+            evidenceId: true,
             key: true,
             value: true,
             valueText: true,
@@ -62,12 +63,14 @@ export class EvidenceAnalysisService {
         valueText: attribute.valueText,
         normalizedValue: normalizeCandidateValue(attribute.valueText, attribute.value),
         source,
-        observedAt: attribute.observedAt,
-        ingestedAt: attribute.evidence?.ingestedAt ?? null,
-        confidence: scoreToNumber(attribute.confidenceScore),
+        attributeObservedAt: attribute.observedAt,
+        evidenceObservedAt: attribute.evidence?.observedAt ?? null,
+        evidenceIngestedAt: attribute.evidence?.ingestedAt ?? null,
+        persistedConfidenceScore: scoreToNumber(attribute.confidenceScore),
         dataQuality: scoreToNumber(attribute.dataQualityScore),
         isManual: source.kind === 'MANUAL',
-        evidenceId: attribute.evidence?.id ?? null,
+        evidenceId: attribute.evidenceId,
+        evidenceAvailable: attribute.evidence !== null,
         isCurrent: attribute.isCurrent,
         confirmationCount: attribute.confirmationCount,
       });
@@ -80,7 +83,38 @@ export class EvidenceAnalysisService {
       decisionsChanged: false,
       analyses: [...candidatesByAttribute.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([attribute, candidates]) => this.evidenceEngine.analyze(attribute, candidates)),
+        .map(([attribute, candidates]) => {
+          const currentCandidates = candidates.filter((candidate) => candidate.isCurrent);
+          const currentValue = this.resolvePersistedCurrentValue(currentCandidates);
+
+          return this.evidenceEngine.analyze({
+            attribute,
+            currentValue: currentValue?.value ?? null,
+            normalizedCurrentValue: currentValue?.normalizedValue ?? null,
+            candidates,
+          });
+        }),
     };
+  }
+
+  private resolvePersistedCurrentValue(
+    candidates: EvidenceCandidate[],
+  ): { value: unknown; normalizedValue: string } | null {
+    if (candidates.length === 0) return null;
+
+    const serializedValues = new Set(candidates.map((candidate) => JSON.stringify(candidate.value)));
+    const normalizedValues = new Set(candidates.map((candidate) => candidate.normalizedValue));
+    const representative = candidates[0];
+
+    if (
+      representative === undefined ||
+      serializedValues.size !== 1 ||
+      normalizedValues.size !== 1 ||
+      representative.normalizedValue === null
+    ) {
+      return null;
+    }
+
+    return { value: representative.value, normalizedValue: representative.normalizedValue };
   }
 }
