@@ -1,10 +1,10 @@
-import { ApiError, normalizeApiError } from './api-error';
+import { ApiError, normalizeApiError } from './api-error.ts';
 import {
   parseEvidenceAnalysisResponse,
   type AssetEvidenceAnalysisResponse,
-} from './evidence-provenance';
+} from './evidence-provenance.ts';
 
-export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error';
+export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error.ts';
 export type {
   AssetEvidenceAnalysisResponse,
   AttributeEvidenceAnalysis,
@@ -18,6 +18,18 @@ export type {
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const API_URL = configuredApiUrl.replace(/\/$/, '');
+export const EVIDENCE_PROVENANCE_TIMEOUT_MS = 10_000;
+
+type FetchImplementation = (input: string, init: RequestInit) => Promise<Response>;
+type TimeoutHandle = ReturnType<typeof setTimeout>;
+
+export interface EvidenceAnalysisRequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  fetchImplementation?: FetchImplementation;
+  scheduleTimeout?: (callback: () => void, timeoutMs: number) => TimeoutHandle;
+  cancelTimeout?: (handle: TimeoutHandle) => void;
+}
 
 export type OperationalStatus =
   'UNKNOWN' | 'SEEN_RECENTLY' | 'OPERATIONAL' | 'DEGRADED' | 'UNAVAILABLE';
@@ -702,9 +714,13 @@ export interface ManualEnrichmentResponse {
   auditLogId: string;
 }
 
-async function fetchWithNetworkHandling(input: string, init: RequestInit): Promise<Response> {
+async function fetchWithNetworkHandling(
+  input: string,
+  init: RequestInit,
+  fetchImplementation: FetchImplementation = fetch,
+): Promise<Response> {
   try {
-    return await fetch(input, init);
+    return await fetchImplementation(input, init);
   } catch (error) {
     throw normalizeApiError(error);
   }
@@ -727,12 +743,20 @@ async function readErrorMessage(response: Response): Promise<string> {
   return message;
 }
 
-async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetchWithNetworkHandling(`${API_URL}${path}`, {
-    ...init,
-    cache: 'no-store',
-    headers: { Accept: 'application/json', ...init.headers },
-  });
+async function fetchJson<T>(
+  path: string,
+  init: RequestInit = {},
+  fetchImplementation: FetchImplementation = fetch,
+): Promise<T> {
+  const response = await fetchWithNetworkHandling(
+    `${API_URL}${path}`,
+    {
+      ...init,
+      cache: 'no-store',
+      headers: { Accept: 'application/json', ...init.headers },
+    },
+    fetchImplementation,
+  );
 
   if (!response.ok) {
     throw new ApiError(await readErrorMessage(response), response.status);
@@ -771,15 +795,59 @@ export function getAssetTimeline(id: string): Promise<AssetTimelineEvent[]> {
 
 export async function getAssetEvidenceAnalysis(
   id: string,
+  options: EvidenceAnalysisRequestOptions = {},
 ): Promise<AssetEvidenceAnalysisResponse> {
-  const body = await fetchJson<unknown>(`/assets/${encodeURIComponent(id)}/evidence-analysis`);
-  const analysis = parseEvidenceAnalysisResponse(body);
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? EVIDENCE_PROVENANCE_TIMEOUT_MS;
+  const scheduleTimeout = options.scheduleTimeout ?? setTimeout;
+  const cancelTimeout = options.cancelTimeout ?? clearTimeout;
+  let timedOut = false;
 
-  if (!analysis) {
-    throw new ApiError('A API retornou uma análise de proveniência inválida.', 502);
+  const abortFromExternalSignal = (): void => {
+    controller.abort(options.signal?.reason);
+  };
+
+  if (options.signal?.aborted) abortFromExternalSignal();
+  else options.signal?.addEventListener('abort', abortFromExternalSignal, { once: true });
+
+  const timeoutHandle = scheduleTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const body = await fetchJson<unknown>(
+      `/assets/${encodeURIComponent(id)}/evidence-analysis`,
+      { signal: controller.signal },
+      options.fetchImplementation,
+    );
+    const analysis = parseEvidenceAnalysisResponse(body);
+
+    if (!analysis) {
+      throw new ApiError('A API retornou uma análise de proveniência inválida.', 502);
+    }
+
+    return analysis;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(
+        'Não foi possível carregar a proveniência dos dados. Tente novamente.',
+        408,
+      );
+    }
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ApiError(
+        'Não foi possível carregar a proveniência dos dados. Tente novamente.',
+        0,
+      );
+    }
+
+    throw error;
+  } finally {
+    cancelTimeout(timeoutHandle);
+    options.signal?.removeEventListener('abort', abortFromExternalSignal);
   }
-
-  return analysis;
 }
 
 export function updateAdministrativeStatus(

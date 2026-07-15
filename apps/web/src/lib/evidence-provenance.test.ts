@@ -3,7 +3,15 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  API_CONNECTION_ERROR_MESSAGE,
+  ApiError,
+  EVIDENCE_PROVENANCE_TIMEOUT_MS,
+  getAssetEvidenceAnalysis,
+  type EvidenceAnalysisRequestOptions,
+} from './api.ts';
+import {
   abbreviateEvidenceId,
+  canApplyProvenanceResult,
   formatProvenanceValue,
   formatSupportingEvidence,
   formatTrustScore,
@@ -14,6 +22,7 @@ import {
   PERSISTED_SCORE_EXPLANATION,
   resolveProvenanceSectionState,
   SHADOW_MODE_DESCRIPTION,
+  shouldShowShadowModeSummary,
   type AssetEvidenceAnalysisResponse,
   type AttributeEvidenceAnalysis,
   type EvidenceAnalysisCandidate,
@@ -81,6 +90,285 @@ function response(
     analyses,
   };
 }
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function controlledTimer() {
+  let callback: (() => void) | null = null;
+  let cleared = false;
+  const handle = {} as ReturnType<typeof setTimeout>;
+
+  return {
+    schedule: (next: () => void): ReturnType<typeof setTimeout> => {
+      callback = next;
+      return handle;
+    },
+    cancel: (receivedHandle: ReturnType<typeof setTimeout>): void => {
+      assert.equal(receivedHandle, handle);
+      cleared = true;
+    },
+    fire: (): void => {
+      assert.ok(callback, 'o timeout deve ser agendado antes de ser disparado');
+      callback();
+    },
+    wasCleared: (): boolean => cleared,
+  };
+}
+
+function abortablePendingFetch(signals: AbortSignal[]): NonNullable<
+  EvidenceAnalysisRequestOptions['fetchImplementation']
+> {
+  return (_input, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      const signal = init.signal;
+      assert.ok(signal instanceof AbortSignal);
+      signals.push(signal);
+
+      const rejectWithAbort = (): void => {
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+
+      if (signal.aborted) rejectWithAbort();
+      else signal.addEventListener('abort', rejectWithAbort, { once: true });
+    });
+}
+
+test('usa timeout padrão centralizado de dez segundos somente na proveniência', () => {
+  assert.equal(EVIDENCE_PROVENANCE_TIMEOUT_MS, 10_000);
+});
+
+test('retorna análise recebida antes do timeout e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const result = await getAssetEvidenceAnalysis('asset-1', {
+    fetchImplementation: async () => jsonResponse(response()),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  assert.deepEqual(result, response());
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('timeout aborta a requisição, normaliza o erro e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const signals: AbortSignal[] = [];
+  const request = getAssetEvidenceAnalysis('asset-timeout', {
+    fetchImplementation: abortablePendingFetch(signals),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  timer.fire();
+
+  await assert.rejects(request, (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 408);
+    assert.match(error.message, /tente novamente/i);
+    assert.doesNotMatch(error.message, /abort|failed to fetch/i);
+    return true;
+  });
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]?.aborted, true);
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('erro HTTP estruturado encerra a requisição e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const request = getAssetEvidenceAnalysis('asset-http-error', {
+    fetchImplementation: async () =>
+      jsonResponse({ message: 'Análise temporariamente indisponível.' }, 503),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  await assert.rejects(request, (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 503);
+    assert.equal(error.message, 'Análise temporariamente indisponível.');
+    return true;
+  });
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('contrato inválido encerra a requisição com 502 e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const request = getAssetEvidenceAnalysis('asset-invalid', {
+    fetchImplementation: async () => jsonResponse({ mode: 'SHADOW' }),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  await assert.rejects(request, (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 502);
+    return true;
+  });
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('JSON malformado não permanece carregando e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const request = getAssetEvidenceAnalysis('asset-invalid-json', {
+    fetchImplementation: async () =>
+      new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  await assert.rejects(request, SyntaxError);
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('falha de rede é normalizada sem expor Failed to fetch', async () => {
+  const timer = controlledTimer();
+  const request = getAssetEvidenceAnalysis('asset-network-error', {
+    fetchImplementation: async () => {
+      throw new TypeError('Failed to fetch');
+    },
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  await assert.rejects(request, (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 0);
+    assert.equal(error.message, API_CONNECTION_ERROR_MESSAGE);
+    assert.doesNotMatch(getProvenanceErrorMessage(error.status), /failed to fetch/i);
+    return true;
+  });
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('cancelamento externo não expõe AbortError e limpa o timer', async () => {
+  const timer = controlledTimer();
+  const externalController = new AbortController();
+  const signals: AbortSignal[] = [];
+  const request = getAssetEvidenceAnalysis('asset-cancelled', {
+    signal: externalController.signal,
+    fetchImplementation: abortablePendingFetch(signals),
+    scheduleTimeout: timer.schedule,
+    cancelTimeout: timer.cancel,
+  });
+
+  externalController.abort();
+
+  await assert.rejects(request, (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 0);
+    assert.doesNotMatch(error.message, /abort/i);
+    return true;
+  });
+  assert.equal(signals[0]?.aborted, true);
+  assert.equal(timer.wasCleared(), true);
+});
+
+test('retry após timeout usa novo controller e pode concluir com sucesso', async () => {
+  const firstTimer = controlledTimer();
+  const secondTimer = controlledTimer();
+  const signals: AbortSignal[] = [];
+  let callCount = 0;
+  const pendingFetch = abortablePendingFetch(signals);
+  const fetchImplementation: NonNullable<
+    EvidenceAnalysisRequestOptions['fetchImplementation']
+  > = (input, init) => {
+    callCount += 1;
+    if (callCount === 1) return pendingFetch(input, init);
+
+    assert.ok(init.signal instanceof AbortSignal);
+    signals.push(init.signal);
+    return Promise.resolve(jsonResponse(response()));
+  };
+
+  const firstRequest = getAssetEvidenceAnalysis('asset-retry', {
+    fetchImplementation,
+    scheduleTimeout: firstTimer.schedule,
+    cancelTimeout: firstTimer.cancel,
+  });
+  firstTimer.fire();
+  await assert.rejects(firstRequest, ApiError);
+
+  const retryResult = await getAssetEvidenceAnalysis('asset-retry', {
+    fetchImplementation,
+    scheduleTimeout: secondTimer.schedule,
+    cancelTimeout: secondTimer.cancel,
+  });
+
+  assert.deepEqual(retryResult, response());
+  assert.equal(callCount, 2);
+  assert.equal(signals.length, 2);
+  assert.notEqual(signals[0], signals[1]);
+  assert.equal(signals[0]?.aborted, true);
+  assert.equal(signals[1]?.aborted, false);
+  assert.equal(firstTimer.wasCleared(), true);
+  assert.equal(secondTimer.wasCleared(), true);
+});
+
+test('máquina de estados percorre loading, erro, retry e sucesso', () => {
+  const states = [
+    resolveProvenanceSectionState({ loading: true, error: null, response: null }),
+    resolveProvenanceSectionState({ loading: false, error: 'timeout', response: null }),
+    resolveProvenanceSectionState({ loading: true, error: null, response: null }),
+    resolveProvenanceSectionState({ loading: false, error: null, response: response() }),
+  ];
+
+  assert.deepEqual(states, ['LOADING', 'ERROR', 'LOADING', 'READY']);
+});
+
+test('estado vazio preserva o resumo de Modo sombra', () => {
+  const emptyResponse = response([]);
+  const state = resolveProvenanceSectionState({
+    loading: false,
+    error: null,
+    response: emptyResponse,
+  });
+
+  assert.equal(state, 'EMPTY');
+  assert.equal(shouldShowShadowModeSummary(state, emptyResponse), true);
+});
+
+test('erro da seção não altera informações mantidas pelo ativo pai', () => {
+  const parentAsset = Object.freeze({ id: 'asset-parent', hostname: 'NB-RH-001' });
+  const state = resolveProvenanceSectionState({
+    loading: false,
+    error: 'timeout',
+    response: null,
+  });
+
+  assert.equal(state, 'ERROR');
+  assert.deepEqual(parentAsset, { id: 'asset-parent', hostname: 'NB-RH-001' });
+});
+
+test('resposta antiga ou cancelada não pode substituir a requisição atual', () => {
+  assert.equal(
+    canApplyProvenanceResult({
+      active: true,
+      completedRequestKey: 'asset-a:0',
+      currentRequestKey: 'asset-b:0',
+    }),
+    false,
+  );
+  assert.equal(
+    canApplyProvenanceResult({
+      active: false,
+      completedRequestKey: 'asset-b:0',
+      currentRequestKey: 'asset-b:0',
+    }),
+    false,
+  );
+  assert.equal(
+    canApplyProvenanceResult({
+      active: true,
+      completedRequestKey: 'asset-b:0',
+      currentRequestKey: 'asset-b:0',
+    }),
+    true,
+  );
+});
 
 test('aceita a resposta real esperada para um ativo existente', () => {
   assert.deepEqual(parseEvidenceAnalysisResponse(response()), response());

@@ -340,6 +340,21 @@ export function resolveProvenanceSectionState(input: {
   return 'READY';
 }
 
+export function shouldShowShadowModeSummary(
+  state: ProvenanceSectionState,
+  response: AssetEvidenceAnalysisResponse | null,
+): boolean {
+  return (state === 'READY' || state === 'EMPTY') && response?.mode === 'SHADOW';
+}
+
+export function canApplyProvenanceResult(input: {
+  active: boolean;
+  completedRequestKey: string;
+  currentRequestKey: string;
+}): boolean {
+  return input.active && input.completedRequestKey === input.currentRequestKey;
+}
+
 export function getProvenanceErrorMessage(status: number | null): string {
   if (status === 404) {
     return 'A análise de proveniência deste ativo não foi encontrada.';

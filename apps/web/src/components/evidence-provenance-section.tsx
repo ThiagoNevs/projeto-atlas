@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   ApiError,
@@ -11,6 +11,7 @@ import {
 } from '@/lib/api';
 import {
   abbreviateEvidenceId,
+  canApplyProvenanceResult,
   formatProvenanceValue,
   formatSupportingEvidence,
   formatTrustScore,
@@ -20,6 +21,7 @@ import {
   PERSISTED_SCORE_EXPLANATION,
   resolveProvenanceSectionState,
   SHADOW_MODE_DESCRIPTION,
+  shouldShowShadowModeSummary,
 } from '@/lib/evidence-provenance';
 import { formatDateTime } from '@/lib/format';
 import { getAttributeLabel, getEvidenceTypeLabel } from '@/lib/labels';
@@ -40,6 +42,22 @@ function PersistedScore({ value }: { value: number | null }) {
       <strong>{value ?? 'Não disponível'}</strong>
       <small>{PERSISTED_SCORE_EXPLANATION}</small>
     </div>
+  );
+}
+
+function ShadowModeSummary() {
+  return (
+    <aside className="shadow-mode-note" aria-label="Resumo do modo sombra">
+      <span className="shadow-mode-badge">Modo sombra</span>
+      <div>
+        <strong>Análise somente leitura</strong>
+        <p>{SHADOW_MODE_DESCRIPTION}</p>
+      </div>
+      <ul>
+        <li>Nenhuma decisão foi alterada.</li>
+        <li>Trust Score ainda não calculado.</li>
+      </ul>
+    </aside>
   );
 }
 
@@ -199,6 +217,7 @@ export function EvidenceProvenanceSection({
 }: EvidenceProvenanceSectionProps) {
   const [retryVersion, setRetryVersion] = useState(0);
   const requestKey = `${assetId}:${refreshKey}:${retryVersion}`;
+  const currentRequestKey = useRef(requestKey);
   const [result, setResult] = useState<{
     requestKey: string;
     response: AssetEvidenceAnalysisResponse | null;
@@ -207,13 +226,31 @@ export function EvidenceProvenanceSection({
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    currentRequestKey.current = requestKey;
 
-    void getAssetEvidenceAnalysis(assetId)
+    void getAssetEvidenceAnalysis(assetId, { signal: controller.signal })
       .then((analysis) => {
-        if (active) setResult({ requestKey, response: analysis, error: null });
+        if (
+          canApplyProvenanceResult({
+            active,
+            completedRequestKey: requestKey,
+            currentRequestKey: currentRequestKey.current,
+          })
+        ) {
+          setResult({ requestKey, response: analysis, error: null });
+        }
       })
       .catch((loadError: unknown) => {
-        if (!active) return;
+        if (
+          !canApplyProvenanceResult({
+            active,
+            completedRequestKey: requestKey,
+            currentRequestKey: currentRequestKey.current,
+          })
+        ) {
+          return;
+        }
         const status = loadError instanceof ApiError ? loadError.status : null;
         setResult({
           requestKey,
@@ -224,6 +261,7 @@ export function EvidenceProvenanceSection({
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [assetId, requestKey]);
 
@@ -273,6 +311,8 @@ export function EvidenceProvenanceSection({
         </div>
       ) : null}
 
+      {shouldShowShadowModeSummary(state, response) ? <ShadowModeSummary /> : null}
+
       {state === 'EMPTY' ? (
         <p className="provenance-empty">
           Não há atributos disponíveis para análise de proveniência neste ativo.
@@ -280,25 +320,11 @@ export function EvidenceProvenanceSection({
       ) : null}
 
       {state === 'READY' && response ? (
-        <>
-          <aside className="shadow-mode-note" aria-label="Resumo do modo sombra">
-            <span className="shadow-mode-badge">Modo sombra</span>
-            <div>
-              <strong>Análise somente leitura</strong>
-              <p>{SHADOW_MODE_DESCRIPTION}</p>
-            </div>
-            <ul>
-              <li>Nenhuma decisão foi alterada.</li>
-              <li>Trust Score ainda não calculado.</li>
-            </ul>
-          </aside>
-
-          <div className="provenance-attributes-list">
-            {response.analyses.map((analysis) => (
-              <AttributeAnalysis analysis={analysis} key={analysis.attribute} />
-            ))}
-          </div>
-        </>
+        <div className="provenance-attributes-list">
+          {response.analyses.map((analysis) => (
+            <AttributeAnalysis analysis={analysis} key={analysis.attribute} />
+          ))}
+        </div>
       ) : null}
     </section>
   );
