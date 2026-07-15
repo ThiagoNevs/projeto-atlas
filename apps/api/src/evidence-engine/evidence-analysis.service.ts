@@ -48,6 +48,7 @@ export class EvidenceAnalysisService {
 
     if (!asset) throw new NotFoundException(`Asset ${assetId} was not found.`);
 
+    const referenceTime = new Date();
     const candidatesByAttribute = new Map<string, EvidenceCandidate[]>();
     for (const attribute of asset.attributes) {
       const key = normalizeAttributeKey(attribute.key);
@@ -87,12 +88,15 @@ export class EvidenceAnalysisService {
           const currentCandidates = candidates.filter((candidate) => candidate.isCurrent);
           const currentValue = this.resolvePersistedCurrentValue(currentCandidates);
 
-          return this.evidenceEngine.analyze({
-            attribute,
-            currentValue: currentValue?.value ?? null,
-            normalizedCurrentValue: currentValue?.normalizedValue ?? null,
-            candidates,
-          });
+          return this.evidenceEngine.analyze(
+            {
+              attribute,
+              currentValue: currentValue?.value ?? null,
+              normalizedCurrentValue: currentValue?.normalizedValue ?? null,
+              candidates,
+            },
+            referenceTime,
+          );
         }),
     };
   }

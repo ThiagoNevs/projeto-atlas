@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { AttributeAnalysis } from './types/attribute-analysis';
 import { EvidenceCandidate } from './types/evidence-candidate';
+import { ShadowDecisionPolicy } from './shadow-decision.policy';
 
 export interface AttributeAnalysisInput {
   attribute: string;
@@ -12,7 +13,11 @@ export interface AttributeAnalysisInput {
 
 @Injectable()
 export class EvidenceEngineService {
-  analyze(input: AttributeAnalysisInput): AttributeAnalysis {
+  constructor(
+    private readonly shadowDecisionPolicy: ShadowDecisionPolicy = new ShadowDecisionPolicy(),
+  ) {}
+
+  analyze(input: AttributeAnalysisInput, referenceTime = new Date()): AttributeAnalysis {
     const orderedCandidates = [...input.candidates].sort((left, right) => {
       if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
 
@@ -79,7 +84,7 @@ export class EvidenceEngineService {
       );
     const limitations = [
       'A análise opera em modo sombra e não altera o valor persistido.',
-      'Nenhum algoritmo de decisão ou ranking de fontes foi executado.',
+      'A recomendação simulada usa uma política explícita e não representa uma decisão aplicada.',
       'O score de confiança exibido é o valor legado persistido no atributo atual.',
       'Nenhuma política de Trust Score por fonte está ativa.',
     ];
@@ -141,6 +146,12 @@ export class EvidenceEngineService {
         supportingEvidenceCount: supportingEvidenceIds.size,
         limitations,
       },
+      shadowDecision: this.shadowDecisionPolicy.evaluate({
+        currentValue: input.currentValue,
+        normalizedCurrentValue: input.normalizedCurrentValue,
+        candidates: orderedCandidates,
+        referenceTime,
+      }),
     };
   }
 

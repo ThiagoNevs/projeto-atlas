@@ -94,7 +94,9 @@ Mostre:
 - estados operacional e administrativo;
 - atributos normalizados;
 - Proveniência dos dados em modo sombra, diferenciando valor atual de origem comprovada;
-- candidatos atuais e históricos, fontes, timestamps e limitações sem ranking automático;
+- candidatos atuais e históricos, fontes, timestamps e limitações;
+- política `2026-07-v1` no backend, que simula uma recomendação explicável sem persistir decisão
+  (a apresentação visual da recomendação fica para uma evolução posterior);
 - interfaces de rede;
 - evidências brutas;
 - timeline ordenada.
