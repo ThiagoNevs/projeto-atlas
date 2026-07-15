@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/evidence-provenance.test.ts",
+    "test": "node --test --experimental-loader ./test/typescript-loader.mjs --disable-warning=ExperimentalWarning src/lib/evidence-provenance.test.ts src/components/evidence-provenance-section.test.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,11 +17,13 @@
     "react-dom": "19.2.7"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^22.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.39.0",
     "eslint-config-next": "16.2.10",
+    "jsdom": "^29.1.1",
     "typescript": "^5.9.3"
   }
 }

@@ -26,9 +26,15 @@ import {
 import { formatDateTime } from '@/lib/format';
 import { getAttributeLabel, getEvidenceTypeLabel } from '@/lib/labels';
 
+export type EvidenceProvenanceLoader = (
+  assetId: string,
+  options?: { signal?: AbortSignal },
+) => Promise<AssetEvidenceAnalysisResponse>;
+
 type EvidenceProvenanceSectionProps = {
   assetId: string;
   refreshKey?: number;
+  loader?: EvidenceProvenanceLoader;
 };
 
 function formatProvenanceDate(value: string | null): string {
@@ -214,6 +220,7 @@ function AttributeAnalysis({ analysis }: { analysis: AttributeEvidenceAnalysis }
 export function EvidenceProvenanceSection({
   assetId,
   refreshKey = 0,
+  loader = getAssetEvidenceAnalysis,
 }: EvidenceProvenanceSectionProps) {
   const [retryVersion, setRetryVersion] = useState(0);
   const requestKey = `${assetId}:${refreshKey}:${retryVersion}`;
@@ -229,7 +236,7 @@ export function EvidenceProvenanceSection({
     const controller = new AbortController();
     currentRequestKey.current = requestKey;
 
-    void getAssetEvidenceAnalysis(assetId, { signal: controller.signal })
+    void loader(assetId, { signal: controller.signal })
       .then((analysis) => {
         if (
           canApplyProvenanceResult({
@@ -263,7 +270,7 @@ export function EvidenceProvenanceSection({
       active = false;
       controller.abort();
     };
-  }, [assetId, requestKey]);
+  }, [assetId, loader, requestKey]);
 
   const loading = result.requestKey !== requestKey;
   const response = loading ? null : result.response;
