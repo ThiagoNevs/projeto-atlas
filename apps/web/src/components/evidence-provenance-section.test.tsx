@@ -565,6 +565,43 @@ test('critérios são expansíveis por botão semântico com aria-expanded', asy
   });
 });
 
+test('data futura mantém zero ponto de recência e limitação explícita', async () => {
+  await withComponentHarness(async ({ container, environment, render }) => {
+    const decision = shadowDecision({
+      assessments: [
+        shadowAssessment({
+          criteria: [
+            {
+              criterion: 'RECENCY',
+              result: 'NEUTRAL',
+              points: 0,
+              explanation: 'A data de observação está no futuro e recebeu zero ponto de recência.',
+            },
+          ],
+          limitations: ['A data de observação está no futuro e não recebeu vantagem de recência.'],
+        }),
+      ],
+    });
+    await renderShadowDecision({ container, render }, decision);
+    const button = [...container.querySelectorAll('button')].find((item) =>
+      item.textContent?.includes('Ver critérios e limitações'),
+    );
+    assert.ok(button);
+
+    await act(async () => {
+      button.dispatchEvent(
+        new environment.window.MouseEvent('click', { bubbles: true, cancelable: true }),
+      );
+      await flushMicrotasks();
+    });
+
+    assert.ok(containsText(container, 'Recência da evidência'));
+    assert.ok(containsText(container, 'Neutro'));
+    assert.ok(containsText(container, '0 pontos'));
+    assert.ok(containsText(container, 'não recebeu vantagem de recência'));
+  });
+});
+
 test('explicações e limitações da decisão aparecem em blocos distintos', async () => {
   await withComponentHarness(async ({ container, render }) => {
     const decision = shadowDecision({
