@@ -87,6 +87,14 @@ prioridade da política, nunca como confiança ou probabilidade. Fontes manuais,
 desconhecidas recebem identificação explícita, e falhas da análise permanecem isoladas das demais
 informações do ativo. A recomendação continua somente leitura e nenhuma decisão é persistida.
 
+### Análise de conflitos de identidade e rede
+
+O backend expõe `GET /assets/:id/conflict-analysis` com a política determinística
+`2026-07-conflict-v1`. Em modo sombra, a consulta identifica possíveis hostnames duplicados, IP
+compartilhado por hostnames diferentes e divergência de hostname no mesmo ativo. Os achados são
+explicáveis, temporários e somente leitura: nenhum conflito formal, decisão, mesclagem ou alteração
+do inventário é persistida. A fila operacional e a resolução humana auditada permanecem futuras.
+
 ### Tipos compartilhados
 
 Existe `packages/shared`, mas alguns enums e contratos ainda são reproduzidos manualmente no

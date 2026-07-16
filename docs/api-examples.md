@@ -657,3 +657,37 @@ Trust Score da fonte ainda não é calculado e, portanto, é retornado como `nul
 decisão, não foi calculado pelo Evidence Engine e não altera dados persistidos. `policyScore` é
 somente a prioridade da política versionada, não probabilidade, certeza, Trust Score ou Confidence
 Score. Consulte `docs/evidence-engine.md` para os critérios e limitações completos.
+
+## Análise de conflitos de identidade e rede
+
+```powershell
+curl.exe http://localhost:3001/assets/ASSET_ID/conflict-analysis
+```
+
+O endpoint executa a política determinística `2026-07-conflict-v1` em modo `SHADOW`. Ele procura
+hostname normalizado repetido entre ativos, IP compartilhado por hostnames diferentes e divergência
+de hostname dentro do mesmo ativo. A resposta contém somente achados derivados em memória:
+
+```json
+{
+  "assetId": "ASSET_ID",
+  "mode": "SHADOW",
+  "policyVersion": "2026-07-conflict-v1",
+  "summary": {
+    "totalFindings": 1,
+    "requiresHumanReview": 1
+  },
+  "findings": [
+    {
+      "type": "SHARED_IP_DIFFERENT_HOSTNAMES",
+      "normalizedIp": "10.20.30.15",
+      "requiresHumanReview": true,
+      "reviewOptions": ["DIFFERENT_ASSETS", "IP_REUSED", "NEEDS_MORE_EVIDENCE"]
+    }
+  ],
+  "decisionsChanged": false
+}
+```
+
+IP não é identidade absoluta. A análise não cria um `Conflict`, não atualiza ativos e não aplica
+nenhuma opção de revisão. Consulte `docs/identity-network-conflict-analysis.md`.
