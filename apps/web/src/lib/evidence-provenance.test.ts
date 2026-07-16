@@ -13,11 +13,17 @@ import {
   abbreviateEvidenceId,
   canApplyProvenanceResult,
   formatProvenanceValue,
+  formatPolicyScore,
+  formatShadowValue,
   formatSupportingEvidence,
   formatTrustScore,
   getProvenanceErrorMessage,
   getProvenancePresentation,
   getSourcePresentation,
+  getShadowCriterionLabel,
+  getShadowCriterionResultLabel,
+  getShadowDecisionPresentation,
+  getShadowDivergenceLabel,
   parseEvidenceAnalysisResponse,
   PERSISTED_SCORE_EXPLANATION,
   resolveProvenanceSectionState,
@@ -27,6 +33,9 @@ import {
   type AttributeEvidenceAnalysis,
   type EvidenceAnalysisCandidate,
   type EvidenceSourceKind,
+  type ShadowCandidateAssessment,
+  type ShadowDecision,
+  type ShadowDecisionStatus,
 } from './evidence-provenance.ts';
 
 function candidate(
@@ -76,6 +85,53 @@ function analysis(
       supportingEvidenceCount: 1,
       limitations: ['A análise opera em modo sombra.'],
     },
+    ...overrides,
+  };
+}
+
+function shadowAssessment(
+  overrides: Partial<ShadowCandidateAssessment> = {},
+): ShadowCandidateAssessment {
+  return {
+    candidateId: 'attribute-current',
+    value: 'Windows 11',
+    normalizedValue: 'windows 11',
+    evidenceId: '00000000-0000-4000-8000-000000000001',
+    sourceType: 'TECHNICAL',
+    eligible: true,
+    policyScore: 95,
+    criteria: [
+      {
+        criterion: 'SOURCE_TYPE',
+        result: 'POSITIVE',
+        points: 40,
+        explanation: 'A fonte técnica recebeu 40 pontos.',
+      },
+    ],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function shadowDecision(overrides: Partial<ShadowDecision> = {}): ShadowDecision {
+  return {
+    mode: 'SHADOW',
+    status: 'CURRENT_VALUE_CONFIRMED',
+    currentValue: 'Windows 11',
+    recommendedCandidate: {
+      value: 'Windows 11',
+      normalizedValue: 'windows 11',
+      policyScore: 95,
+      supportingCandidateIds: ['attribute-current'],
+      supportingEvidenceIds: ['00000000-0000-4000-8000-000000000001'],
+    },
+    divergesFromCurrentValue: false,
+    assessments: [shadowAssessment()],
+    tiedValues: [],
+    explanation: ['A política recomendaria manter o valor atual.'],
+    limitations: ['Nenhuma decisão foi aplicada.'],
+    policyVersion: '2026-07-v1',
+    scoreMeaning: 'Prioridade definida pela política, não probabilidade de correção.',
     ...overrides,
   };
 }
@@ -372,6 +428,287 @@ test('resposta antiga ou cancelada não pode substituir a requisição atual', (
 
 test('aceita a resposta real esperada para um ativo existente', () => {
   assert.deepEqual(parseEvidenceAnalysisResponse(response()), response());
+});
+
+test('aceita e preserva o contrato completo de shadowDecision', () => {
+  const decision = shadowDecision();
+  const parsed = parseEvidenceAnalysisResponse(
+    response([analysis({ shadowDecision: decision })]),
+  );
+
+  assert.deepEqual(parsed?.analyses[0]?.shadowDecision, decision);
+});
+
+test('mantém compatibilidade com respostas anteriores sem shadowDecision', () => {
+  const parsed = parseEvidenceAnalysisResponse(response());
+  assert.equal(parsed?.analyses[0]?.shadowDecision, undefined);
+});
+
+for (const status of [
+  'CURRENT_VALUE_CONFIRMED',
+  'RECOMMENDED',
+  'TIED',
+  'INSUFFICIENT_EVIDENCE',
+  'NO_CURRENT_VALUE',
+  'NO_CANDIDATES',
+] as ShadowDecisionStatus[]) {
+  test(`aceita o status real de decisão ${status}`, () => {
+    const parsed = parseEvidenceAnalysisResponse(
+      response([analysis({ shadowDecision: shadowDecision({ status }) })]),
+    );
+    assert.equal(parsed?.analyses[0]?.shadowDecision?.status, status);
+    assert.ok(getShadowDecisionPresentation(status).label.length > 0);
+  });
+}
+
+test('preserva recommendedCandidate presente e nulo sem confundir com selectedCandidate', () => {
+  const withRecommendation = parseEvidenceAnalysisResponse(
+    response([analysis({ shadowDecision: shadowDecision() })]),
+  );
+  const withoutRecommendation = parseEvidenceAnalysisResponse(
+    response([
+      analysis({
+        shadowDecision: shadowDecision({
+          status: 'INSUFFICIENT_EVIDENCE',
+          recommendedCandidate: null,
+        }),
+      }),
+    ]),
+  );
+
+  assert.equal(
+    withRecommendation?.analyses[0]?.shadowDecision?.recommendedCandidate?.normalizedValue,
+    'windows 11',
+  );
+  assert.equal(withoutRecommendation?.analyses[0]?.shadowDecision?.recommendedCandidate, null);
+  assert.equal(withRecommendation?.analyses[0]?.selectedCandidate?.attributeId, 'attribute-current');
+});
+
+for (const divergence of [true, false, null] as Array<boolean | null>) {
+  test(`preserva divergência ${String(divergence)}`, () => {
+    const parsed = parseEvidenceAnalysisResponse(
+      response([
+        analysis({
+          shadowDecision: shadowDecision({ divergesFromCurrentValue: divergence }),
+        }),
+      ]),
+    );
+    assert.equal(
+      parsed?.analyses[0]?.shadowDecision?.divergesFromCurrentValue,
+      divergence,
+    );
+  });
+}
+
+test('preserva policyScore numérico e null sem recalcular critérios', () => {
+  const decision = shadowDecision({
+    assessments: [
+      shadowAssessment({ policyScore: 77 }),
+      shadowAssessment({ candidateId: 'ineligible', policyScore: null, eligible: false }),
+    ],
+  });
+  const parsed = parseEvidenceAnalysisResponse(
+    response([analysis({ shadowDecision: decision })]),
+  );
+
+  assert.deepEqual(
+    parsed?.analyses[0]?.shadowDecision?.assessments.map((item) => item.policyScore),
+    [77, null],
+  );
+  assert.equal(formatPolicyScore(null), 'Não aplicável');
+});
+
+test('preserva tiedValues na ordem retornada pelo backend', () => {
+  const decision = shadowDecision({
+    status: 'TIED',
+    recommendedCandidate: null,
+    divergesFromCurrentValue: null,
+    tiedValues: [
+      {
+        value: 'Windows 10',
+        normalizedValue: 'windows 10',
+        policyScore: 90,
+        supportingCandidateIds: ['a'],
+      },
+      {
+        value: 'Windows 11',
+        normalizedValue: 'windows 11',
+        policyScore: 90,
+        supportingCandidateIds: ['b'],
+      },
+    ],
+  });
+  const parsed = parseEvidenceAnalysisResponse(
+    response([analysis({ shadowDecision: decision })]),
+  );
+
+  assert.deepEqual(
+    parsed?.analyses[0]?.shadowDecision?.tiedValues.map((item) => item.normalizedValue),
+    ['windows 10', 'windows 11'],
+  );
+});
+
+test('preserva assessments elegíveis, inelegíveis, critérios, pontos e explicações', () => {
+  const decision = shadowDecision({
+    assessments: [
+      shadowAssessment(),
+      shadowAssessment({
+        candidateId: 'simulated',
+        sourceType: 'SIMULATED',
+        eligible: false,
+        policyScore: null,
+        criteria: [
+          {
+            criterion: 'SOURCE_TYPE',
+            result: 'NEGATIVE',
+            points: 0,
+            explanation: 'A fonte simulada é inelegível.',
+          },
+        ],
+        limitations: ['A fonte simulada não recomenda alteração em dados reais.'],
+      }),
+    ],
+  });
+  const parsed = parseEvidenceAnalysisResponse(
+    response([analysis({ shadowDecision: decision })]),
+  );
+  const assessments = parsed?.analyses[0]?.shadowDecision?.assessments;
+
+  assert.equal(assessments?.[0]?.eligible, true);
+  assert.equal(assessments?.[1]?.eligible, false);
+  assert.deepEqual(assessments?.[1]?.criteria[0], decision.assessments[1]?.criteria[0]);
+  assert.equal(getShadowCriterionLabel('SOURCE_TYPE'), 'Tipo da fonte');
+  assert.equal(getShadowCriterionResultLabel('NEGATIVE'), 'Não contribuiu');
+});
+
+test('valor normalizado null fica inelegível e não recebe score numérico', () => {
+  const parsed = parseEvidenceAnalysisResponse(
+    response([
+      analysis({
+        shadowDecision: shadowDecision({
+          status: 'INSUFFICIENT_EVIDENCE',
+          recommendedCandidate: null,
+          assessments: [
+            shadowAssessment({
+              value: '   ',
+              normalizedValue: null,
+              eligible: false,
+              policyScore: null,
+            }),
+          ],
+        }),
+      }),
+    ]),
+  );
+  const empty = parsed?.analyses[0]?.shadowDecision?.assessments[0];
+
+  assert.equal(empty?.normalizedValue, null);
+  assert.equal(empty?.eligible, false);
+  assert.equal(empty?.policyScore, null);
+  assert.equal(formatShadowValue(empty?.normalizedValue), 'Sem valor válido');
+});
+
+test('zero e falso permanecem valores válidos sem avaliação por truthiness', () => {
+  assert.equal(formatShadowValue(0), '0');
+  assert.equal(formatShadowValue(false), 'false');
+  assert.equal(formatShadowValue('0'), '0');
+  assert.equal(formatShadowValue('false'), 'false');
+
+  const parsed = parseEvidenceAnalysisResponse(
+    response([
+      analysis({
+        shadowDecision: shadowDecision({
+          currentValue: false,
+          assessments: [shadowAssessment({ value: 0, normalizedValue: '0' })],
+        }),
+      }),
+    ]),
+  );
+  assert.equal(parsed?.analyses[0]?.shadowDecision?.currentValue, false);
+  assert.equal(parsed?.analyses[0]?.shadowDecision?.assessments[0]?.value, 0);
+});
+
+test('descarta campos desconhecidos e payload bruto dentro de shadowDecision', () => {
+  const unsafeAssessment = {
+    ...shadowAssessment(),
+    rawPayload: { secret: 'não deve chegar à interface' },
+    fingerprint: 'interno',
+  };
+  const unsafeDecision = {
+    ...shadowDecision({ assessments: [unsafeAssessment] }),
+    rawPayload: { internal: true },
+  };
+  const parsed = parseEvidenceAnalysisResponse(
+    response([
+      analysis({ shadowDecision: unsafeDecision as unknown as ShadowDecision }),
+    ]),
+  );
+  const sanitizedDecision = parsed?.analyses[0]?.shadowDecision;
+  const sanitizedAssessment = sanitizedDecision?.assessments[0] ?? {};
+
+  assert.equal('rawPayload' in (sanitizedDecision ?? {}), false);
+  assert.equal('rawPayload' in sanitizedAssessment, false);
+  assert.equal('fingerprint' in sanitizedAssessment, false);
+});
+
+test('rejeita shadowDecision inválido sem aceitar status ou critério inventado', () => {
+  const invalidStatus = {
+    ...shadowDecision(),
+    status: 'APPLIED',
+  };
+  const invalidCriterion = shadowDecision({
+    assessments: [
+      shadowAssessment({
+        criteria: [
+          {
+            criterion: 'MAGIC_SCORE' as never,
+            result: 'POSITIVE',
+            points: 100,
+            explanation: 'Inválido.',
+          },
+        ],
+      }),
+    ],
+  });
+
+  assert.equal(
+    parseEvidenceAnalysisResponse(
+      response([analysis({ shadowDecision: invalidStatus as unknown as ShadowDecision })]),
+    ),
+    null,
+  );
+  assert.equal(
+    parseEvidenceAnalysisResponse(
+      response([analysis({ shadowDecision: invalidCriterion })]),
+    ),
+    null,
+  );
+});
+
+test('rejeita assessment que apresenta fonte inelegível ou valor vazio como elegível', () => {
+  const simulatedEligible = shadowDecision({
+    assessments: [
+      shadowAssessment({ sourceType: 'SIMULATED', eligible: true, policyScore: 95 }),
+    ],
+  });
+  const emptyEligible = shadowDecision({
+    assessments: [
+      shadowAssessment({ value: '  ', normalizedValue: null, eligible: true, policyScore: 95 }),
+    ],
+  });
+
+  for (const invalid of [simulatedEligible, emptyEligible]) {
+    assert.equal(
+      parseEvidenceAnalysisResponse(response([analysis({ shadowDecision: invalid })])),
+      null,
+    );
+  }
+});
+
+test('mapeia a comparação sem transformar ausência em divergência', () => {
+  assert.equal(getShadowDivergenceLabel(true), 'Diverge do valor persistido');
+  assert.equal(getShadowDivergenceLabel(false), 'Equivalente ao valor persistido');
+  assert.equal(getShadowDivergenceLabel(null), 'Comparação não disponível');
 });
 
 test('rejeita modo diferente de SHADOW', () => {

@@ -13,6 +13,14 @@ export type {
   EvidenceAnalysisSource,
   EvidenceExplanationStatus,
   EvidenceSourceKind,
+  ShadowCandidateAssessment,
+  ShadowCriterion,
+  ShadowCriterionResult,
+  ShadowCriterionResultKind,
+  ShadowDecision,
+  ShadowDecisionStatus,
+  ShadowRecommendedCandidate,
+  ShadowTiedValue,
 } from './evidence-provenance';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';

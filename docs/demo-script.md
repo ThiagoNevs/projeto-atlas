@@ -93,10 +93,10 @@ Mostre:
 - ID Atlas e identificação atual;
 - estados operacional e administrativo;
 - atributos normalizados;
-- Proveniência dos dados em modo sombra, diferenciando valor atual de origem comprovada;
+- Proveniência dos dados em modo sombra, diferenciando valor atual, origem comprovada e recomendação simulada;
 - candidatos atuais e históricos, fontes, timestamps e limitações;
-- política `2026-07-v1` no backend, que simula uma recomendação explicável sem persistir decisão
-  (a apresentação visual da recomendação fica para uma evolução posterior);
+- política `2026-07-v1`, com status, critérios, elegibilidade, empates e pontuação de prioridade
+  explicados na interface sem persistir decisão ou tratar a pontuação como confiança;
 - interfaces de rede;
 - evidências brutas;
 - timeline ordenada.
@@ -104,7 +104,9 @@ Mostre:
 Em `VM-WEB-02`, explique como uma mudança de hostname gera histórico sem apagar o valor
 anterior. Expanda a proveniência do hostname para mostrar a evidência diretamente vinculada, o
 histórico divergente, o Trust Score ainda não definido e o score persistido como valor legado — não
-como confiança calculada pelo motor. Em `SRV-DB-01`, use a mudança de IP para ilustrar a evolução da
+como confiança calculada pelo motor. Expanda também a recomendação em modo sombra para mostrar que
+o valor recomendado permanece separado do valor atual, que candidatos inelegíveis continuam
+visíveis e que nenhuma alteração foi aplicada. Em `SRV-DB-01`, use a mudança de IP para ilustrar a evolução da
 interface; IP ainda não faz parte da análise de proveniência desta etapa.
 
 ## 5. Alteração administrativa auditável — 1 minuto
