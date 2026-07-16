@@ -93,7 +93,9 @@ O backend expõe `GET /assets/:id/conflict-analysis` com a política determinís
 `2026-07-conflict-v1`. Em modo sombra, a consulta identifica possíveis hostnames duplicados, IP
 compartilhado por hostnames diferentes e divergência de hostname no mesmo ativo. Os achados são
 explicáveis, temporários e somente leitura: nenhum conflito formal, decisão, mesclagem ou alteração
-do inventário é persistida. A fila operacional e a resolução humana auditada permanecem futuras.
+do inventário é persistida. `GET /conflict-analysis/findings` acrescenta uma visão global paginada,
+filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mesma política. A interface,
+a fila operacional e a resolução humana auditada permanecem futuras.
 
 ### Tipos compartilhados
 

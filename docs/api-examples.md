@@ -691,3 +691,24 @@ de hostname dentro do mesmo ativo. A resposta contém somente achados derivados 
 
 IP não é identidade absoluta. A análise não cria um `Conflict`, não atualiza ativos e não aplica
 nenhuma opção de revisão. Consulte `docs/identity-network-conflict-analysis.md`.
+
+### Inventário agregado de achados
+
+```powershell
+curl.exe "http://localhost:3001/conflict-analysis/findings?page=1&pageSize=25"
+```
+
+Exemplos de filtros e ordenação:
+
+```powershell
+curl.exe "http://localhost:3001/conflict-analysis/findings?type=DUPLICATE_HOSTNAME_ACROSS_ASSETS&sortBy=observationCount&sortDirection=desc"
+curl.exe "http://localhost:3001/conflict-analysis/findings?hostname=SRV-APP-01&hasLimitations=true"
+curl.exe "http://localhost:3001/conflict-analysis/findings?ip=10.20.30.15&sourceType=TECHNICAL"
+curl.exe "http://localhost:3001/conflict-analysis/findings?assetId=ASSET_UUID&temporalRelationship=DISTINCT_OBSERVATION_TIMES"
+```
+
+A resposta contém `mode: SHADOW`, a versão `2026-07-conflict-v1`, paginação, filtros normalizados,
+resumo do conjunto filtrado antes da paginação e itens compactos deduplicados globalmente. O mesmo
+achado aparece uma vez, ainda que envolva vários ativos. A consulta não cria conflito formal, fila,
+auditoria, evento ou decisão e não altera o inventário. O detalhe permanece em
+`GET /assets/:id/conflict-analysis`.
