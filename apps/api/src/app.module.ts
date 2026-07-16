@@ -4,6 +4,7 @@ import { HealthController } from './health.controller';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AssetsModule } from './assets/assets.module';
 import { ConflictsModule } from './conflicts/conflicts.module';
+import { ConflictAnalysisModule } from './conflict-analysis/conflict-analysis.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DataQualityModule } from './data-quality/data-quality.module';
 import { DataSourcesModule } from './data-sources/data-sources.module';
@@ -23,6 +24,7 @@ import { TimelineModule } from './timeline/timeline.module';
     EvidenceEngineModule,
     TimelineModule,
     ConflictsModule,
+    ConflictAnalysisModule,
     NetworkDiscoveryModule,
     DashboardModule,
     AuditLogsModule,

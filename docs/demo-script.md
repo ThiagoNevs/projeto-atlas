@@ -153,6 +153,11 @@ Explique que um conflito de ciclo de vida não pode ser marcado como resolvido e
 continua administrativamente encerrado. Nesse caso, as opções coerentes são investigar, ignorar
 com justificativa ou registrar exceção.
 
+Como extensão técnica opcional, explique que o backend já consegue apontar em modo sombra possíveis
+hostnames duplicados, IP compartilhado por hostnames diferentes e divergências históricas. Essa
+análise não cria conflito formal nem decide se houve duplicidade, mudança de hostname ou
+reutilização de IP; uma fila operacional será construída em etapa futura.
+
 ## 8. Busca, filtros e paginação — 1 minuto
 
 Volte para `/assets`.
