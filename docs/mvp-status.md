@@ -38,7 +38,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Download dos relatórios CSV da análise e do resultado final da importação, gerados em memória e protegidos contra CSV Injection.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
-- Seção de Proveniência dos dados no detalhe do ativo, com modo sombra, origem, candidatos, histórico, timestamps separados e limitações explícitas.
+- Seção de Proveniência dos dados no detalhe do ativo, com modo sombra, origem, candidatos, histórico, timestamps separados, limitações explícitas e recomendação simulada apresentada sem alterar o valor persistido.
 - Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.
 - Suíte E2E integrada ao PostgreSQL.
 
@@ -80,10 +80,12 @@ com evidência disponível e valor correspondente; ausência de evidência ou m�
 `null` e uma limitação explícita. Evidências históricas conflitantes não aumentam a contagem de
 suporte. Datas de observação do atributo e da evidência são expostas separadamente, e o score legado
 é identificado como `persistedConfidenceScore`. Trust Score permanece `null`. A página de detalhe do
-ativo representa a proveniência em português, sem recalcular regras no frontend: valor atual e
-proveniência comprovada aparecem como conceitos distintos, fontes manuais, simuladas, técnicas e
+ativo representa a proveniência em português, sem recalcular regras no frontend: valor atual,
+proveniência comprovada e recomendação simulada aparecem como conceitos distintos. A interface
+apresenta status, empates, inelegibilidades, critérios, explicações e a pontuação apenas como
+prioridade da política, nunca como confiança ou probabilidade. Fontes manuais, simuladas, técnicas e
 desconhecidas recebem identificação explícita, e falhas da análise permanecem isoladas das demais
-informações do ativo. A recomendação simulada ainda não é exibida no frontend nesta entrega.
+informações do ativo. A recomendação continua somente leitura e nenhuma decisão é persistida.
 
 ### Tipos compartilhados
 

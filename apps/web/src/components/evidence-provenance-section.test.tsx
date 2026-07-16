@@ -14,6 +14,8 @@ import {
   type AssetEvidenceAnalysisResponse,
   type AttributeEvidenceAnalysis,
   type EvidenceAnalysisCandidate,
+  type ShadowCandidateAssessment,
+  type ShadowDecision,
 } from '../lib/api.ts';
 import {
   createJsdomTestEnvironment,
@@ -114,6 +116,70 @@ function analysis(assetId: string, currentValue: string): AttributeEvidenceAnaly
   };
 }
 
+function shadowAssessment(
+  overrides: Partial<ShadowCandidateAssessment> = {},
+): ShadowCandidateAssessment {
+  return {
+    candidateId: 'candidate-technical',
+    value: 'Windows 11',
+    normalizedValue: 'windows 11',
+    evidenceId: 'evidence-technical',
+    sourceType: 'TECHNICAL',
+    eligible: true,
+    policyScore: 95,
+    criteria: [
+      {
+        criterion: 'SOURCE_TYPE',
+        result: 'POSITIVE',
+        points: 40,
+        explanation: 'A fonte técnica recebeu 40 pontos.',
+      },
+      {
+        criterion: 'RECENCY',
+        result: 'POSITIVE',
+        points: 30,
+        explanation: 'A evidência está dentro da faixa de até 30 dias.',
+      },
+    ],
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function shadowDecision(overrides: Partial<ShadowDecision> = {}): ShadowDecision {
+  return {
+    mode: 'SHADOW',
+    status: 'CURRENT_VALUE_CONFIRMED',
+    currentValue: 'Windows 11',
+    recommendedCandidate: {
+      value: 'Windows 11',
+      normalizedValue: 'windows 11',
+      policyScore: 95,
+      supportingCandidateIds: ['candidate-technical'],
+      supportingEvidenceIds: ['evidence-technical'],
+    },
+    divergesFromCurrentValue: false,
+    assessments: [shadowAssessment()],
+    tiedValues: [],
+    explanation: ['A política recomendaria manter o valor atual.'],
+    limitations: ['Nenhuma decisão foi aplicada.'],
+    policyVersion: '2026-07-v1',
+    scoreMeaning: 'A pontuação representa prioridade e não probabilidade de correção.',
+    ...overrides,
+  };
+}
+
+function analysisWithShadow(
+  assetId: string,
+  currentValue: string,
+  decision: ShadowDecision,
+): AttributeEvidenceAnalysis {
+  return {
+    ...analysis(assetId, currentValue),
+    shadowDecision: decision,
+  };
+}
+
 function responseFor(
   assetId: string,
   currentValue: string,
@@ -146,7 +212,7 @@ function createControlledLoader(): {
   return { loader, calls };
 }
 
-function containsText(container: HTMLElement, text: string): boolean {
+function containsText(container: Node, text: string): boolean {
   return container.textContent?.includes(text) ?? false;
 }
 
@@ -167,6 +233,26 @@ async function rejectInsideAct<T>(request: Deferred<T>, reason: unknown): Promis
     request.reject(reason);
     await flushMicrotasks();
   });
+}
+
+async function renderShadowDecision(
+  harness: Pick<ComponentHarness, 'container' | 'render'>,
+  decision: ShadowDecision,
+  currentValue = 'Windows 11',
+): Promise<void> {
+  const controlled = createControlledLoader();
+  const assetId = `asset-shadow-${decision.status.toLowerCase()}`;
+
+  await harness.render(
+    createElement(EvidenceProvenanceSection, {
+      assetId,
+      loader: controlled.loader,
+    }),
+  );
+  await resolveInsideAct(
+    controlled.calls[0]!.request,
+    responseFor(assetId, currentValue, [analysisWithShadow(assetId, currentValue, decision)]),
+  );
 }
 
 async function withComponentHarness(
@@ -259,6 +345,274 @@ test('monta o componente real, transita de loading para ready e limpa sem warnin
     assert.ok(containsText(container, 'HOST-SUCCESS'));
     assert.ok(containsText(container, 'Modo sombra'));
     assert.ok(containsText(container, 'Evidência diretamente vinculada'));
+  });
+});
+
+test('CURRENT_VALUE_CONFIRMED apresenta manutenção do atual sem afirmar verdade', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    await renderShadowDecision({ container, render }, shadowDecision());
+
+    assert.ok(containsText(container, 'Recomendação em modo sombra'));
+    assert.ok(containsText(container, 'A política recomendaria manter o valor atual'));
+    assert.ok(containsText(container, 'Equivalente ao valor persistido'));
+    assert.ok(containsText(container, 'Esta recomendação foi calculada pela política 2026-07-v1'));
+    assert.equal(containsText(container, 'valor correto'), false);
+  });
+});
+
+test('RECOMMENDED mantém valor atual e recomendado separados sem aplicar alteração', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      status: 'RECOMMENDED',
+      currentValue: 'Windows 10',
+      recommendedCandidate: {
+        value: 'Windows 11',
+        normalizedValue: 'windows 11',
+        policyScore: 90,
+        supportingCandidateIds: ['candidate-technical'],
+        supportingEvidenceIds: ['evidence-technical'],
+      },
+      divergesFromCurrentValue: true,
+      explanation: ['A recomendação diverge, mas nenhuma alteração foi aplicada.'],
+    });
+    await renderShadowDecision({ container, render }, decision, 'Windows 10');
+
+    const comparison = container.querySelector('.shadow-value-comparison');
+    assert.ok(comparison);
+    assert.ok(containsText(comparison, 'Valor atual'));
+    assert.ok(containsText(comparison, 'Windows 10'));
+    assert.ok(containsText(comparison, 'Valor recomendado pela política'));
+    assert.ok(containsText(comparison, 'Windows 11'));
+    assert.ok(containsText(comparison, 'Diverge do valor persistido'));
+    assert.ok(containsText(container, 'não alterou o valor persistido'));
+  });
+});
+
+test('TIED apresenta todos os valores empatados e nenhuma recomendação', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      status: 'TIED',
+      recommendedCandidate: null,
+      divergesFromCurrentValue: null,
+      tiedValues: [
+        {
+          value: 'Windows 10',
+          normalizedValue: 'windows 10',
+          policyScore: 90,
+          supportingCandidateIds: ['candidate-a'],
+        },
+        {
+          value: 'Windows 11',
+          normalizedValue: 'windows 11',
+          policyScore: 90,
+          supportingCandidateIds: ['candidate-b'],
+        },
+      ],
+    });
+    await renderShadowDecision({ container, render }, decision);
+
+    assert.ok(containsText(container, 'Empate entre valores'));
+    assert.ok(containsText(container, 'Windows 10'));
+    assert.ok(containsText(container, 'Windows 11'));
+    assert.ok(containsText(container, 'Nenhuma recomendação produzida'));
+    assert.ok(containsText(container, 'não desempata por ordem, ID ou posição'));
+  });
+});
+
+test('INSUFFICIENT_EVIDENCE mantém fonte simulada visível e inelegível', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      status: 'INSUFFICIENT_EVIDENCE',
+      recommendedCandidate: null,
+      divergesFromCurrentValue: null,
+      assessments: [
+        shadowAssessment({
+          candidateId: 'candidate-simulated',
+          sourceType: 'SIMULATED',
+          eligible: false,
+          policyScore: null,
+          limitations: ['A fonte simulada não é elegível para recomendar alteração em dados reais.'],
+        }),
+      ],
+    });
+    await renderShadowDecision({ container, render }, decision);
+
+    assert.ok(containsText(container, 'Evidência insuficiente para recomendar'));
+    assert.ok(containsText(container, 'Simulada'));
+    assert.ok(containsText(container, 'Inelegível para recomendação'));
+    assert.ok(containsText(container, 'Não aplicável'));
+  });
+});
+
+test('fonte desconhecida permanece visível e inelegível', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      status: 'INSUFFICIENT_EVIDENCE',
+      recommendedCandidate: null,
+      assessments: [
+        shadowAssessment({
+          candidateId: 'candidate-unknown',
+          sourceType: 'UNKNOWN',
+          eligible: false,
+          policyScore: null,
+          limitations: ['A fonte desconhecida não é elegível.'],
+        }),
+      ],
+    });
+    await renderShadowDecision({ container, render }, decision);
+
+    assert.ok(containsText(container, 'Desconhecida'));
+    assert.ok(containsText(container, 'Inelegível para recomendação'));
+    assert.equal(containsText(container, 'Elegível para recomendação'), false);
+  });
+});
+
+test('valor vazio aparece como sem valor válido e nunca como recomendação', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      status: 'INSUFFICIENT_EVIDENCE',
+      currentValue: ' \t\n ',
+      recommendedCandidate: null,
+      divergesFromCurrentValue: null,
+      assessments: [
+        shadowAssessment({
+          value: ' \t\n ',
+          normalizedValue: null,
+          eligible: false,
+          policyScore: null,
+          limitations: ['O candidato não possui valor normalizado válido.'],
+        }),
+      ],
+    });
+    await renderShadowDecision({ container, render }, decision, 'Sem valor atual');
+
+    assert.ok(containsText(container, 'Sem valor válido'));
+    assert.ok(containsText(container, 'Não disponível'));
+    assert.ok(containsText(container, 'Nenhuma recomendação produzida'));
+    assert.ok(containsText(container.querySelector('.shadow-policy-score')!, 'Não aplicável'));
+    assert.equal(containsText(container.querySelector('.shadow-policy-score')!, '95'), false);
+  });
+});
+
+for (const [value, label] of [
+  [0, '0'],
+  [false, 'false'],
+] as Array<[number | boolean, string]>) {
+  test(`valor falsy ${label} é preservado na decisão`, async () => {
+    await withComponentHarness(async ({ container, render }) => {
+      const decision = shadowDecision({
+        status: 'CURRENT_VALUE_CONFIRMED',
+        currentValue: value,
+        recommendedCandidate: {
+          value,
+          normalizedValue: label,
+          policyScore: 80,
+          supportingCandidateIds: ['candidate-falsy'],
+          supportingEvidenceIds: ['evidence-falsy'],
+        },
+        assessments: [shadowAssessment({ value, normalizedValue: label })],
+      });
+      await renderShadowDecision({ container, render }, decision, label);
+
+      const comparison = container.querySelector('.shadow-value-comparison');
+      assert.ok(comparison);
+      assert.equal(
+        [...comparison.querySelectorAll('strong')].filter(
+          (element) => element.textContent?.trim() === label,
+        ).length,
+        2,
+      );
+    });
+  });
+}
+
+test('policyScore é exibido somente como prioridade e sem porcentagem', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    await renderShadowDecision({ container, render }, shadowDecision());
+    const policyScore = container.querySelector('.shadow-policy-score');
+
+    assert.ok(policyScore);
+    assert.ok(containsText(policyScore, 'Pontuação de prioridade da política'));
+    assert.ok(containsText(policyScore, 'não uma probabilidade, confiança ou certeza'));
+    assert.equal(policyScore.textContent?.includes('%'), false);
+    assert.equal(/Trust Score|Confidence Score/i.test(policyScore.textContent ?? ''), false);
+  });
+});
+
+test('critérios são expansíveis por botão semântico com aria-expanded', async () => {
+  await withComponentHarness(async ({ container, environment, render }) => {
+    await renderShadowDecision({ container, render }, shadowDecision());
+    const button = [...container.querySelectorAll('button')].find((item) =>
+      item.textContent?.includes('Ver critérios e limitações'),
+    );
+
+    assert.ok(button);
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(containsText(container, 'A fonte técnica recebeu 40 pontos.'), false);
+
+    await act(async () => {
+      button.dispatchEvent(
+        new environment.window.MouseEvent('click', { bubbles: true, cancelable: true }),
+      );
+      await flushMicrotasks();
+    });
+
+    assert.equal(button.getAttribute('aria-expanded'), 'true');
+    assert.ok(containsText(container, 'Tipo da fonte'));
+    assert.ok(containsText(container, 'Contribuiu'));
+    assert.ok(containsText(container, '40 pontos'));
+    assert.ok(containsText(container, 'A fonte técnica recebeu 40 pontos.'));
+  });
+});
+
+test('explicações e limitações da decisão aparecem em blocos distintos', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const decision = shadowDecision({
+      explanation: ['Explicação controlada da decisão.'],
+      limitations: ['Limitação controlada da decisão.'],
+    });
+    await renderShadowDecision({ container, render }, decision);
+
+    assert.ok(containsText(container, 'Por que a política chegou a este resultado'));
+    assert.ok(containsText(container, 'Explicação controlada da decisão.'));
+    assert.ok(containsText(container, 'Limitações da análise'));
+    assert.ok(containsText(container, 'Limitação controlada da decisão.'));
+  });
+});
+
+test('ausência de shadowDecision mantém a proveniência e informa indisponibilidade', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const controlled = createControlledLoader();
+    await render(
+      createElement(EvidenceProvenanceSection, {
+        assetId: 'asset-legacy-contract',
+        loader: controlled.loader,
+      }),
+    );
+    await resolveInsideAct(
+      controlled.calls[0]!.request,
+      responseFor('asset-legacy-contract', 'HOST-LEGACY'),
+    );
+
+    assert.ok(containsText(container, 'HOST-LEGACY'));
+    assert.ok(containsText(container, 'Evidência diretamente vinculada'));
+    assert.ok(
+      containsText(container, 'Decisão simulada ainda não disponível para este atributo.'),
+    );
+  });
+});
+
+test('payload bruto desconhecido não é renderizado pela decisão', async () => {
+  await withComponentHarness(async ({ container, render }) => {
+    const unsafeDecision = {
+      ...shadowDecision(),
+      rawPayload: 'SEGREDO-INTERNO',
+      fingerprint: 'FINGERPRINT-INTERNO',
+    } as ShadowDecision;
+    await renderShadowDecision({ container, render }, unsafeDecision);
+
+    assert.equal(containsText(container, 'SEGREDO-INTERNO'), false);
+    assert.equal(containsText(container, 'FINGERPRINT-INTERNO'), false);
   });
 });
 

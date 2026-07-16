@@ -1990,6 +1990,406 @@ input {
   line-height: 1.5;
 }
 
+.shadow-decision {
+  display: grid;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(197, 157, 255, 0.3);
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(80, 50, 122, 0.14), rgba(5, 12, 22, 0.42));
+  gap: 0.85rem;
+}
+
+.shadow-decision-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.shadow-decision-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.shadow-decision-heading h3,
+.shadow-assessments-section h4,
+.shadow-decision-notes h4 {
+  margin: 0;
+  color: #e7def7;
+  font-size: 0.78rem;
+}
+
+.shadow-decision-kicker {
+  color: #cdb1f7;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shadow-decision-warning,
+.shadow-decision-description {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.7rem;
+  line-height: 1.55;
+}
+
+.shadow-decision-warning {
+  padding: 0.7rem 0.8rem;
+  border-left: 3px solid #c59dff;
+  border-radius: 7px;
+  background: rgba(197, 157, 255, 0.08);
+  color: #e7d8fb;
+}
+
+.shadow-decision-description {
+  color: var(--muted);
+}
+
+.shadow-value-comparison {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.shadow-value-comparison > div {
+  display: grid;
+  min-width: 0;
+  padding: 0.75rem;
+  align-content: start;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: rgba(5, 12, 22, 0.42);
+  gap: 0.3rem;
+}
+
+.shadow-value-comparison span,
+.shadow-policy-score span,
+.shadow-assessment-summary span {
+  color: var(--faint);
+  font-size: 0.59rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.shadow-value-comparison strong {
+  overflow-wrap: anywhere;
+  color: #e1ebf7;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.shadow-policy-score {
+  display: grid;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid rgba(88, 202, 238, 0.2);
+  border-radius: 9px;
+  background: rgba(35, 111, 145, 0.08);
+  gap: 0.4rem;
+}
+
+.shadow-policy-score > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.shadow-policy-score strong {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.shadow-policy-score p,
+.shadow-policy-score small {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.shadow-policy-score small {
+  color: var(--faint);
+}
+
+.shadow-tie {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid rgba(255, 209, 141, 0.24);
+  border-radius: 9px;
+  background: rgba(52, 39, 17, 0.14);
+}
+
+.shadow-tie > strong {
+  color: #ffd18d;
+  font-size: 0.75rem;
+}
+
+.shadow-tie p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.shadow-tie ul {
+  display: flex;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.shadow-tie li {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 209, 141, 0.2);
+  border-radius: 8px;
+  gap: 0.2rem;
+}
+
+.shadow-tie li span,
+.shadow-tie li small {
+  overflow-wrap: anywhere;
+}
+
+.shadow-tie li span {
+  color: #e7cfa9;
+  font-size: 0.7rem;
+}
+
+.shadow-tie li small {
+  color: var(--faint);
+  font-size: 0.59rem;
+}
+
+.shadow-decision-notes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.shadow-decision-notes > div {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: rgba(5, 12, 22, 0.3);
+}
+
+.shadow-decision-notes ul,
+.shadow-assessment-limitations ul {
+  display: grid;
+  margin: 0.55rem 0 0;
+  padding-left: 1rem;
+  gap: 0.3rem;
+}
+
+.shadow-decision-notes li,
+.shadow-decision-notes p,
+.shadow-assessment-limitations li,
+.shadow-assessment-limitations p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+.shadow-assessments-section,
+.shadow-assessments-list {
+  display: grid;
+  min-width: 0;
+  gap: 0.6rem;
+}
+
+.shadow-assessment {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: rgba(5, 12, 22, 0.38);
+}
+
+.shadow-assessment.eligible {
+  border-color: rgba(75, 218, 166, 0.24);
+}
+
+.shadow-assessment.ineligible {
+  border-color: rgba(255, 209, 141, 0.22);
+}
+
+.shadow-assessment-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.shadow-assessment-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.shadow-assessment-heading strong,
+.shadow-assessment-heading span {
+  overflow-wrap: anywhere;
+}
+
+.shadow-assessment-heading strong {
+  color: #dce7f5;
+  font-size: 0.73rem;
+}
+
+.shadow-assessment-heading > div span {
+  color: var(--faint);
+  font-size: 0.61rem;
+}
+
+.shadow-eligibility {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.3rem 0.48rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.shadow-eligibility.eligible {
+  border-color: rgba(75, 218, 166, 0.32);
+  color: var(--positive);
+}
+
+.shadow-eligibility.ineligible {
+  border-color: rgba(255, 209, 141, 0.3);
+  color: #ffd18d;
+}
+
+.shadow-assessment-summary {
+  display: flex;
+  margin-top: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.shadow-assessment-summary strong {
+  color: var(--accent);
+  font-size: 0.76rem;
+}
+
+.shadow-assessment-toggle {
+  margin-top: 0.65rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+
+.shadow-assessment-toggle:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.shadow-assessment-content {
+  display: grid;
+  margin-top: 0.75rem;
+  min-width: 0;
+  gap: 0.7rem;
+}
+
+.shadow-criteria-list {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.shadow-criterion {
+  display: grid;
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(7, 16, 29, 0.34);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.6rem;
+}
+
+.shadow-criterion > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.shadow-criterion strong {
+  color: #dce7f5;
+  font-size: 0.66rem;
+}
+
+.shadow-criterion > div span,
+.shadow-criterion-points {
+  color: var(--faint);
+  font-size: 0.58rem;
+}
+
+.shadow-criterion-points {
+  white-space: nowrap;
+}
+
+.shadow-criterion p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.45;
+  grid-column: 1 / -1;
+}
+
+.shadow-assessment-limitations {
+  padding: 0.65rem;
+  border: 1px solid rgba(255, 209, 141, 0.18);
+  border-radius: 8px;
+  background: rgba(52, 39, 17, 0.1);
+}
+
+.shadow-assessment-limitations > strong {
+  color: #e7cfa9;
+  font-size: 0.66rem;
+}
+
+.shadow-decision-unavailable {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
 .provenance-candidates-section {
   display: grid;
   gap: 0.65rem;
@@ -2153,6 +2553,11 @@ input {
   .provenance-support span {
     text-align: left;
   }
+
+  .shadow-value-comparison,
+  .shadow-decision-notes {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 520px) {
@@ -2181,6 +2586,25 @@ input {
   }
 
   .provenance-state {
+    white-space: normal;
+  }
+
+  .shadow-decision-heading,
+  .shadow-assessment-heading,
+  .shadow-policy-score > div,
+  .shadow-assessment-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .shadow-criteria-list,
+  .shadow-criterion {
+    grid-template-columns: 1fr;
+  }
+
+  .shadow-criterion-points,
+  .shadow-criterion p {
+    grid-column: auto;
     white-space: normal;
   }
 }

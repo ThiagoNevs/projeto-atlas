@@ -8,16 +8,24 @@ import {
   type AssetEvidenceAnalysisResponse,
   type AttributeEvidenceAnalysis,
   type EvidenceAnalysisCandidate,
+  type ShadowCandidateAssessment,
+  type ShadowDecision,
 } from '@/lib/api';
 import {
   abbreviateEvidenceId,
   canApplyProvenanceResult,
   formatProvenanceValue,
+  formatPolicyScore,
+  formatShadowValue,
   formatSupportingEvidence,
   formatTrustScore,
   getProvenanceErrorMessage,
   getProvenancePresentation,
   getSourcePresentation,
+  getShadowCriterionLabel,
+  getShadowCriterionResultLabel,
+  getShadowDecisionPresentation,
+  getShadowDivergenceLabel,
   PERSISTED_SCORE_EXPLANATION,
   resolveProvenanceSectionState,
   SHADOW_MODE_DESCRIPTION,
@@ -141,6 +149,213 @@ function CandidateDetails({
   );
 }
 
+function ShadowAssessmentDetails({
+  assessment,
+  attribute,
+}: {
+  assessment: ShadowCandidateAssessment;
+  attribute: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const source = getSourcePresentation(assessment.sourceType);
+  const contentId = `shadow-assessment-${attribute}-${assessment.candidateId}`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    '-',
+  );
+
+  return (
+    <article className={`shadow-assessment ${assessment.eligible ? 'eligible' : 'ineligible'}`}>
+      <div className="shadow-assessment-heading">
+        <div>
+          <strong>{formatShadowValue(assessment.normalizedValue === null ? null : assessment.value)}</strong>
+          <span>{source.label}</span>
+        </div>
+        <span className={`shadow-eligibility ${assessment.eligible ? 'eligible' : 'ineligible'}`}>
+          {assessment.eligible
+            ? 'Elegível para recomendação'
+            : 'Inelegível para recomendação'}
+        </span>
+      </div>
+
+      <div className="shadow-assessment-summary">
+        <span>Pontuação de prioridade da política</span>
+        <strong>{formatPolicyScore(assessment.policyScore)}</strong>
+      </div>
+
+      <button
+        type="button"
+        className="shadow-assessment-toggle"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {expanded ? 'Ocultar critérios' : 'Ver critérios e limitações'}
+      </button>
+
+      {expanded ? (
+        <div className="shadow-assessment-content" id={contentId}>
+          <div className="shadow-criteria-list" aria-label="Critérios aplicados pela política">
+            {assessment.criteria.map((criterion, index) => (
+              <article
+                className={`shadow-criterion result-${criterion.result.toLowerCase().replace('_', '-')}`}
+                key={`${assessment.candidateId}-${criterion.criterion}-${index}`}
+              >
+                <div>
+                  <strong>{getShadowCriterionLabel(criterion.criterion)}</strong>
+                  <span>{getShadowCriterionResultLabel(criterion.result)}</span>
+                </div>
+                <span className="shadow-criterion-points">{criterion.points} pontos</span>
+                <p>{criterion.explanation}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="shadow-assessment-limitations">
+            <strong>Limitações deste candidato</strong>
+            {assessment.limitations.length ? (
+              <ul>
+                {assessment.limitations.map((limitation, index) => (
+                  <li key={`${assessment.candidateId}-limitation-${index}`}>{limitation}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>Nenhuma limitação adicional foi informada.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function ShadowDecisionBlock({
+  decision,
+  attribute,
+}: {
+  decision: ShadowDecision;
+  attribute: string;
+}) {
+  const presentation = getShadowDecisionPresentation(decision.status);
+  const recommended = decision.recommendedCandidate;
+
+  return (
+    <section className="shadow-decision" aria-label="Recomendação em modo sombra">
+      <div className="shadow-decision-heading">
+        <div>
+          <span className="shadow-decision-kicker">Política de decisão simulada</span>
+          <h3>Recomendação em modo sombra</h3>
+        </div>
+        <span className={`provenance-state state-${presentation.tone}`}>{presentation.label}</span>
+      </div>
+
+      <p className="shadow-decision-warning">
+        Esta recomendação foi calculada pela política {decision.policyVersion} e não alterou o valor
+        persistido.
+      </p>
+      <p className="shadow-decision-description">{presentation.description}</p>
+
+      <div className="shadow-value-comparison">
+        <div>
+          <span>Valor atual</span>
+          <strong>{formatShadowValue(decision.currentValue, 'Não disponível')}</strong>
+        </div>
+        <div>
+          <span>Valor recomendado pela política</span>
+          <strong>
+            {recommended
+              ? formatShadowValue(recommended.value)
+              : 'Nenhuma recomendação produzida'}
+          </strong>
+        </div>
+        <div>
+          <span>Comparação</span>
+          <strong>{getShadowDivergenceLabel(decision.divergesFromCurrentValue)}</strong>
+        </div>
+      </div>
+
+      <div className="shadow-policy-score">
+        <div>
+          <span>Pontuação de prioridade da política</span>
+          <strong>{formatPolicyScore(recommended?.policyScore ?? null)}</strong>
+        </div>
+        <p>{decision.scoreMeaning}</p>
+        <small>
+          A pontuação representa a prioridade definida pela política e não uma probabilidade,
+          confiança ou certeza sobre o valor.
+        </small>
+        {recommended && recommended.supportingCandidateIds.length > 1 ? (
+          <small>
+            Valor consolidado a partir de {recommended.supportingCandidateIds.length} candidatos de
+            suporte.
+          </small>
+        ) : null}
+      </div>
+
+      {decision.status === 'TIED' ? (
+        <div className="shadow-tie" role="status">
+          <strong>Valores empatados</strong>
+          <p>
+            Dois ou mais valores obtiveram a mesma maior pontuação. A política não produziu
+            recomendação e não desempata por ordem, ID ou posição.
+          </p>
+          <ul>
+            {decision.tiedValues.map((item, index) => (
+              <li key={`${item.normalizedValue}-${index}`}>
+                <span>{formatShadowValue(item.value)}</span>
+                <small>Pontuação de prioridade: {formatPolicyScore(item.policyScore)}</small>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="shadow-decision-notes">
+        <div>
+          <h4>Por que a política chegou a este resultado</h4>
+          {decision.explanation.length ? (
+            <ul>
+              {decision.explanation.map((explanation, index) => (
+                <li key={`${attribute}-shadow-explanation-${index}`}>{explanation}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>Nenhuma explicação adicional foi informada.</p>
+          )}
+        </div>
+        <div>
+          <h4>Limitações da análise</h4>
+          {decision.limitations.length ? (
+            <ul>
+              {decision.limitations.map((limitation, index) => (
+                <li key={`${attribute}-shadow-limitation-${index}`}>{limitation}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>Nenhuma limitação adicional foi informada.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="shadow-assessments-section">
+        <h4>Candidatos avaliados pela política</h4>
+        {decision.assessments.length ? (
+          <div className="shadow-assessments-list">
+            {decision.assessments.map((assessment) => (
+              <ShadowAssessmentDetails
+                assessment={assessment}
+                attribute={attribute}
+                key={assessment.candidateId}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="muted-copy">Nenhum candidato foi avaliado pela política.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function AttributeAnalysis({ analysis }: { analysis: AttributeEvidenceAnalysis }) {
   const attributeLabel = getAttributeLabel(analysis.attribute);
   const provenance = getProvenancePresentation(analysis.explanation.status);
@@ -184,6 +399,14 @@ function AttributeAnalysis({ analysis }: { analysis: AttributeEvidenceAnalysis }
         ) : (
           <p className="provenance-no-selection">
             Nenhuma evidência diretamente vinculada pode ser apresentada para este valor atual.
+          </p>
+        )}
+
+        {analysis.shadowDecision ? (
+          <ShadowDecisionBlock decision={analysis.shadowDecision} attribute={analysis.attribute} />
+        ) : (
+          <p className="shadow-decision-unavailable">
+            Decisão simulada ainda não disponível para este atributo.
           </p>
         )}
 
