@@ -9,6 +9,10 @@ import request from 'supertest';
 import { EvidenceAnalysisService } from '../src/evidence-engine/evidence-analysis.service';
 import { EvidenceEngineController } from '../src/evidence-engine/evidence-engine.controller';
 import { EvidenceEngineService } from '../src/evidence-engine/evidence-engine.service';
+import {
+  SHADOW_DECISION_POLICY_VERSION,
+  ShadowDecisionPolicy,
+} from '../src/evidence-engine/shadow-decision.policy';
 import { EvidenceCandidate } from '../src/evidence-engine/types/evidence-candidate';
 import { evidenceSource } from '../src/evidence-engine/utils/evidence-utils';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -33,6 +37,26 @@ type EvidenceAnalysisResponse = {
       isCurrent: boolean;
     }>;
     selectedCandidate: { attributeId: string } | null;
+    shadowDecision: {
+      mode: 'SHADOW';
+      status: string;
+      recommendedCandidate: {
+        normalizedValue: string;
+        policyScore: number;
+        supportingCandidateIds: string[];
+      } | null;
+      divergesFromCurrentValue: boolean | null;
+      tiedValues: Array<{ normalizedValue: string; policyScore: number }>;
+      policyVersion: string;
+      assessments: Array<{
+        sourceType: string;
+        normalizedValue: string | null;
+        eligible: boolean;
+        policyScore: number | null;
+        criteria: Array<{ criterion: string; points: number }>;
+        limitations: string[];
+      }>;
+    };
     explanation: {
       status: string;
       decisionApplied: false;
@@ -323,6 +347,7 @@ describe('Evidence Engine provenance analysis endpoint (e2e)', () => {
     const testingModule = await Test.createTestingModule({
       controllers: [EvidenceEngineController],
       providers: [
+        ShadowDecisionPolicy,
         EvidenceEngineService,
         EvidenceAnalysisService,
         {
@@ -419,6 +444,12 @@ describe('Evidence Engine provenance analysis endpoint (e2e)', () => {
         currentValue: 'Windows 11',
         persistedConfidenceScore: 82,
         selectedCandidate: expect.objectContaining({ attributeId: 'attribute-current' }),
+        shadowDecision: expect.objectContaining({
+          mode: 'SHADOW',
+          status: 'CURRENT_VALUE_CONFIRMED',
+          policyVersion: SHADOW_DECISION_POLICY_VERSION,
+          divergesFromCurrentValue: false,
+        }),
         explanation: expect.objectContaining({
           status: 'MULTIPLE_OBSERVED_VALUES',
           decisionApplied: false,
@@ -441,6 +472,9 @@ describe('Evidence Engine provenance analysis endpoint (e2e)', () => {
     expect(current).not.toHaveProperty('ingestedAt');
     expect(current).not.toHaveProperty('confidence');
     expect(JSON.stringify(body)).not.toContain('"payload"');
+    expect(analysis?.shadowDecision.recommendedCandidate?.normalizedValue).toBe('windows 11');
+    expect(analysis?.shadowDecision.assessments[0]?.sourceType).toBe('MANUAL');
+    expect(current?.source.trustScore).toBeNull();
   });
 
   it('returns null evidence timestamps and no selection without evidenceId', async () => {
@@ -511,6 +545,231 @@ describe('Evidence Engine provenance analysis endpoint (e2e)', () => {
     expect(body.analyses[0]?.selectedCandidate).toBeNull();
     expect(body.analyses[0]?.explanation.status).toBe('AMBIGUOUS_CURRENT_CANDIDATES');
     expect(body.analyses[0]?.explanation.supportingEvidenceCount).toBe(0);
+  });
+
+  it('recommends a divergent technical value without changing the persisted selection', async () => {
+    mockAsset([
+      currentAttribute({
+        value: 'Windows 10',
+        valueText: 'Windows 10',
+      }),
+      currentAttribute({
+        id: 'attribute-technical',
+        evidenceId: 'evidence-technical',
+        value: 'Windows 11',
+        valueText: 'Windows 11',
+        isCurrent: false,
+        evidence: {
+          id: 'evidence-technical',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const analysis = (response.body as EvidenceAnalysisResponse).analyses[0];
+
+    expect(analysis?.currentValue).toBe('Windows 10');
+    expect(analysis?.selectedCandidate?.attributeId).toBe('attribute-current');
+    expect(analysis?.shadowDecision).toEqual(
+      expect.objectContaining({
+        status: 'RECOMMENDED',
+        divergesFromCurrentValue: true,
+        recommendedCandidate: expect.objectContaining({ normalizedValue: 'windows 11' }),
+      }),
+    );
+    expect(writeAttempt).not.toHaveBeenCalled();
+  });
+
+  it('returns an explicit tie without choosing by database order', async () => {
+    mockAsset([
+      currentAttribute({
+        isCurrent: false,
+        evidence: {
+          id: 'evidence-current',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+      currentAttribute({
+        id: 'attribute-linux',
+        evidenceId: 'evidence-linux',
+        value: 'Linux',
+        valueText: 'Linux',
+        isCurrent: false,
+        evidence: {
+          id: 'evidence-linux',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const analysis = (response.body as EvidenceAnalysisResponse).analyses[0];
+
+    expect(analysis?.currentValue).toBeNull();
+    expect(analysis?.shadowDecision.status).toBe('TIED');
+    expect(analysis?.shadowDecision.recommendedCandidate).toBeNull();
+    expect(analysis?.shadowDecision.tiedValues).toHaveLength(2);
+  });
+
+  it.each([
+    ['SIMULATED', 'network-discovery-lite', 'NETWORK_DISCOVERY'],
+    ['UNKNOWN', 'future-connector', 'SOURCE_SNAPSHOT'],
+  ])('keeps a %s source ineligible in the endpoint response', async (kind, sourceName, evidenceType) => {
+    mockAsset([
+      currentAttribute({
+        evidence: {
+          id: 'evidence-current',
+          source: sourceName,
+          evidenceType,
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const decision = (response.body as EvidenceAnalysisResponse).analyses[0]?.shadowDecision;
+
+    expect(decision?.status).toBe('INSUFFICIENT_EVIDENCE');
+    expect(decision?.recommendedCandidate).toBeNull();
+    expect(decision?.assessments[0]).toEqual(
+      expect.objectContaining({ sourceType: kind, eligible: false, policyScore: null }),
+    );
+  });
+
+  it('recommends an eligible historical value when no current value exists', async () => {
+    mockAsset([
+      currentAttribute({
+        isCurrent: false,
+        evidence: {
+          id: 'evidence-current',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const decision = (response.body as EvidenceAnalysisResponse).analyses[0]?.shadowDecision;
+
+    expect(decision).toEqual(
+      expect.objectContaining({
+        status: 'RECOMMENDED',
+        divergesFromCurrentValue: null,
+        recommendedCandidate: expect.objectContaining({ normalizedValue: 'windows 11' }),
+      }),
+    );
+  });
+
+  it('keeps a recent technical empty value visible but outside the recommendation', async () => {
+    mockAsset([
+      currentAttribute({
+        value: '   ',
+        valueText: '   ',
+        evidence: {
+          id: 'evidence-current',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const body = response.body as EvidenceAnalysisResponse;
+    const analysis = body.analyses[0];
+    const assessment = analysis?.shadowDecision.assessments[0];
+
+    expect(body.decisionsChanged).toBe(false);
+    expect(analysis?.currentValue).toBeNull();
+    expect(analysis?.selectedCandidate).toBeNull();
+    expect(analysis?.candidates[0]?.source.trustScore).toBeNull();
+    expect(analysis?.shadowDecision.status).toBe('INSUFFICIENT_EVIDENCE');
+    expect(analysis?.shadowDecision.recommendedCandidate).toBeNull();
+    expect(assessment).toEqual(
+      expect.objectContaining({
+        sourceType: 'TECHNICAL',
+        normalizedValue: null,
+        eligible: false,
+        policyScore: null,
+      }),
+    );
+    expect(assessment?.criteria.every((criterion) => criterion.points === 0)).toBe(true);
+    expect(assessment?.limitations).toContain('O candidato não possui valor normalizado válido.');
+    expect(JSON.stringify(body)).not.toContain('"payload"');
+    expect(writeAttempt).not.toHaveBeenCalled();
+  });
+
+  it('recommends only the valid candidate when another technical candidate is empty', async () => {
+    mockAsset([
+      currentAttribute({
+        value: '',
+        valueText: '',
+        evidence: {
+          id: 'evidence-current',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+      currentAttribute({
+        id: 'attribute-valid',
+        evidenceId: 'evidence-valid',
+        value: 'Windows 11',
+        valueText: 'Windows 11',
+        isCurrent: false,
+        evidence: {
+          id: 'evidence-valid',
+          source: 'signed-agent',
+          evidenceType: 'TECHNICAL_AGENT',
+          observedAt: new Date('2026-07-14T12:00:00.000Z'),
+          ingestedAt: new Date('2026-07-14T12:01:00.000Z'),
+        },
+      }),
+    ]);
+
+    const response = await request(httpServer)
+      .get(`/assets/${assetId}/evidence-analysis`)
+      .expect(200);
+    const analysis = (response.body as EvidenceAnalysisResponse).analyses[0];
+    const empty = analysis?.shadowDecision.assessments.find(
+      (assessment) => assessment.normalizedValue === null,
+    );
+
+    expect(analysis?.currentValue).toBeNull();
+    expect(analysis?.shadowDecision).toEqual(
+      expect.objectContaining({
+        status: 'RECOMMENDED',
+        divergesFromCurrentValue: null,
+        recommendedCandidate: expect.objectContaining({ normalizedValue: 'windows 11' }),
+      }),
+    );
+    expect(empty).toEqual(expect.objectContaining({ eligible: false, policyScore: null }));
+    expect(writeAttempt).not.toHaveBeenCalled();
   });
 
   it('returns the same response twice and performs no write', async () => {

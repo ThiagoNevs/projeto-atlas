@@ -595,12 +595,49 @@ curl.exe http://localhost:3001/assets/ASSET_ID/evidence-analysis
 
 A resposta organiza, em memória, os valores atuais e históricos já persistidos para cada atributo.
 `currentValue` representa um valor atual inequívoco persistido pelo modelo legado e permanece `null`
-quando registros atuais divergem. `selectedCandidate`
-só é preenchido quando existe exatamente um candidato atual, seu valor corresponde ao valor atual e
-a evidência vinculada está disponível. Sem evidência ou diante de múltiplos atuais, o campo permanece
-`null` e a limitação é declarada. Nesta etapa, nenhum algoritmo de decisão, ranking de fontes ou
-recálculo de score é executado; a resposta mantém `mode: "SHADOW"`,
-`decisionsChanged: false` e `explanation.decisionApplied: false`.
+quando registros atuais divergem. `selectedCandidate` só é preenchido quando existe exatamente um
+candidato atual, seu valor corresponde ao valor atual e a evidência vinculada está disponível. Ele
+continua representando proveniência comprovada, não uma recomendação.
+
+O bloco aditivo `shadowDecision` executa a política determinística `2026-07-v1` somente em memória.
+`recommendedCandidate` representa um valor lógico consolidado que a política recomendaria; todos os
+candidatos e IDs de evidência que sustentam esse valor permanecem listados. A resposta mantém
+`mode: "SHADOW"`, `decisionsChanged: false` e `explanation.decisionApplied: false`: nenhuma decisão é
+persistida ou aplicada.
+
+Strings vazias ou contendo somente espaços são normalizadas como ausência de valor. O candidato
+continua visível na avaliação, mas fica inelegível e não participa da recomendação. Evidências com
+data de observação futura recebem zero ponto de recência e uma limitação explícita. Essas regras são
+correções da elegibilidade já definida pela política `2026-07-v1` e não persistem decisões.
+
+Exemplo resumido:
+
+```json
+{
+  "attribute": "operatingSystem",
+  "currentValue": "Windows 10",
+  "selectedCandidate": {
+    "attributeId": "atributo-atual"
+  },
+  "shadowDecision": {
+    "mode": "SHADOW",
+    "status": "RECOMMENDED",
+    "recommendedCandidate": {
+      "value": "Windows 11",
+      "normalizedValue": "windows 11",
+      "policyScore": 90,
+      "supportingCandidateIds": ["atributo-tecnico"],
+      "supportingEvidenceIds": ["evidencia-tecnica"]
+    },
+    "divergesFromCurrentValue": true,
+    "policyVersion": "2026-07-v1"
+  }
+}
+```
+
+Os status possíveis são `RECOMMENDED`, `CURRENT_VALUE_CONFIRMED`, `TIED`,
+`INSUFFICIENT_EVIDENCE`, `NO_CURRENT_VALUE` e `NO_CANDIDATES`. Em empate entre valores diferentes,
+`recommendedCandidate` fica `null`: ID, posição e ordem do banco nunca resolvem o empate.
 
 `supportingEvidenceCount` considera somente IDs distintos de evidências disponíveis cujo valor
 normalizado corresponde ao `currentValue`. Evidências históricas conflitantes não são contadas como
@@ -617,4 +654,6 @@ Uma data ausente permanece `null`; o endpoint não copia datas entre atributo e 
 `source.trustScore`, `persistedConfidenceScore` e `dataQuality` representam conceitos distintos. O
 Trust Score da fonte ainda não é calculado e, portanto, é retornado como `null`.
 `persistedConfidenceScore` apenas expõe o score legado do atributo atual: não é confiança de uma
-decisão, não foi calculado pelo Evidence Engine e não altera dados persistidos.
+decisão, não foi calculado pelo Evidence Engine e não altera dados persistidos. `policyScore` é
+somente a prioridade da política versionada, não probabilidade, certeza, Trust Score ou Confidence
+Score. Consulte `docs/evidence-engine.md` para os critérios e limitações completos.

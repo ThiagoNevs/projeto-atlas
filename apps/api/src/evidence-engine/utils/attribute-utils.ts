@@ -25,8 +25,11 @@ export function normalizeAttributeKey(key: string): string {
 
 export function normalizeCandidateValue(valueText: string | null, value: unknown): string | null {
   if (valueText?.trim()) return valueText.trim().toLocaleLowerCase('pt-BR');
-  if (typeof value === 'string' && value.trim()) return value.trim().toLocaleLowerCase('pt-BR');
+  if (typeof value === 'string') {
+    const normalizedValue = value.trim();
+    return normalizedValue ? normalizedValue.toLocaleLowerCase('pt-BR') : null;
+  }
   if (value === null || value === undefined) return null;
 
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? null;
 }

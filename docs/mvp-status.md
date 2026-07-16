@@ -73,16 +73,17 @@ organizacional.
 
 O núcleo inicial organiza em memória a proveniência dos atributos e expõe uma consulta somente
 leitura em modo sombra. Ele separa os contratos de Trust Score da fonte, Confidence Score da decisão
-e Data Quality, mas ainda não executa algoritmo de seleção, ranking de fontes, recálculo de scores ou
-alteração do valor atual. `selectedCandidate` só é informado quando existe um único candidato atual
+e Data Quality. A política determinística e versionada `2026-07-v1` agora simula qual valor lógico
+seria recomendado, explica critérios, inelegibilidades, empates e divergências, sem persistir decisão,
+recalcular scores legados ou alterar o valor atual. `selectedCandidate` só é informado quando existe um único candidato atual
 com evidência disponível e valor correspondente; ausência de evidência ou múltiplos atuais produzem
 `null` e uma limitação explícita. Evidências históricas conflitantes não aumentam a contagem de
 suporte. Datas de observação do atributo e da evidência são expostas separadamente, e o score legado
 é identificado como `persistedConfidenceScore`. Trust Score permanece `null`. A página de detalhe do
-ativo representa essa análise em português, sem recalcular regras no frontend: valor atual e
+ativo representa a proveniência em português, sem recalcular regras no frontend: valor atual e
 proveniência comprovada aparecem como conceitos distintos, fontes manuais, simuladas, técnicas e
 desconhecidas recebem identificação explícita, e falhas da análise permanecem isoladas das demais
-informações do ativo.
+informações do ativo. A recomendação simulada ainda não é exibida no frontend nesta entrega.
 
 ### Tipos compartilhados
 
