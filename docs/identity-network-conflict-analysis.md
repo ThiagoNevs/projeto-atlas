@@ -66,6 +66,17 @@ Os achados listam opções conceituais sem seleção ou recomendação automáti
 
 A fila operacional e a aplicação auditada de uma decisão serão implementadas em etapas futuras.
 
+## Inventário agregado
+
+`GET /conflict-analysis/findings` reutiliza esta mesma política para listar, com filtros, ordenação e
+paginação, achados de todo o inventário. A correlação é global, usa uma única leitura de banco e
+deduplica pelo `findingId`, de forma que o mesmo achado aparece uma única vez mesmo quando envolve
+vários ativos.
+
+Essa listagem é uma base de navegação e priorização humana, não uma fila persistida. O resumo se
+refere ao resultado após os filtros e antes da paginação. Consulte
+`docs/conflict-findings-inventory.md` para o contrato e as limitações de escala.
+
 ## Garantias e limitações
 
 - consulta exclusivamente em memória e somente leitura;
@@ -73,7 +84,8 @@ A fila operacional e a aplicação auditada de uma decisão serão implementadas
 - nenhum hostname, IP, atributo, interface ou status é alterado;
 - nenhuma mesclagem, exclusão ou recomendação é aplicada;
 - nenhum payload bruto, fingerprint ou objeto Prisma é exposto;
-- as consultas são direcionadas por hostname/IP do ativo e não carregam todo o inventário;
+- a análise individual usa consultas dirigidas; o inventário agregado carrega uma projeção mínima
+  global em uma única leitura para não produzir N+1;
 - buscas textuais normalizadas dependem dos índices atuais e podem exigir índice funcional futuro;
 - representações IPv6 antigas não normalizadas podem limitar a busca dirigida entre ativos;
 - ausência de serial, agentId, cloudId ou outro identificador técnico reduz o contexto disponível.

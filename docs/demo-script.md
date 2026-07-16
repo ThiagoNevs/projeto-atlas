@@ -156,7 +156,9 @@ com justificativa ou registrar exceção.
 Como extensão técnica opcional, explique que o backend já consegue apontar em modo sombra possíveis
 hostnames duplicados, IP compartilhado por hostnames diferentes e divergências históricas. Essa
 análise não cria conflito formal nem decide se houve duplicidade, mudança de hostname ou
-reutilização de IP; uma fila operacional será construída em etapa futura.
+reutilização de IP. A API também oferece um inventário agregado, paginado e deduplicado desses
+achados para localizar casos de revisão sem abrir cada ativo. A interface e a fila operacional serão
+construídas em etapas futuras.
 
 ## 8. Busca, filtros e paginação — 1 minuto
 
