@@ -215,3 +215,4 @@ sem produzir tráfego real de rede.
 - [Exemplos da API](docs/api-examples.md)
 - [Massa demo](docs/demo-data.md)
 - [Network Discovery Lite](docs/network-discovery-lite.md)
+- [Desenho do fluxo de revisão de achados](docs/conflict-review-workflow-design.md)

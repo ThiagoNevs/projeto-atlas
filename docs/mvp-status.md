@@ -97,6 +97,9 @@ do inventário é persistida. `GET /conflict-analysis/findings` acrescenta uma v
 filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mesma política. A interface,
 disponível em `/conflict-findings`, apresenta resumo, filtros, paginação, limitações e detalhe sob
 demanda sem persistir decisões. Uma fila operacional e a resolução humana auditada permanecem futuras.
+O desenho proposto para essa evolução está documentado em
+`docs/conflict-review-workflow-design.md`. O fluxo persistido ainda não foi implementado: não existem
+novos casos, endpoints, ações de resolução ou migrations, e nenhuma decisão altera o inventário.
 
 ### Tipos compartilhados
 
