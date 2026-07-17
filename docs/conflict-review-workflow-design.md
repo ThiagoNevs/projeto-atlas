@@ -59,8 +59,9 @@ campos são:
 - coleção `ConflictValue`, que pode referenciar `AssetEvidence`.
 
 Os estados persistidos são `OPEN`, `IN_REVIEW`, `RESOLVED`, `IGNORED`, `EXCEPTION` e `DISMISSED`.
-O formulário atual permite alterar para `OPEN`, `IN_REVIEW`, `RESOLVED`, `IGNORED` ou `EXCEPTION`;
-`DISMISSED` existe no schema, mas não está na lista editável do DTO.
+O DTO/API atual aceita alterações para `OPEN`, `IN_REVIEW`, `RESOLVED`, `IGNORED` ou `EXCEPTION`.
+O formulário frontend oferece somente `IN_REVIEW`, `RESOLVED`, `IGNORED` e `EXCEPTION`;
+`DISMISSED` existe no schema, mas não está na lista editável do DTO nem do formulário.
 
 Conflitos são criados pela ingestão e pelo Network Discovery Lite para cenários formais de ciclo de
 vida e identidade de rede. A deduplicação atual procura um conflito `OPEN` equivalente antes de
@@ -195,7 +196,8 @@ O caso proposto deverá conter:
 - vínculos com todos os ativos afetados;
 - estado do caso e estado de staleness;
 - responsável opcional;
-- decisão atual tipada, motivo e comentário;
+- conclusão de identidade atual e componentes estruturados, preservados em histórico próprio;
+- justificativa da decisão e limitações explícitas;
 - versão para concorrência otimista;
 - timestamps e atores;
 - histórico append-only de eventos;
@@ -212,9 +214,12 @@ Fluxo recomendado:
 2. o backend recalcula os findings usando a política atual;
 3. o backend localiza o finding pelo ID e confirma a paridade material;
 4. se ele não existe ou mudou, retorna `409 Conflict` com orientação para atualizar a análise;
-5. verifica se já existe caso ativo para a mesma identidade;
-6. armazena snapshot e hash, relações com ativos e auditoria;
-7. retorna o caso criado ou o caso já criado para a mesma chave idempotente.
+5. calcula no servidor a `reviewSubjectKey` estável para o assunto investigado;
+6. verifica se já existe caso ativo para a mesma `reviewSubjectKey`;
+7. tenta criar o caso em transação, usando constraint como proteção final contra corrida;
+8. armazena snapshot e hash, relações com ativos, evento versionado e auditoria;
+9. retorna o caso criado, o resultado anterior da mesma chave idempotente ou `409` com o caso ativo
+   existente, conforme autorização.
 
 O snapshot original deverá preservar:
 
@@ -269,6 +274,11 @@ A atualização futura deverá:
 Finding desaparecido não significa caso resolvido. Alteração de `findingId` também não deverá criar,
 fechar ou reabrir casos sem regra explícita.
 
+Quando o `findingId` mudar, mas a `reviewSubjectKey` permanecer igual, o caso deverá ser marcado como
+alterado ou desatualizado, preservar o snapshot original e permitir refresh. Isso não criará outro
+caso ativo automaticamente. Uma `reviewSubjectKey` diferente poderá representar outro assunto e
+permitir novo caso; o caso anterior continuará histórico, sem relação ou mesclagem inferida.
+
 Mudanças de hostname, IP, ativos afetados, observações ou contexto temporal resultam em `CHANGED`.
 Ativo arquivado ou administrativamente encerrado continua referenciado e não encerra o caso. Se o
 registro deixar de estar consultável, aplica-se `ASSET_UNAVAILABLE`. Uma futura mesclagem de ativos
@@ -307,25 +317,67 @@ conclusão, evitando uma transição implícita sem retomada formal.
 
 ## 9. Decisões humanas
 
-### 9.1 Conclusões possíveis
+### 9.1 Conclusão de identidade
+
+A conclusão principal responde somente se os registros investigados representam a mesma identidade:
 
 - `SAME_ASSET`;
-- `DIFFERENT_ASSETS`;
-- `IP_REUSED`;
+- `DIFFERENT_ASSETS`.
+
+Esses valores são mutuamente exclusivos. Enquanto não houver evidência suficiente, a conclusão
+permanecerá nula. **Recomendação:** não persistir `UNDETERMINED` como terceira verdade; ausência de
+conclusão, combinada com o estado do caso e uma pendência estruturada, representa a indeterminação
+sem confundi-la com decisão terminal.
+
+A conclusão de identidade não altera ativos, vínculos, atributos ou qualquer outra informação do
+inventário. Toda conclusão exige justificativa, ator, timestamp e versão esperada do caso.
+
+### 9.2 Componentes estruturados da decisão
+
+Uma decisão poderá conter zero ou mais componentes complementares, consultáveis e auditáveis:
+
 - `HOSTNAME_CHANGED`;
+- `IP_REUSED`;
 - `SOURCE_DATA_INCORRECT`.
 
-Uma conclusão deverá ter uma decisão principal. Informações complementares poderão ser registradas
-como tags ou ações futuras, sem criar múltiplas “verdades” concorrentes no mesmo caso.
+Os componentes podem coexistir entre si e com a conclusão de identidade. Regras mínimas:
 
-`NEEDS_MORE_EVIDENCE` não deverá ser decisão terminal. Ele corresponde ao estado
-`WAITING_FOR_EVIDENCE`, acompanhado de comentário sobre o que falta.
+- `SAME_ASSET` e `DIFFERENT_ASSETS` nunca coexistem;
+- `HOSTNAME_CHANGED` pode qualificar `SAME_ASSET`;
+- `IP_REUSED` normalmente qualifica `DIFFERENT_ASSETS`, mas não será inferido automaticamente;
+- `SOURCE_DATA_INCORRECT` pode coexistir com qualquer conclusão;
+- componentes não executam alterações no inventário ou na fonte;
+- alterações de conclusão ou componentes incrementam a versão e preservam decisões anteriores.
 
-Toda decisão exige motivo, comentário, ator, timestamp e versão esperada do caso. Alterações de
-decisão não sobrescreverão o histórico: o caso deverá ser reaberto, e um novo evento registrará
-valor anterior e posterior.
+Para `SOURCE_DATA_INCORRECT`, o componente deverá identificar o alvo quando o domínio fornecer uma
+referência confiável: `sourceType`, `evidenceId`, referência de observação existente, atributo, valor
+e justificativa. Nenhum ID será inventado. Quando não for possível identificar a fonte ou observação
+exata, o componente deverá registrar uma limitação explícita, manter as referências opcionais nulas e
+descrever somente o escopo conhecido na metadata minimizada.
 
-### 9.2 Efeito da decisão
+### 9.3 Persistência recomendada da decisão
+
+Recomenda-se uma entidade relacional imutável `FindingReviewDecision`, com uma coleção
+`FindingReviewDecisionComponent`. A decisão registra a conclusão de identidade, justificativa, autor,
+timestamp e versão do caso; cada componente registra seu tipo e referências opcionais seguras.
+
+Essa alternativa permite índices, filtros, auditoria e referências a evidências sem depender de texto
+livre. Um array ou JSON tipado exigiria menos tabelas, mas teria validação e índices mais fracos,
+evolução de contrato mais arriscada e dificuldade para relacionar fonte, evidência ou observação.
+Portanto, JSON poderá existir apenas como metadata complementar, não como representação primária dos
+componentes.
+
+Decisões anteriores não serão atualizadas nem apagadas. Uma mudança após reabertura criará nova
+decisão e evento, mantendo a decisão anterior no histórico. O caso poderá apontar para a decisão
+corrente sem perder a coleção histórica.
+
+### 9.4 Necessidade de mais evidências
+
+`NEEDS_MORE_EVIDENCE` não é conclusão nem componente terminal. Ele corresponde a uma pendência
+estruturada e à transição para `WAITING_FOR_EVIDENCE`, com descrição do contexto ausente. Não encerra
+o caso e não compete com `SAME_ASSET` ou `DIFFERENT_ASSETS`.
+
+### 9.5 Efeito da decisão
 
 Na primeira implementação, nenhuma decisão deverá automaticamente:
 
@@ -364,10 +416,28 @@ Eventos mínimos recomendados, alinhados ao padrão em maiúsculas do Atlas:
 - `FINDING_REVIEW_REFRESHED`;
 - `FINDING_REVIEW_BECAME_STALE`.
 
-Cada evento deverá registrar caso, ator autenticado, timestamp, estado anterior/posterior, decisão
-anterior/posterior, justificativa e metadata minimizada. `AuditLog` deverá receber uma cópia segura
-dos eventos administrativos relevantes para consulta global. Uma tabela de eventos do caso também
-é recomendada para garantir relação, ordenação, histórico e leitura eficiente.
+Cada evento deverá registrar caso, ator autenticado, timestamp, `versionBefore`, `versionAfter`,
+estado anterior/posterior, conclusão anterior/posterior, justificativa e metadata minimizada. Na
+criação, `versionBefore` será nula e `versionAfter` será `1`. Em qualquer mutação, `versionAfter`
+deverá corresponder exatamente à versão persistida ao final da transação. Os JSONs `before` e `after`
+são complementares e não substituem os campos explícitos de versão.
+
+`AuditLog` deverá receber uma cópia segura dos eventos administrativos relevantes para consulta
+global, contendo `caseId`, `eventId`, `versionBefore`, `versionAfter`, `eventType` e `requestId` quando
+aplicável. A tabela específica de eventos do caso será a fonte estruturada do fluxo; `AuditLog`
+permanecerá a trilha transversal do produto.
+
+Uma mutação futura deverá, na mesma transação:
+
+1. validar `version` ou `If-Match`;
+2. atualizar o caso e incrementar a versão atomicamente;
+3. aplicar relações de decisão ou componentes, quando existirem;
+4. criar `FindingReviewEvent` com as versões anterior e posterior;
+5. criar `AuditLog`;
+6. confirmar a transação.
+
+Se a versão não corresponder, nada será persistido, nenhum evento ou `AuditLog` de sucesso será
+criado e a API retornará `409`, podendo informar a versão atual de forma segura.
 
 Não deverão ser armazenados tokens, credenciais, payloads brutos desnecessários nem dados pessoais
 sem finalidade. Comentários não deverão ser copiados para logs de aplicação.
@@ -382,24 +452,85 @@ Recomendação: locking otimista com `version` inteiro e precondição HTTP.
 - sucesso incrementa `version` uma vez;
 - zero registros atualizados retorna `409 Conflict`;
 - a resposta `409` informa que o caso mudou e deve ser recarregado;
-- criação de evento e `AuditLog` ocorre na mesma transação do comando.
+- criação de evento com `versionBefore`/`versionAfter` e de `AuditLog` ocorre na mesma transação.
 
 Isso evita resolução simultânea, sobrescrita silenciosa e decisão sobre versão antiga. Comentários
 também deverão usar idempotência e versão, ou uma estratégia append-only que não substitua outros
 comentários.
 
-## 12. Idempotência
+## 12. Idempotência e unicidade do assunto
 
-- **Criação:** exigir `Idempotency-Key`; uma chave repetida devolve o mesmo resultado.
-- **Caso ativo duplicado:** manter uma chave única `activeFindingKey` para o mesmo finding/política.
-- **Decisão/status:** mesma chave e payload retornam o resultado anterior; payload diferente com a
-  mesma chave retorna `409`.
+- **Criação:** exigir `Idempotency-Key`; uma chave repetida com o mesmo payload devolve o mesmo
+  resultado, e payload diferente com a mesma chave retorna `409`.
+- **Decisão/status:** a mesma chave e payload retornam o resultado anterior; payload diferente retorna
+  `409`.
 - **Comentário:** usar `requestId`/idempotency key para não duplicar em retry.
 - **Refresh:** hash igual não cria snapshot duplicado; pode registrar somente a consulta, conforme
   política de auditoria aprovada.
 
-Um novo `findingId` poderá representar mudança material e não deverá ser unido automaticamente ao
-caso anterior. A relação deverá ser sugerida para revisão, nunca inferida silenciosamente.
+### 12.1 `reviewSubjectKey`
+
+O caso deverá armazenar uma chave determinística e versionada que represente o assunto investigado,
+e não uma execução específica do finding:
+
+`sha256("finding-review-subject:v1|" + findingType + "|" + canonicalSubject)`.
+
+O `canonicalSubject` será calculado exclusivamente no servidor:
+
+- `DUPLICATE_HOSTNAME_ACROSS_ASSETS`: `normalizedHostname` canônico;
+- `SHARED_IP_DIFFERENT_HOSTNAMES`: `normalizedIp` canônico;
+- `HOSTNAME_DIVERGENCE_ON_ASSET`: `assetId`.
+
+Observações, timestamps, `evidenceId`, hostname atual e conjunto variável de ativos não entram na
+chave. No caso de IP compartilhado, a chave identifica o assunto da revisão e não transforma IP em
+identidade de ativo. Tipos futuros deverão definir explicitamente seu `canonicalSubject`; sem regra
+aprovada, a criação do caso será rejeitada de forma controlada.
+
+`policyVersion` não fará parte da `reviewSubjectKey` por padrão. Mudança de política produzirá
+`POLICY_VERSION_CHANGED`, preservando no snapshot a versão usada. Uma mudança materialmente
+incompatível na definição do assunto exigirá nova versão da fórmula, como
+`finding-review-subject:v2`, evitando casos ativos duplicados apenas porque a política mudou.
+
+### 12.2 Caso ativo e constraint recomendada
+
+São estados ativos: `OPEN`, `IN_REVIEW` e `WAITING_FOR_EVIDENCE`. São terminais/inativos:
+`RESOLVED`, `DISMISSED` e `CANCELLED`.
+
+Duas estratégias foram avaliadas:
+
+- **Índice único parcial PostgreSQL:** unicidade de `reviewSubjectKey` somente nos estados ativos.
+  Expressa diretamente a regra, mas provavelmente exige SQL específico na migration, cuidados de
+  compatibilidade com Prisma, rollback e testes de corrida sobre o predicado.
+- **Chave ativa anulável:** manter `reviewSubjectKey` histórica e
+  `activeReviewSubjectKey String? @unique`. A chave ativa recebe o mesmo valor enquanto o caso está
+  ativo, torna-se nula em estado terminal e é readquirida na reabertura, sempre na mesma transação.
+
+**Recomendação:** usar a chave ativa anulável na primeira versão, por ser explícita no modelo e mais
+simples de representar com Prisma. A regra de domínio continuará validando os estados; testes de
+corrida deverão comprovar que a constraint única é a proteção final. Um índice parcial poderá ser
+reavaliado por migration posterior se a operação demonstrar necessidade.
+
+### 12.3 Criação concorrente, reabertura e histórico
+
+A criação futura seguirá esta sequência:
+
+1. recalcular o finding no servidor;
+2. calcular a `reviewSubjectKey` no servidor;
+3. consultar caso ativo existente;
+4. tentar criar caso e chave ativa dentro de transação;
+5. confiar na constraint única como proteção final, sem depender apenas de `findFirst`;
+6. em colisão, retornar replay idempotente ou `409`, informando o caso ativo conforme autorização.
+
+Podem existir vários casos históricos para a mesma `reviewSubjectKey`, mas no máximo um ativo. Ao
+reabrir um caso terminal, a operação tentará readquirir `activeReviewSubjectKey` em transação. Se
+outro caso já a possuir, a reabertura falhará com `409`; nenhum caso será mesclado automaticamente.
+A tentativa rejeitada será auditada apenas conforme política de auditoria aprovada, sem evento de
+sucesso.
+
+Mesmo assunto e novo `findingId` atualizam staleness e permitem refresh, sem criar automaticamente
+outro caso ativo. Assunto diferente poderá originar novo caso; nenhuma relação será presumida. A
+reabertura é preferível quando a política aprovada considerar continuidade da mesma investigação;
+novo caso histórico exigirá razão formal e auditável.
 
 ## 13. Autorização proposta
 
@@ -428,7 +559,8 @@ Nenhum endpoint desta seção existe atualmente.
 - **Request:** `findingId`, `policyVersion`, `expectedFindingHash` opcional.
 - **Headers:** autenticação e `Idempotency-Key` obrigatórios.
 - **Response:** `201` com caso, snapshot resumido, `version` e ETag; `200` em replay idempotente.
-- **Validações:** finding existe, paridade material, permissão e ausência de caso ativo duplicado.
+- **Validações:** finding existe, paridade material, permissão, cálculo servidor da
+  `reviewSubjectKey` e ausência de caso ativo duplicado.
 - **Erros:** `400`, `401`, `403`, `404`, `409`, `422` e `503` controlado.
 - **Efeitos:** cria caso, vínculos, snapshot, evento e `AuditLog`; não altera inventário.
 
@@ -474,10 +606,12 @@ Nenhum endpoint desta seção existe atualmente.
 
 ### 14.7 `POST /finding-review-cases/:id/decision`
 
-- **Request:** decisão, motivo, comentário, `expectedVersion` e idempotency key.
-- **Validações:** decisão compatível com o tipo, caso `IN_REVIEW`, finding/staleness apresentados ao
-  usuário e permissão.
-- **Response:** decisão registrada e nova versão.
+- **Request:** `identityConclusion`, componentes estruturados, justificativa, `expectedVersion` e
+  idempotency key.
+- **Validações:** conclusão e componentes compatíveis, referências autorizadas, caso `IN_REVIEW`,
+  finding/staleness apresentados ao usuário e permissão. `NEEDS_MORE_EVIDENCE` usa transição de
+  estado e não este contrato de decisão terminal.
+- **Response:** decisão imutável registrada, componentes e nova versão.
 - **Efeitos:** decisão e auditoria; não altera inventário nem cria `Conflict`.
 
 ### 14.8 `POST /finding-review-cases/:id/refresh`
@@ -491,7 +625,7 @@ Nenhum endpoint desta seção existe atualmente.
 
 | Endpoint | Autorização | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- | --- |
-| criar caso | `case:create` | header obrigatório | constraint de caso ativo | caso criado |
+| criar caso | `case:create` | header obrigatório | constraint por assunto ativo | caso criado |
 | listar/detalhar | `case:read` | não aplicável | ETag no detalhe | leitura não auditada por padrão |
 | mudar status | `case:transition` | header obrigatório | versão/`If-Match` | estado anterior e novo |
 | atribuir | `case:assign` | header obrigatório | versão/`If-Match` | responsável anterior e novo |
@@ -531,8 +665,29 @@ O caso deverá distinguir:
 - `TECHNICAL_EVIDENCE_REFERENCE`: link para uma evidência técnica já existente.
 
 Contexto humano não deverá ser inserido em `AssetEvidence` nem apresentado como coleta técnica.
-Anexos e upload permanecem fora da primeira implementação. Links deverão ser validados e não devem
-permitir esquemas inseguros.
+Links ou referências técnicas deverão ser identificados como referências fornecidas por pessoa, sem
+se converterem em evidência técnica. Links deverão ser validados e não permitir esquemas inseguros.
+
+Proposta inicial para a futura fase de comentários:
+
+- comentários append-only em texto simples, sem HTML;
+- sem anexos ou upload na primeira fase;
+- autor, timestamp e `requestId`/idempotency key obrigatórios;
+- tamanho máximo configurado e aprovado antes da implementação; não definir um número silencioso;
+- nenhuma edição ou exclusão silenciosa;
+- correções são registradas por novo comentário que referencia o anterior;
+- ocultação administrativa exige permissão, motivo e evento de auditoria;
+- o conteúdo original permanece preservado para auditoria com acesso restrito;
+- retenção depende de política formal e deve minimizar dados pessoais;
+- entrada validada e saída renderizada como texto para proteção contra XSS.
+
+Recomenda-se que comentários sejam append-only e possuam versionamento/idempotência próprios, sem
+incrementar a versão do caso. O evento de comentário registrará a versão atual do caso como
+referência, com `versionBefore` e `versionAfter` iguais, distinguindo evento append-only de mutação do
+agregado. Se um comentário também solicitar transição, serão comandos e eventos separados.
+
+Essas definições são obrigatórias antes da fase funcional de comentários, mas não bloqueiam a
+persistência mínima de casos sem comentários.
 
 ## 17. Interface futura
 
@@ -615,41 +770,44 @@ enum FindingReviewStaleness {
   REQUIRES_REFRESH
 }
 
-enum FindingReviewDecision {
+enum FindingReviewIdentityConclusion {
   SAME_ASSET
   DIFFERENT_ASSETS
+}
+
+enum FindingReviewDecisionComponentType {
   IP_REUSED
   HOSTNAME_CHANGED
   SOURCE_DATA_INCORRECT
 }
 
 model FindingReviewCase {
-  id                  String
-  findingId           String
-  findingType         String
-  policyVersion       String
-  activeFindingKey    String?  @unique
-  status              FindingReviewCaseStatus
-  staleness           FindingReviewStaleness
-  decision            FindingReviewDecision?
-  decisionReason      String?
-  decisionComment     String?
-  originalSnapshot    Json
+  id                    String
+  findingId             String
+  findingType           String
+  policyVersion         String
+  reviewSubjectKey      String
+  activeReviewSubjectKey String? @unique
+  status                FindingReviewCaseStatus
+  staleness             FindingReviewStaleness
+  currentDecisionId     String?
+  originalSnapshot      Json
   originalSnapshotHash String
-  latestSnapshot      Json?
-  latestSnapshotHash  String?
-  version             Int
-  createdBy           String
-  assignedTo          String?
-  formalConflictId    String?
-  findingGeneratedAt  DateTime
-  lastRefreshedAt     DateTime?
-  resolvedAt          DateTime?
-  createdAt           DateTime
-  updatedAt           DateTime
-  assets              FindingReviewCaseAsset[]
-  comments            FindingReviewComment[]
-  events              FindingReviewEvent[]
+  latestSnapshot        Json?
+  latestSnapshotHash    String?
+  version               Int
+  createdBy             String
+  assignedTo            String?
+  formalConflictId      String?
+  findingGeneratedAt    DateTime
+  lastRefreshedAt       DateTime?
+  resolvedAt            DateTime?
+  createdAt             DateTime
+  updatedAt             DateTime
+  assets                FindingReviewCaseAsset[]
+  decisions             FindingReviewDecision[]
+  comments              FindingReviewComment[]
+  events                FindingReviewEvent[]
 }
 
 model FindingReviewCaseAsset {
@@ -662,46 +820,105 @@ model FindingReviewCaseAsset {
 }
 
 model FindingReviewComment {
-  id          String
-  caseId      String
-  kind        String
-  body        String
-  requestId   String
-  createdBy   String
-  createdAt   DateTime
+  id             String
+  caseId         String
+  kind           String
+  body           String
+  requestId      String
+  createdBy      String
+  createdAt      DateTime
+  hiddenAt       DateTime?
+  hiddenBy       String?
+  hiddenReason   String?
+}
+
+model FindingReviewDecision {
+  id                  String
+  caseId              String
+  identityConclusion  FindingReviewIdentityConclusion
+  justification       String
+  caseVersion         Int
+  createdBy           String
+  createdAt           DateTime
+  components          FindingReviewDecisionComponent[]
+}
+
+model FindingReviewDecisionComponent {
+  id                    String
+  decisionId            String
+  componentType         FindingReviewDecisionComponentType
+  sourceType            String?
+  evidenceId            String?
+  observationReference  String?
+  attributeKey          String?
+  observedValue         Json?
+  justification         String
+  limitation            String?
+  metadata              Json?
+  createdAt             DateTime
 }
 
 model FindingReviewEvent {
-  id          String
-  caseId      String
-  eventType   String
-  actorId     String
-  before      Json?
-  after       Json?
-  metadata    Json?
-  occurredAt  DateTime
+  id                           String
+  caseId                       String
+  eventType                    String
+  versionBefore                Int?
+  versionAfter                 Int
+  actorId                      String
+  requestId                    String?
+  previousStatus               FindingReviewCaseStatus?
+  nextStatus                   FindingReviewCaseStatus?
+  previousIdentityConclusion   FindingReviewIdentityConclusion?
+  nextIdentityConclusion       FindingReviewIdentityConclusion?
+  previousDecisionId           String?
+  nextDecisionId               String?
+  justification                String?
+  before                       Json?
+  after                        Json?
+  metadata                     Json?
+  occurredAt                   DateTime
+  createdAt                    DateTime
 }
 ```
 
 Índices recomendados:
 
-- único em `activeFindingKey` quando não nulo;
+- único em `activeReviewSubjectKey` quando não nulo;
 - índice em `(status, updatedAt)`;
 - índice em `(staleness, updatedAt)`;
 - índice em `assignedTo`;
 - índice em `(findingId, policyVersion)`;
+- índice em `reviewSubjectKey` para histórico do mesmo assunto;
+- índice em `(caseId, versionAfter)` para ordenação do histórico;
+- índice em `(caseId, createdAt)` para decisões e comentários;
+- índice em `componentType` e avaliação de índices por `evidenceId`/`sourceType` conforme consultas;
 - único em `(caseId, requestId)` para comentários;
 - índices de relação por `assetId` e `caseId`.
+
+Para listagens por criação e paginação estável, deverão ser avaliados `(createdAt, id)`,
+`(status, createdAt, id)` e, quando houver atribuição, `(assignedTo, createdAt, id)`. Eles não deverão
+ser criados todos automaticamente: a escolha dependerá dos filtros e ordenações reais e deverá ser
+validada com `EXPLAIN ANALYZE` antes da migration.
+
+Eventos de mutação principal poderão ter unicidade em `(caseId, versionAfter)`, pois cada versão do
+caso deve resultar de uma única mutação atômica. Eventos append-only, como comentário, referenciam a
+versão atual sem incrementá-la e precisam de `requestId` próprio; por isso não podem compartilhar a
+mesma constraint de unicidade dos eventos mutáveis. Ordenação usa versão e timestamp, com `id` como
+desempate determinístico.
 
 Snapshots JSON preservam o contrato derivado com baixo acoplamento inicial, mas trazem riscos de
 volume, validação, consulta e evolução de schema. Campos usados em filtros, constraints e relações
 devem ser normalizados. O JSON deverá ser validado, versionado, minimizado e ter limite de tamanho.
 
+O bloco representa o agregado futuro completo. A primeira migration deverá criar somente as
+estruturas autorizadas para a Fase 1; tabelas de decisão, componentes e comentários não deverão ser
+antecipadas sem necessidade e aprovação específicas.
+
 ## 21. Plano de migration futura
 
 1. aprovar nomes, estados, decisões, retenção e autorização;
 2. criar enums e tabelas novas sem alterar `Conflict` inicialmente;
-3. criar índices e constraints, incluindo chave idempotente/ativa;
+3. criar índices e constraints, incluindo `reviewSubjectKey`, chave ativa anulável e idempotência;
 4. não fazer backfill de findings, pois não são persistidos hoje;
 5. manter feature flag de escrita desabilitada até validação;
 6. executar migration expand-only e deploy compatível;
@@ -748,31 +965,39 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 
 ## 24. Plano incremental de implementação
 
-### Fase 1 — persistência mínima
+### Fase 1 — persistência mínima e consulta somente leitura
 
-- **Backend/Prisma:** caso, ativos, snapshot, evento, locking e idempotência.
-- **Frontend:** nenhuma ação, ou feature flag interna.
-- **Testes:** migration, criação explícita, duplicidade, concorrência e ausência de escrita no ativo.
-- **Risco:** schema e autorização; depende de aprovação explícita.
+- **Backend/Prisma:** migration expand-only, caso, relação com múltiplos ativos, snapshot original,
+  `reviewSubjectKey`, chave ativa anulável, `version`, evento de criação com versões explícitas,
+  idempotência, criação explícita atrás de feature flag e lista/detalhe somente leitura.
+- **Frontend:** lista e detalhe somente leitura, ou nenhuma tela enquanto a feature flag estiver
+  restrita internamente.
+- **Auditoria:** somente criação do caso, sem ator simulado em uso produtivo.
+- **Testes:** migration, corrida de criação, duplicidade, idempotência, autorização, contratos de
+  leitura e ausência de escrita em `Asset`, atributos, interfaces, evidências e `Conflict`.
+- **Fora:** atribuição, comentários, decisões, componentes, refresh, integração com `Conflict`,
+  Resolution Center e ações sobre inventário.
+- **Risco:** schema e autenticação; depende de aprovação documental e autorização explícita para
+  Prisma/migration.
 
-### Fase 2 — consulta somente leitura
+### Fase 2 — atribuição e estados
 
-- **Backend:** lista e detalhe paginados/autorizados.
-- **Frontend:** fila e detalhe somente leitura.
-- **Testes:** contratos, filtros, segurança, acessibilidade e staleness inicial.
-- **Dependência:** Fase 1 estável.
-
-### Fase 3 — atribuição, comentários e estados
-
-- **Backend:** comandos transacionais, comentários append-only e RBAC.
-- **Frontend:** assumir/atribuir, comentar e transicionar.
+- **Backend:** atribuição e transições transacionais com RBAC e eventos versionados.
+- **Frontend:** assumir/atribuir e transicionar.
 - **Testes:** máquina de estados, autorização, idempotência e concorrência.
 
-### Fase 4 — decisão sem ação no inventário
+### Fase 3 — comentários
 
-- **Backend:** decisão tipada e histórico.
+- **Backend:** comentários append-only conforme ciclo de vida aprovado.
+- **Frontend:** comentar, corrigir por referência e ocultação administrativa autorizada.
+- **Testes:** sanitização, retenção, idempotência, acesso e ausência de `AssetEvidence`.
+
+### Fase 4 — decisão composta sem ação no inventário
+
+- **Backend:** conclusão de identidade, componentes relacionais e histórico imutável.
 - **Frontend:** formulário com motivo/comentário e aviso de não alteração.
-- **Testes:** decisões por tipo, reabertura e nenhuma escrita no inventário/Conflict.
+- **Testes:** coexistência de componentes, exclusão mútua da conclusão, reabertura e nenhuma escrita
+  no inventário/Conflict.
 
 ### Fase 5 — comparação com finding atual
 
@@ -793,10 +1018,13 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 - finding recalculado e validado na criação;
 - snapshot original e hash preservados;
 - todos os ativos afetados relacionados;
-- duplicidade e retry controlados;
+- `reviewSubjectKey` calculada no servidor e no máximo um caso ativo por assunto;
+- duplicidade, corrida e retry controlados por constraint e `Idempotency-Key`;
 - `version` e concorrência protegidos com `409`;
 - ator autenticado e autorizado;
-- decisão e transição auditadas;
+- evento de criação registra `versionBefore = null` e `versionAfter = 1`;
+- criação e auditoria ocorrem na mesma transação;
+- criação protegida por feature flag e lista/detalhe permanecem somente leitura;
 - nenhum finding persistido automaticamente;
 - nenhum `Conflict` criado automaticamente;
 - nenhuma alteração em ativo, atributo, interface, evidência ou status;
@@ -804,22 +1032,41 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 - rollback e feature flag documentados;
 - dados e metadata minimizados.
 
-## 26. Decisões abertas
+## 26. Decisões arquiteturais e aprovações pendentes
 
-| Pergunta | Recomendação | Aprovação necessária |
-| --- | --- | ---: |
-| Reutilizar `Conflict`? | usar modelo híbrido com `FindingReviewCase` | sim |
-| Uma decisão pode mudar? | somente após reabertura, preservando histórico | sim |
-| Caso resolvido pode reabrir? | sim, com permissão e justificativa | sim |
-| Quem pode dispensar? | `Review Lead` | sim |
-| Um finding pode ter vários casos? | vários históricos, no máximo um caso ativo | sim |
-| Um caso agrega vários findings? | não na primeira versão | sim |
-| Retenção do snapshot? | política configurável; não definir prazo sem governança | sim |
-| Quais decisões encerram? | todas as conclusivas; `NEEDS_MORE_EVIDENCE` não | sim |
-| Quem aprova ação no inventário? | papel distinto do revisor quando possível | sim |
-| Comentários terão anexos? | não na primeira versão | sim |
-| Quando criar `Conflict` formal? | somente fluxo explícito futuro | sim |
-| ETag ou `expectedVersion`? | oferecer ETag e aceitar precondição versionada | sim |
+### 26.1 Decisões fechadas por este documento
+
+- arquitetura híbrida e entidade `FindingReviewCase` separada de `Conflict`;
+- findings permanecem derivados e casos são criados somente por ação explícita;
+- conclusão de identidade separada de componentes que podem coexistir;
+- `NEEDS_MORE_EVIDENCE` é pendência/estado operacional, não decisão terminal;
+- `reviewSubjectKey` representa assunto estável e não inclui `policyVersion` por padrão;
+- no máximo um caso ativo por assunto;
+- estados ativos são `OPEN`, `IN_REVIEW` e `WAITING_FOR_EVIDENCE`;
+- primeira estratégia recomendada é `activeReviewSubjectKey` anulável e única;
+- eventos mutáveis registram explicitamente `versionBefore` e `versionAfter`;
+- decisões e componentes são relacionais, imutáveis e auditáveis;
+- nenhuma decisão, componente, caso ou refresh altera inventário ou cria `Conflict` automaticamente.
+
+### 26.2 Decisões que ainda exigem aprovação humana
+
+| Pergunta | Recomendação | Impacto da aprovação |
+| --- | --- | --- |
+| Nomes definitivos das tabelas e enums? | validar os nomes conceituais antes do Prisma | contratos e migration |
+| Autenticação mínima? | não liberar escrita com `atlas-mvp-user` | identidade, atribuição e auditoria |
+| Retenção de snapshots? | política configurável, sem prazo silencioso | volume, privacidade e compliance |
+| Tamanho máximo de comentário? | definir por produto/segurança antes da fase 3 | validação e UX |
+| Política de ocultação? | somente papel autorizado, motivo e auditoria | governança e privacidade |
+| Duração de `Idempotency-Key`? | definir janela e armazenamento antes da escrita | retries e capacidade |
+| Feature flag? | iniciar desabilitada e com rollout controlado | deploy e rollback |
+| Escopo exato do primeiro PR? | adotar a Fase 1 mínima desta seção | risco e revisabilidade |
+| Quando criar `Conflict` formal? | somente fluxo explícito futuro | coexistência com Resolution Center |
+| Quem aprova ação no inventário? | papel distinto do revisor quando possível | segregação de funções |
+| Autorização para Prisma/migration? | exigir aprovação explícita após revisão | início da implementação |
+
+Uma alternativa futura de índice parcial PostgreSQL permanece possível, mas não é decisão pendente
+para a primeira versão: a chave ativa anulável é a estratégia recomendada. Qualquer troca exigirá
+nova análise, migration própria e testes de corrida.
 
 ## 27. Riscos arquiteturais
 
@@ -858,10 +1105,13 @@ O desenho recomenda formalmente:
 
 1. preservar findings como análises derivadas e não persistidas;
 2. criar casos somente por ação explícita e após recálculo;
-3. usar `FindingReviewCase` para snapshot, investigação, estado, decisão e histórico;
-4. manter `Conflict` como conceito formal separado;
-5. não alterar o inventário na primeira versão persistida;
-6. exigir autenticação, autorização, idempotência e concorrência otimista antes de escrita;
-7. implementar em fases pequenas, cada uma com testes de ausência de efeitos colaterais.
+3. usar `FindingReviewCase` para snapshot, investigação, estado e histórico;
+4. identificar o assunto pela `reviewSubjectKey` e limitar a um caso ativo por chave;
+5. representar decisões futuras por conclusão de identidade e componentes relacionais coexistentes;
+6. registrar versões anterior e posterior em todo evento de mutação;
+7. manter `Conflict` como conceito formal separado;
+8. não alterar o inventário na primeira versão persistida;
+9. exigir autenticação, autorização, idempotência e concorrência otimista antes de escrita;
+10. implementar em fases pequenas, cada uma com testes de ausência de efeitos colaterais.
 
 Qualquer schema, migration ou endpoint de escrita deverá ser objeto de autorização e PR futuros.
