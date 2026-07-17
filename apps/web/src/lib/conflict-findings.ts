@@ -53,6 +53,17 @@ export interface ConflictFindingQueryParams {
   sortDirection?: ConflictFindingSortDirection;
 }
 
+export interface ConflictFindingUrlIssue {
+  field: 'assetId' | 'ip';
+  value: string;
+  message: string;
+}
+
+export interface ConflictFindingSearchParamsResult {
+  query: ConflictFindingQueryParams;
+  issues: ConflictFindingUrlIssue[];
+}
+
 export interface ConflictTemporalContext {
   firstObservedAt: string | null;
   lastObservedAt: string | null;
@@ -168,6 +179,24 @@ export const DEFAULT_CONFLICT_FINDING_QUERY: Required<
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FINDING_ID_PATTERN = /^finding_[0-9a-f]{24}$/;
+const CONFLICT_FINDING_QUERY_KEYS = [
+  'page',
+  'pageSize',
+  'type',
+  'assetId',
+  'hostname',
+  'ip',
+  'sourceType',
+  'temporalRelationship',
+  'hasLimitations',
+  'sortBy',
+  'sortDirection',
+] as const satisfies readonly (keyof ConflictFindingQueryParams)[];
+
+export const INVALID_CONFLICT_FINDING_IP_MESSAGE =
+  'O endereço IP informado na URL é inválido. Revise o filtro e tente novamente.';
+export const INVALID_CONFLICT_FINDING_ASSET_ID_MESSAGE =
+  'O identificador do ativo informado na URL é inválido. Revise o filtro e tente novamente.';
 
 const findingTypeLabels: Record<ConflictFindingType, string> = {
   DUPLICATE_HOSTNAME_ACROSS_ASSETS: 'Hostname associado a ativos diferentes',
@@ -236,9 +265,10 @@ export function formatTemporalDifference(value: number | null): string {
 export function serializeConflictFindingQuery(params: ConflictFindingQueryParams): string {
   const search = new URLSearchParams();
 
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null || value === '') continue;
-    search.set(key, String(value));
+  for (const key of CONFLICT_FINDING_QUERY_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+    const value = serializableQueryValue(key, params[key]);
+    if (value !== undefined) search.set(key, value);
   }
 
   return search.toString();
@@ -247,6 +277,12 @@ export function serializeConflictFindingQuery(params: ConflictFindingQueryParams
 export function conflictFindingQueryFromSearchParams(
   input: Record<string, string | string[] | undefined>,
 ): ConflictFindingQueryParams {
+  return conflictFindingSearchParamsResult(input).query;
+}
+
+export function conflictFindingSearchParamsResult(
+  input: Record<string, string | string[] | undefined>,
+): ConflictFindingSearchParamsResult {
   const value = (key: string): string | undefined => {
     const entry = input[key];
     return Array.isArray(entry) ? entry[0] : entry;
@@ -265,24 +301,126 @@ export function conflictFindingQueryFromSearchParams(
   );
   const sortBy = enumValue(value('sortBy'), CONFLICT_FINDING_SORT_FIELDS);
   const sortDirection = enumValue(value('sortDirection'), ['asc', 'desc'] as const);
-  const assetIdValue = value('assetId')?.trim();
+  const rawAssetId = value('assetId');
+  const assetIdValue = rawAssetId?.trim();
   const hostname = value('hostname')?.trim();
-  const ip = value('ip')?.trim();
+  const rawIp = value('ip');
+  const ip = rawIp?.trim();
   const limitations = value('hasLimitations');
+  const issues: ConflictFindingUrlIssue[] = [];
+
+  if (rawAssetId !== undefined && (!assetIdValue || !UUID_PATTERN.test(assetIdValue))) {
+    issues.push({
+      field: 'assetId',
+      value: rawAssetId,
+      message: INVALID_CONFLICT_FINDING_ASSET_ID_MESSAGE,
+    });
+  }
+
+  if (rawIp !== undefined && (!ip || !isValidConflictFindingIp(ip))) {
+    issues.push({
+      field: 'ip',
+      value: rawIp,
+      message: INVALID_CONFLICT_FINDING_IP_MESSAGE,
+    });
+  }
 
   return {
-    page: positiveInteger('page') ?? DEFAULT_CONFLICT_FINDING_QUERY.page,
-    pageSize: positiveInteger('pageSize', 100) ?? DEFAULT_CONFLICT_FINDING_QUERY.pageSize,
-    type,
-    assetId: assetIdValue && UUID_PATTERN.test(assetIdValue) ? assetIdValue : undefined,
-    hostname: hostname || undefined,
-    ip: ip || undefined,
-    sourceType,
-    temporalRelationship,
-    hasLimitations: limitations === 'true' ? true : limitations === 'false' ? false : undefined,
-    sortBy: sortBy ?? DEFAULT_CONFLICT_FINDING_QUERY.sortBy,
-    sortDirection: sortDirection ?? DEFAULT_CONFLICT_FINDING_QUERY.sortDirection,
+    query: {
+      page: positiveInteger('page') ?? DEFAULT_CONFLICT_FINDING_QUERY.page,
+      pageSize: positiveInteger('pageSize', 100) ?? DEFAULT_CONFLICT_FINDING_QUERY.pageSize,
+      type,
+      assetId: assetIdValue && UUID_PATTERN.test(assetIdValue) ? assetIdValue : undefined,
+      hostname: hostname || undefined,
+      ip: ip && isValidConflictFindingIp(ip) ? ip : undefined,
+      sourceType,
+      temporalRelationship,
+      hasLimitations: limitations === 'true' ? true : limitations === 'false' ? false : undefined,
+      sortBy: sortBy ?? DEFAULT_CONFLICT_FINDING_QUERY.sortBy,
+      sortDirection: sortDirection ?? DEFAULT_CONFLICT_FINDING_QUERY.sortDirection,
+    },
+    issues,
   };
+}
+
+export function isValidConflictFindingIp(value: string): boolean {
+  if (!value || value !== value.trim() || value.includes('/') || /[\[\]]/.test(value)) return false;
+  if (value.includes('.')) {
+    if (!value.includes(':')) return isValidIpv4(value);
+    const lastColon = value.lastIndexOf(':');
+    const ipv4Suffix = value.slice(lastColon + 1);
+    if (!isValidIpv4(ipv4Suffix)) return false;
+    return isValidIpv6(`${value.slice(0, lastColon)}:0:0`);
+  }
+  return value.includes(':') && isValidIpv6(value);
+}
+
+function serializableQueryValue(
+  key: (typeof CONFLICT_FINDING_QUERY_KEYS)[number],
+  value: unknown,
+): string | undefined {
+  if (key === 'page') {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1
+      ? String(value)
+      : undefined;
+  }
+  if (key === 'pageSize') {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100
+      ? String(value)
+      : undefined;
+  }
+  if (key === 'hasLimitations') return typeof value === 'boolean' ? String(value) : undefined;
+  if (key === 'type') return enumValue(value, CONFLICT_FINDING_TYPES);
+  if (key === 'sourceType') return enumValue(value, CONFLICT_SOURCE_TYPES);
+  if (key === 'temporalRelationship') {
+    return enumValue(value, CONFLICT_TEMPORAL_RELATIONSHIPS);
+  }
+  if (key === 'sortBy') return enumValue(value, CONFLICT_FINDING_SORT_FIELDS);
+  if (key === 'sortDirection') return enumValue(value, ['asc', 'desc'] as const);
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (key === 'assetId') return UUID_PATTERN.test(trimmed) ? trimmed : undefined;
+  if (key === 'ip') return isValidConflictFindingIp(trimmed) ? trimmed : undefined;
+  return trimmed;
+}
+
+function isValidIpv4(value: string): boolean {
+  const octets = value.split('.');
+  return (
+    octets.length === 4 &&
+    octets.every(
+      (octet) =>
+        /^\d{1,3}$/.test(octet) &&
+        (octet === '0' || !octet.startsWith('0')) &&
+        Number(octet) <= 255,
+    )
+  );
+}
+
+function isValidIpv6(value: string): boolean {
+  if (!/^[0-9a-f:]+$/i.test(value)) return false;
+  const compressionCount = value.split('::').length - 1;
+  if (compressionCount > 1) return false;
+
+  if (compressionCount === 1) {
+    const [left = '', right = ''] = value.split('::');
+    const leftParts = left ? left.split(':') : [];
+    const rightParts = right ? right.split(':') : [];
+    return (
+      leftParts.every(isValidIpv6Part) &&
+      rightParts.every(isValidIpv6Part) &&
+      leftParts.length + rightParts.length < 8
+    );
+  }
+
+  const parts = value.split(':');
+  return parts.length === 8 && parts.every(isValidIpv6Part);
+}
+
+function isValidIpv6Part(value: string): boolean {
+  return /^[0-9a-f]{1,4}$/i.test(value);
 }
 
 export function hasConflictFindingFilters(params: ConflictFindingQueryParams): boolean {

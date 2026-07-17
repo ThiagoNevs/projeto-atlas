@@ -349,6 +349,10 @@ input {
   min-width: 0;
 }
 
+.finding-page-content {
+  min-width: 0;
+}
+
 .conflict-findings-heading {
   display: flex;
   margin-bottom: 1.4rem;
@@ -397,6 +401,21 @@ input {
 
 .finding-filter-actions {
   grid-column: span 2;
+}
+
+.finding-url-issues {
+  margin: 0 1.25rem 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 127, 136, 0.42);
+  border-radius: 12px;
+  background: rgba(255, 127, 136, 0.07);
+  color: var(--negative);
+}
+
+.finding-url-issues ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1.2rem;
+  line-height: 1.55;
 }
 
 .finding-update-status {

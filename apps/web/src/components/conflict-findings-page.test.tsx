@@ -9,6 +9,7 @@ import {
   type ConflictFindingDetailLoader,
   type ConflictFindingsLoader,
 } from './conflict-findings-page.tsx';
+import { ApiError } from '../lib/api-error.ts';
 import type {
   ConflictFindingDetail,
   ConflictFindingListItem,
@@ -244,6 +245,24 @@ async function change(element: HTMLInputElement | HTMLSelectElement, value: stri
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set;
     setter?.call(element, value);
     element.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+  });
+}
+
+async function keydown(
+  environment: JsdomTestEnvironment,
+  key: string,
+  shiftKey = false,
+): Promise<void> {
+  await act(async () => {
+    environment.window.dispatchEvent(
+      new environment.window.KeyboardEvent('keydown', {
+        key,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     await flush();
   });
 }
@@ -489,6 +508,112 @@ test('limpar filtros restaura defaults e remove filtros da URL', async () => {
   });
 });
 
+test('IP inválido da URL não é enviado, preserva filtros válidos e mostra mensagem em português', async () => {
+  await withHarness(async (harness) => {
+    const loaders = controlledLoaders();
+    harness.environment.window.history.replaceState(
+      null,
+      '',
+      '/conflict-findings?ip=not-an-ip&hostname=SRV',
+    );
+    await harness.render(
+      createElement(ConflictFindingsPage, {
+        initialSearchParams: { ip: 'not-an-ip', hostname: 'SRV' },
+        loadFindings: loaders.list,
+        loadDetail: loaders.detail,
+      }),
+    );
+    assert.equal(loaders.listCalls[0]?.query.ip, undefined);
+    assert.equal(loaders.listCalls[0]?.query.hostname, 'SRV');
+    assert.match(
+      harness.container.textContent ?? '',
+      /O endereço IP informado na URL é inválido/,
+    );
+    assert.doesNotMatch(harness.container.textContent ?? '', /ip must be an ip address/);
+    const ipInput = harness.container.querySelector('input[placeholder="IPv4 ou IPv6"]');
+    assert.equal((ipInput as HTMLInputElement | null)?.value, 'not-an-ip');
+
+    await click(button(harness.container, 'Limpar filtros'));
+    assert.equal(harness.environment.window.location.pathname, '/conflict-findings');
+    assert.equal(
+      new URLSearchParams(harness.environment.window.location.search).has('ip'),
+      false,
+    );
+    assert.doesNotMatch(harness.container.textContent ?? '', /endereço IP informado na URL é inválido/);
+  });
+});
+
+test('assetId inválido da URL não é enviado e pode ser corrigido sem perder hostname', async () => {
+  await withHarness(async (harness) => {
+    const loaders = controlledLoaders();
+    await harness.render(
+      createElement(ConflictFindingsPage, {
+        initialSearchParams: { assetId: '../admin', hostname: 'SRV' },
+        loadFindings: loaders.list,
+        loadDetail: loaders.detail,
+      }),
+    );
+    assert.equal(loaders.listCalls[0]?.query.assetId, undefined);
+    assert.equal(loaders.listCalls[0]?.query.hostname, 'SRV');
+    assert.match(harness.container.textContent ?? '', /identificador do ativo informado na URL é inválido/);
+    const assetInput = harness.container.querySelector('input[placeholder="UUID do ativo"]');
+    await change(assetInput as HTMLInputElement, ASSET_A);
+    await click(button(harness.container, 'Aplicar filtros'));
+    assert.equal(loaders.listCalls[1]?.query.assetId, ASSET_A);
+    assert.equal(loaders.listCalls[1]?.query.hostname, 'SRV');
+    assert.doesNotMatch(harness.container.textContent ?? '', /identificador do ativo informado na URL é inválido/);
+  });
+});
+
+test('popstate revalida filtros sem loop e não encaminha IP inválido', async () => {
+  await withHarness(async (harness) => {
+    const loaders = await renderLoaded(harness);
+    harness.environment.window.history.pushState(
+      null,
+      '',
+      '/conflict-findings?ip=not-an-ip&hostname=SRV',
+    );
+    await act(async () => {
+      harness.environment.window.dispatchEvent(new harness.environment.window.PopStateEvent('popstate'));
+      await flush();
+    });
+    assert.equal(loaders.listCalls.length, 2);
+    assert.equal(loaders.listCalls[1]?.query.ip, undefined);
+    assert.equal(loaders.listCalls[1]?.query.hostname, 'SRV');
+
+    harness.environment.window.history.pushState(
+      null,
+      '',
+      '/conflict-findings?ip=2001%3Adb8%3A%3A1',
+    );
+    await act(async () => {
+      harness.environment.window.dispatchEvent(new harness.environment.window.PopStateEvent('popstate'));
+      await flush();
+    });
+    assert.equal(loaders.listCalls.length, 3);
+    assert.equal(loaders.listCalls[2]?.query.ip, '2001:db8::1');
+    assert.doesNotMatch(harness.container.textContent ?? '', /endereço IP informado na URL é inválido/);
+  });
+});
+
+test('erro HTTP 400 da validação não expõe mensagem técnica do backend', async () => {
+  await withHarness(async (harness) => {
+    const loaders = controlledLoaders();
+    await harness.render(
+      createElement(ConflictFindingsPage, {
+        loadFindings: loaders.list,
+        loadDetail: loaders.detail,
+      }),
+    );
+    await rejectInsideAct(
+      loaders.listCalls[0]!.request,
+      new ApiError('ip must be an ip address', 400),
+    );
+    assert.match(harness.container.textContent ?? '', /Os filtros informados não são válidos/);
+    assert.doesNotMatch(harness.container.textContent ?? '', /ip must be an ip address/);
+  });
+});
+
 test('pagina respeitando flags do backend e mantendo filtros', async () => {
   await withHarness(async (harness) => {
     const loaders = controlledLoaders();
@@ -602,6 +727,96 @@ test('fechar detalhe cancela a chamada e restaura o foco ao acionador', async ()
     });
     assert.equal(loaders.detailCalls[0]?.signal.aborted, true);
     assert.equal(harness.environment.window.document.activeElement, trigger);
+    const background = harness.container.querySelector('.finding-page-content');
+    assert.equal(background?.hasAttribute('inert'), false);
+    assert.equal(background?.hasAttribute('aria-hidden'), false);
+  });
+});
+
+test('diálogo torna o fundo inerte e impede foco programático nos filtros', async () => {
+  await withHarness(async (harness) => {
+    await renderLoaded(harness);
+    const filter = harness.container.querySelector('input[placeholder="Ex.: SRV-APP-01"]');
+    await click(button(harness.container, 'Ver análise detalhada'));
+    const background = harness.container.querySelector('.finding-page-content');
+    assert.equal(background?.hasAttribute('inert'), true);
+    assert.equal(background?.getAttribute('aria-hidden'), 'true');
+    (filter as HTMLInputElement).focus();
+    assert.equal(
+      harness.container.querySelector('[role="dialog"]')?.contains(
+        harness.environment.window.document.activeElement,
+      ),
+      true,
+    );
+  });
+});
+
+test('Tab no último controle retorna ao primeiro e Shift+Tab faz o caminho inverso', async () => {
+  await withHarness(async (harness) => {
+    const listItem = item();
+    const loaders = await renderLoaded(harness, response([listItem]));
+    await click(button(harness.container, 'Ver análise detalhada'));
+    await resolveInsideAct(loaders.detailCalls[0]!.request, individual(listItem));
+    const dialog = harness.container.querySelector('[role="dialog"]');
+    assert.ok(dialog);
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('button, a[href]')];
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    assert.match(first.textContent ?? '', /Fechar/);
+
+    last.focus();
+    await keydown(harness.environment, 'Tab');
+    assert.equal(harness.environment.window.document.activeElement, first);
+
+    first.focus();
+    await keydown(harness.environment, 'Tab', true);
+    assert.equal(harness.environment.window.document.activeElement, last);
+  });
+});
+
+test('loading com um único controle mantém Tab e Shift+Tab no botão Fechar', async () => {
+  await withHarness(async (harness) => {
+    await renderLoaded(harness);
+    await click(button(harness.container, 'Ver análise detalhada'));
+    const close = button(harness.container, 'Fechar');
+    assert.equal(harness.environment.window.document.activeElement, close);
+    await keydown(harness.environment, 'Tab');
+    assert.equal(harness.environment.window.document.activeElement, close);
+    await keydown(harness.environment, 'Tab', true);
+    assert.equal(harness.environment.window.document.activeElement, close);
+  });
+});
+
+test('erro do detalhe atualiza os controles sem quebrar a contenção', async () => {
+  await withHarness(async (harness) => {
+    const loaders = await renderLoaded(harness);
+    await click(button(harness.container, 'Ver análise detalhada'));
+    await rejectInsideAct(loaders.detailCalls[0]!.request, new Error('Detalhe indisponível.'));
+    const close = button(harness.container, 'Fechar');
+    const retry = button(harness.container, 'Tentar novamente');
+    retry.focus();
+    await keydown(harness.environment, 'Tab');
+    assert.equal(harness.environment.window.document.activeElement, close);
+    close.focus();
+    await keydown(harness.environment, 'Tab', true);
+    assert.equal(harness.environment.window.document.activeElement, retry);
+  });
+});
+
+test('unmount remove contenção e restaura atributos temporários', async () => {
+  await withHarness(async (harness) => {
+    await renderLoaded(harness);
+    await click(button(harness.container, 'Ver análise detalhada'));
+    const background = harness.container.querySelector('.finding-page-content') as HTMLDivElement;
+    assert.equal(background.hasAttribute('inert'), true);
+    await harness.unmount();
+    assert.equal(background.hasAttribute('inert'), false);
+    assert.equal(background.hasAttribute('aria-hidden'), false);
+    const external = harness.environment.window.document.createElement('button');
+    harness.environment.window.document.body.append(external);
+    external.focus();
+    await keydown(harness.environment, 'Tab');
+    assert.equal(harness.environment.window.document.activeElement, external);
   });
 });
 
@@ -609,10 +824,7 @@ test('Escape fecha o painel de detalhe', async () => {
   await withHarness(async (harness) => {
     await renderLoaded(harness);
     await click(button(harness.container, 'Ver análise detalhada'));
-    await act(async () => {
-      harness.environment.window.dispatchEvent(new harness.environment.window.KeyboardEvent('keydown', { key: 'Escape' }));
-      await flush();
-    });
+    await keydown(harness.environment, 'Escape');
     assert.equal(harness.container.querySelector('[role="dialog"]'), null);
   });
 });
@@ -629,6 +841,35 @@ test('troca rápida de detalhes cancela o anterior e ignora sua resposta', async
     await resolveInsideAct(loaders.detailCalls[1]!.request, individual(second));
     await resolveInsideAct(loaders.detailCalls[0]!.request, individual(first));
     assert.match(harness.container.querySelector('[role="dialog"]')?.textContent ?? '', /Hostname divergente no mesmo ativo/);
+    assert.equal(
+      harness.container.querySelector('[role="dialog"]')?.contains(
+        harness.environment.window.document.activeElement,
+      ),
+      true,
+    );
+  });
+});
+
+test('conteúdo textual malicioso é renderizado literalmente sem criar HTML executável', async () => {
+  await withHarness(async (harness) => {
+    const malicious = '<script>alert(1)</script><img src=x onerror=alert(1)>';
+    const maliciousItem = item('DUPLICATE_HOSTNAME_ACROSS_ASSETS', {
+      explanationSummary: malicious,
+      affectedAssets: [
+        { assetId: ASSET_A, persistedName: malicious },
+        { assetId: ASSET_B, persistedName: 'SRV-APP-02' },
+      ],
+    });
+    const loaders = await renderLoaded(harness, response([maliciousItem]));
+    assert.match(harness.container.textContent ?? '', /<script>alert\(1\)<\/script>/);
+    assert.equal(harness.container.querySelector('script, img'), null);
+    await click(button(harness.container, 'Ver análise detalhada'));
+    await resolveInsideAct(loaders.detailCalls[0]!.request, individual(maliciousItem));
+    assert.match(
+      harness.container.querySelector('[role="dialog"]')?.textContent ?? '',
+      /<img src=x onerror=alert\(1\)>/,
+    );
+    assert.equal(harness.container.querySelector('[role="dialog"] script, [role="dialog"] img'), null);
   });
 });
 

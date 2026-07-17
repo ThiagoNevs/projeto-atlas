@@ -13,6 +13,7 @@ import {
 
 import { ErrorState, LoadingState } from './page-state';
 import {
+  ApiError,
   getAssetConflictAnalysis,
   getConflictFindings,
   type ConflictFindingDetail,
@@ -20,11 +21,8 @@ import {
   type ConflictFindingQueryParams,
   type ConflictFindingSortDirection,
   type ConflictFindingSortField,
-  type ConflictFindingType,
   type ConflictFindingsRequestOptions,
   type ConflictFindingsResponse,
-  type ConflictSourceType,
-  type ConflictTemporalRelationship,
   type IdentityNetworkAnalysisResponse,
 } from '../lib/api';
 import {
@@ -33,7 +31,7 @@ import {
   CONFLICT_SOURCE_TYPES,
   CONFLICT_TEMPORAL_RELATIONSHIPS,
   DEFAULT_CONFLICT_FINDING_QUERY,
-  conflictFindingQueryFromSearchParams,
+  conflictFindingSearchParamsResult,
   formatTemporalDifference,
   getConflictFindingTypeLabel,
   getConflictReviewOptionLabel,
@@ -42,6 +40,8 @@ import {
   hasConflictFindingFilters,
   isMatchingDetailedFinding,
   serializeConflictFindingQuery,
+  type ConflictFindingSearchParamsResult,
+  type ConflictFindingUrlIssue,
 } from '../lib/conflict-findings';
 import { formatDateTime } from '../lib/format';
 
@@ -99,6 +99,21 @@ function formFromQuery(query: ConflictFindingQueryParams): FilterForm {
   };
 }
 
+function formFromSearchParamsResult(result: ConflictFindingSearchParamsResult): FilterForm {
+  const form = formFromQuery(result.query);
+  for (const issue of result.issues) form[issue.field] = issue.value;
+  return form;
+}
+
+function listErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 400) {
+    return 'Os filtros informados não são válidos. Revise os valores e tente novamente.';
+  }
+  return error instanceof Error
+    ? error.message
+    : 'Não foi possível consultar os achados de identidade e rede.';
+}
+
 function replaceUrl(query: ConflictFindingQueryParams): void {
   const serialized = serializeConflictFindingQuery(query);
   window.history.pushState(null, '', serialized ? `/conflict-findings?${serialized}` : '/conflict-findings');
@@ -113,12 +128,17 @@ export function ConflictFindingsPage({
   loadFindings = getConflictFindings,
   loadDetail = getAssetConflictAnalysis,
 }: ConflictFindingsPageProps) {
-  const firstQuery = useMemo(
-    () => conflictFindingQueryFromSearchParams(initialSearchParams),
+  const firstSearchParamsResult = useMemo(
+    () => conflictFindingSearchParamsResult(initialSearchParams),
     [initialSearchParams],
   );
-  const [form, setForm] = useState<FilterForm>(() => formFromQuery(firstQuery));
-  const [query, setQuery] = useState<ConflictFindingQueryParams>(firstQuery);
+  const [form, setForm] = useState<FilterForm>(() =>
+    formFromSearchParamsResult(firstSearchParamsResult),
+  );
+  const [query, setQuery] = useState<ConflictFindingQueryParams>(firstSearchParamsResult.query);
+  const [urlIssues, setUrlIssues] = useState<ConflictFindingUrlIssue[]>(
+    firstSearchParamsResult.issues,
+  );
   const [result, setResult] = useState<ConflictFindingsResponse | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -135,7 +155,9 @@ export function ConflictFindingsPage({
   const detailSequence = useRef(0);
   const detailController = useRef<AbortController | null>(null);
   const detailCloseButton = useRef<HTMLButtonElement | null>(null);
+  const detailPanel = useRef<HTMLElement | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
+  const pageContent = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -149,11 +171,7 @@ export function ConflictFindingsPage({
       })
       .catch((loadError: unknown) => {
         if (sequence !== listSequence.current || controller.signal.aborted) return;
-        setError(
-          loadError instanceof Error
-            ? loadError.message
-            : 'Não foi possível consultar os achados de identidade e rede.',
-        );
+        setError(listErrorMessage(loadError));
       })
       .finally(() => {
         if (sequence !== listSequence.current || controller.signal.aborted) return;
@@ -167,47 +185,125 @@ export function ConflictFindingsPage({
   useEffect(() => {
     const restoreFromUrl = (): void => {
       const params = Object.fromEntries(new URLSearchParams(window.location.search).entries());
-      const restored = conflictFindingQueryFromSearchParams(params);
+      const restored = conflictFindingSearchParamsResult(params);
       if (hasLoaded.current) setUpdating(true);
       else setInitialLoading(true);
       setError(null);
-      setForm(formFromQuery(restored));
-      setQuery(restored);
+      setUrlIssues(restored.issues);
+      setForm(formFromSearchParamsResult(restored));
+      setQuery(restored.query);
     };
     window.addEventListener('popstate', restoreFromUrl);
     return () => window.removeEventListener('popstate', restoreFromUrl);
   }, []);
 
+  const closeDetail = useCallback((): void => {
+    detailController.current?.abort();
+    detailSequence.current += 1;
+    setDetailItem(null);
+    setDetailFinding(null);
+    setDetailLoading(false);
+    setDetailError(null);
+    setDetailStale(false);
+    const trigger = detailTrigger.current;
+    window.requestAnimationFrame(() => trigger?.focus());
+  }, []);
+
   useEffect(() => {
     if (!detailItem) return;
-    detailCloseButton.current?.focus();
-    const closeWithEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') closeDetail();
+    const panel = detailPanel.current;
+    const background = pageContent.current;
+    if (!panel || !background) return;
+
+    const previousInert = background.inert;
+    const previousInertAttribute = background.getAttribute('inert');
+    const previousAriaHidden = background.getAttribute('aria-hidden');
+    background.inert = true;
+    background.setAttribute('inert', '');
+    background.setAttribute('aria-hidden', 'true');
+
+    const focusableElements = (): HTMLElement[] =>
+      [...panel.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter(
+        (element) =>
+          !element.hidden &&
+          element.getAttribute('aria-hidden') !== 'true' &&
+          !element.closest('[inert]'),
+      );
+
+    const focusFirst = (): void => {
+      (focusableElements()[0] ?? panel).focus();
     };
-    window.addEventListener('keydown', closeWithEscape);
-    return () => window.removeEventListener('keydown', closeWithEscape);
-  });
+
+    detailCloseButton.current?.focus();
+
+    const containFocus = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDetail();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement;
+      if (!panel.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    const redirectExternalFocus = (event: FocusEvent): void => {
+      if (!panel.contains(event.target as Node)) focusFirst();
+    };
+
+    window.addEventListener('keydown', containFocus, true);
+    document.addEventListener('focusin', redirectExternalFocus, true);
+    return () => {
+      window.removeEventListener('keydown', containFocus, true);
+      document.removeEventListener('focusin', redirectExternalFocus, true);
+      background.inert = previousInert;
+      if (previousInertAttribute === null) background.removeAttribute('inert');
+      else background.setAttribute('inert', previousInertAttribute);
+      if (previousAriaHidden === null) background.removeAttribute('aria-hidden');
+      else background.setAttribute('aria-hidden', previousAriaHidden);
+    };
+  }, [closeDetail, detailItem]);
 
   useEffect(() => () => detailController.current?.abort(), []);
 
   function applyFilters(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const nextQuery: ConflictFindingQueryParams = {
-      page: 1,
-      pageSize: Number(form.pageSize),
-      type: (form.type || undefined) as ConflictFindingType | undefined,
-      assetId: form.assetId.trim() || undefined,
-      hostname: form.hostname.trim() || undefined,
-      ip: form.ip.trim() || undefined,
-      sourceType: (form.sourceType || undefined) as ConflictSourceType | undefined,
-      temporalRelationship: (form.temporalRelationship || undefined) as
-        | ConflictTemporalRelationship
-        | undefined,
-      hasLimitations:
-        form.hasLimitations === '' ? undefined : form.hasLimitations === 'true',
+    const parsed = conflictFindingSearchParamsResult({
+      page: '1',
+      pageSize: form.pageSize,
+      type: form.type || undefined,
+      assetId: form.assetId || undefined,
+      hostname: form.hostname || undefined,
+      ip: form.ip || undefined,
+      sourceType: form.sourceType || undefined,
+      temporalRelationship: form.temporalRelationship || undefined,
+      hasLimitations: form.hasLimitations || undefined,
       sortBy: form.sortBy,
       sortDirection: form.sortDirection,
-    };
+    });
+    const nextQuery = parsed.query;
+    setUrlIssues(parsed.issues);
     prepareListUpdate();
     replaceUrl(nextQuery);
     setQuery(nextQuery);
@@ -216,6 +312,7 @@ export function ConflictFindingsPage({
   function clearFilters(): void {
     const cleared = { ...DEFAULT_CONFLICT_FINDING_QUERY };
     setForm(formFromQuery(cleared));
+    setUrlIssues([]);
     prepareListUpdate();
     replaceUrl(cleared);
     setQuery(cleared);
@@ -290,21 +387,11 @@ export function ConflictFindingsPage({
     requestDetail(item);
   }
 
-  function closeDetail(): void {
-    detailController.current?.abort();
-    detailSequence.current += 1;
-    setDetailItem(null);
-    setDetailFinding(null);
-    setDetailLoading(false);
-    setDetailError(null);
-    setDetailStale(false);
-    window.requestAnimationFrame(() => detailTrigger.current?.focus());
-  }
-
   const filtered = hasConflictFindingFilters(query);
 
   return (
     <main className="page-shell conflict-findings-shell">
+      <div ref={pageContent} className="finding-page-content">
       <header className="page-heading conflict-findings-heading">
         <div>
           <p className="eyebrow">Análise derivada e somente leitura</p>
@@ -469,6 +556,16 @@ export function ConflictFindingsPage({
             </button>
           </div>
         </form>
+        {urlIssues.length > 0 ? (
+          <div className="finding-url-issues" role="alert">
+            <strong>Revise os filtros informados</strong>
+            <ul>
+              {urlIssues.map((issue) => (
+                <li key={issue.field}>{issue.message}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </section>
 
       {initialLoading && !result ? <LoadingState label="Carregando achados…" /> : null}
@@ -577,6 +674,7 @@ export function ConflictFindingsPage({
           </nav>
         </>
       ) : null}
+      </div>
 
       {detailItem ? (
         <DetailPanel
@@ -586,6 +684,7 @@ export function ConflictFindingsPage({
           error={detailError}
           stale={detailStale}
           closeButtonRef={detailCloseButton}
+          panelRef={detailPanel}
           onClose={closeDetail}
           onRetry={() => requestDetail(detailItem)}
         />
@@ -739,6 +838,7 @@ function DetailPanel({
   error,
   stale,
   closeButtonRef,
+  panelRef,
   onClose,
   onRetry,
 }: {
@@ -748,17 +848,20 @@ function DetailPanel({
   error: string | null;
   stale: boolean;
   closeButtonRef: React.RefObject<HTMLButtonElement | null>;
+  panelRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
   onRetry: () => void;
 }) {
   return (
     <div className="finding-detail-backdrop">
       <section
+        ref={panelRef}
         className="finding-detail-panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="finding-detail-title"
         aria-describedby="finding-detail-description"
+        tabIndex={-1}
       >
         <header className="finding-detail-heading">
           <div>

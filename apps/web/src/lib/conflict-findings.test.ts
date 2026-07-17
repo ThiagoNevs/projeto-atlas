@@ -3,6 +3,9 @@ import test from 'node:test';
 
 import { ApiError, getAssetConflictAnalysis, getConflictFindings } from './api.ts';
 import {
+  INVALID_CONFLICT_FINDING_ASSET_ID_MESSAGE,
+  INVALID_CONFLICT_FINDING_IP_MESSAGE,
+  conflictFindingSearchParamsResult,
   conflictFindingQueryFromSearchParams,
   formatTemporalDifference,
   getConflictFindingTypeLabel,
@@ -10,6 +13,7 @@ import {
   getConflictSourceTypeLabel,
   getConflictTemporalRelationshipLabel,
   hasConflictFindingFilters,
+  isValidConflictFindingIp,
   isMatchingDetailedFinding,
   parseConflictFindingsResponse,
   parseIdentityNetworkAnalysisResponse,
@@ -288,6 +292,98 @@ test('serialização omite parâmetros vazios e indefinidos', () => {
   assert.equal(serializeConflictFindingQuery({ hostname: '', ip: undefined }), '');
 });
 
+test('serialização usa whitelist completa, determinística e preserva false', () => {
+  const serialized = serializeConflictFindingQuery({
+    sortDirection: 'desc',
+    sortBy: 'lastObservedAt',
+    hasLimitations: false,
+    temporalRelationship: 'NO_TEMPORAL_CONTEXT',
+    sourceType: 'TECHNICAL',
+    ip: '2001:db8::1',
+    hostname: ' srv app ',
+    assetId: ASSET_A,
+    type: 'DUPLICATE_HOSTNAME_ACROSS_ASSETS',
+    pageSize: 50,
+    page: 2,
+  });
+  assert.equal(
+    serialized,
+    `page=2&pageSize=50&type=DUPLICATE_HOSTNAME_ACROSS_ASSETS&assetId=${ASSET_A}&hostname=srv+app&ip=2001%3Adb8%3A%3A1&sourceType=TECHNICAL&temporalRelationship=NO_TEMPORAL_CONTEXT&hasLimitations=false&sortBy=lastObservedAt&sortDirection=desc`,
+  );
+});
+
+test('serialização descarta propriedades desconhecidas mesmo com cast de runtime', () => {
+  const serialized = serializeConflictFindingQuery({
+    hostname: 'srv',
+    secret: 'leak',
+    token: 'token',
+    payload: 'payload',
+    rawPayload: 'raw',
+    callbackUrl: 'https://example.test',
+    internal: 'internal',
+  } as unknown as Parameters<typeof serializeConflictFindingQuery>[0]);
+  assert.equal(serialized, 'hostname=srv');
+});
+
+test('serialização ignora propriedades herdadas e valores numéricos inválidos', () => {
+  const inherited = Object.create({ hostname: 'não-herdado', secret: 'leak' }) as Record<
+    string,
+    unknown
+  >;
+  inherited.page = 0;
+  inherited.pageSize = 101;
+  inherited.ip = '10.20.0.15';
+  assert.equal(
+    serializeConflictFindingQuery(
+      inherited as unknown as Parameters<typeof serializeConflictFindingQuery>[0],
+    ),
+    'ip=10.20.0.15',
+  );
+});
+
+for (const ip of [
+  '10.20.0.15',
+  '2001:db8::1',
+  '2001:0db8:0000:0000:0000:0000:0000:0001',
+  '::1',
+  '::ffff:192.168.1.1',
+]) {
+  test(`aceita IP válido no filtro: ${ip}`, () => {
+    assert.equal(isValidConflictFindingIp(ip), true);
+    assert.equal(conflictFindingSearchParamsResult({ ip }).query.ip, ip);
+  });
+}
+
+for (const ip of [
+  'not-an-ip',
+  '10.20.0.0/24',
+  '10.20.0.15:443',
+  '[2001:db8::1]:443',
+  '',
+  '   ',
+  '01.2.3.4',
+  '300.2.3.4',
+]) {
+  test(`rejeita IP inválido da URL sem encaminhá-lo: ${JSON.stringify(ip)}`, () => {
+    const parsed = conflictFindingSearchParamsResult({ ip, hostname: 'SRV' });
+    assert.equal(parsed.query.ip, undefined);
+    assert.equal(parsed.query.hostname, 'SRV');
+    assert.equal(parsed.issues[0]?.message, INVALID_CONFLICT_FINDING_IP_MESSAGE);
+    assert.equal(serializeConflictFindingQuery({ ...parsed.query, ip }), 'page=1&pageSize=25&hostname=SRV&sortBy=type&sortDirection=asc');
+  });
+}
+
+test('validação da URL aceita UUID do projeto e rejeita identificador malformado', () => {
+  const valid = conflictFindingSearchParamsResult({ assetId: ASSET_A });
+  assert.equal(valid.query.assetId, ASSET_A);
+  assert.deepEqual(valid.issues, []);
+
+  const invalid = conflictFindingSearchParamsResult({ assetId: '../admin', hostname: 'SRV' });
+  assert.equal(invalid.query.assetId, undefined);
+  assert.equal(invalid.query.hostname, 'SRV');
+  assert.equal(invalid.issues[0]?.message, INVALID_CONFLICT_FINDING_ASSET_ID_MESSAGE);
+});
+
 test('leitura segura da URL mantém false e ignora valores inválidos', () => {
   const parsed = conflictFindingQueryFromSearchParams({
     page: '-1',
@@ -335,6 +431,22 @@ test('cliente agregado usa somente GET, serializa false e executa o parser segur
   assert.equal(new URL(calls[0]!.input).searchParams.get('hasLimitations'), 'false');
   assert.equal(new URL(calls[0]!.input).searchParams.get('hostname'), 'SRV APP');
   assert.equal('unknown' in parsed, false);
+});
+
+test('cliente agregado nunca serializa propriedades desconhecidas em runtime', async () => {
+  let requestedUrl = '';
+  await getConflictFindings(
+    { hostname: 'srv', secret: 'leak' } as unknown as Parameters<typeof getConflictFindings>[0],
+    {
+      fetchImplementation: async (input) => {
+        requestedUrl = input;
+        return new Response(JSON.stringify(aggregate()), { status: 200 });
+      },
+    },
+  );
+  const url = new URL(requestedUrl);
+  assert.equal(url.searchParams.get('hostname'), 'srv');
+  assert.equal(url.searchParams.has('secret'), false);
 });
 
 test('cliente individual codifica o assetId e rejeita resposta inválida sem expor internals', async () => {
