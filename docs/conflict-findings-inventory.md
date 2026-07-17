@@ -53,6 +53,11 @@ limitações e opções de revisão sem seleção.
 O detalhe completo, incluindo todas as observações e explicações, continua disponível em
 `GET /assets/:id/conflict-analysis` para qualquer ativo envolvido.
 
+A interface `/conflict-findings` consome essa visão agregada com filtros, resumo, ordenação e
+paginação. O detalhe é carregado somente quando solicitado e validado pelo mesmo `findingId`; a
+interface não transforma os achados em conflitos formais nem persiste as opções de revisão. Consulte
+`docs/conflict-findings-interface.md` para o comportamento de apresentação.
+
 `summary` representa o conjunto após os filtros e antes da paginação. Ele contém:
 
 - total de achados;

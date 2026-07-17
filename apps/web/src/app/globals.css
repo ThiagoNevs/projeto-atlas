@@ -344,6 +344,586 @@ input {
   white-space: nowrap;
 }
 
+/* Inventário agregado de achados: escopo visual isolado da tela somente leitura. */
+.conflict-findings-shell {
+  min-width: 0;
+}
+
+.conflict-findings-heading {
+  display: flex;
+  margin-bottom: 1.4rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.conflict-findings-heading h1 {
+  max-width: 880px;
+  font-size: clamp(2.25rem, 5vw, 4.6rem);
+  line-height: 0.98;
+}
+
+.conflict-findings-heading .page-description {
+  max-width: 760px;
+  margin-bottom: 0;
+}
+
+.shadow-mode-notice {
+  display: grid;
+  margin-bottom: 1.35rem;
+  padding: 1rem 1.15rem;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid rgba(244, 199, 108, 0.42);
+  border-radius: 13px;
+  background: rgba(244, 199, 108, 0.075);
+}
+
+.shadow-mode-notice strong {
+  color: var(--warning);
+}
+
+.shadow-mode-notice p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.finding-filter-grid {
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+}
+
+.finding-filter-actions {
+  grid-column: span 2;
+}
+
+.finding-update-status {
+  margin: 0 0 1rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.finding-inline-error {
+  display: flex;
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(255, 127, 136, 0.42);
+  border-radius: 12px;
+  background: rgba(255, 127, 136, 0.07);
+  color: var(--negative);
+}
+
+.finding-summary-section,
+.finding-card,
+.finding-detail-panel {
+  min-width: 0;
+}
+
+.finding-summary-section {
+  margin: 2rem 0 1.25rem;
+}
+
+.finding-section-heading {
+  display: flex;
+  margin-bottom: 1rem;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.finding-section-heading h2,
+.finding-section-heading p {
+  margin: 0;
+}
+
+.finding-section-heading > p {
+  max-width: 450px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  text-align: right;
+}
+
+.finding-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.finding-summary-card {
+  display: grid;
+  min-height: 118px;
+  padding: 1rem;
+  align-content: space-between;
+  gap: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(15, 28, 46, 0.78);
+}
+
+.finding-summary-card strong {
+  color: var(--accent);
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.finding-summary-card span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.finding-global-limitations {
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(12, 24, 41, 0.75);
+}
+
+.finding-global-limitations summary {
+  padding: 1rem 1.1rem;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.finding-global-limitations ul {
+  margin: 0;
+  padding: 0 2.5rem 1.15rem;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.finding-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.finding-card {
+  padding: 1.25rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(78, 199, 239, 0.045), transparent 32%),
+    rgba(12, 24, 41, 0.9);
+}
+
+.finding-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.finding-card-heading h2 {
+  margin: 0.6rem 0 0.35rem;
+  font-size: 1.2rem;
+}
+
+.finding-review-badge {
+  display: inline-flex;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(244, 199, 108, 0.38);
+  border-radius: 999px;
+  background: rgba(244, 199, 108, 0.08);
+  color: var(--warning);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.finding-id,
+.finding-card code,
+.finding-detail-panel code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.finding-id {
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+
+.finding-card-count {
+  display: grid;
+  min-width: 100px;
+  text-align: right;
+}
+
+.finding-card-count strong {
+  color: var(--accent);
+  font-size: 1.6rem;
+}
+
+.finding-card-count span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.finding-explanation {
+  max-width: 950px;
+  margin: 1.15rem 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.finding-identity-grid,
+.finding-context-grid,
+.finding-detail-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.finding-identity-grid > div,
+.finding-context-grid > section,
+.finding-detail-columns > div {
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: rgba(7, 16, 29, 0.5);
+}
+
+.finding-identity-grid span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--faint);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.finding-identity-grid code {
+  color: var(--text);
+}
+
+.finding-ip-notice {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.finding-assets {
+  margin: 1rem 0;
+}
+
+.finding-assets h3,
+.finding-context-grid h3,
+.finding-review-options h3,
+.finding-detail-content h3 {
+  margin: 0 0 0.7rem;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.finding-asset-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 0.65rem;
+}
+
+.finding-asset-links a {
+  display: grid;
+  min-width: 0;
+  padding: 0.75rem;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(17, 31, 51, 0.75);
+}
+
+.finding-asset-links a:hover {
+  border-color: var(--accent);
+}
+
+.finding-asset-links strong,
+.finding-asset-links span {
+  overflow-wrap: anywhere;
+}
+
+.finding-asset-links span {
+  color: var(--faint);
+  font-size: 0.68rem;
+}
+
+.finding-context-grid h3 {
+  margin-bottom: 0.5rem;
+}
+
+.finding-context-grid > section > strong {
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
+.finding-context-grid dl,
+.finding-observation-list dl,
+.finding-detail-dates {
+  display: grid;
+  margin: 0.8rem 0 0;
+  gap: 0.55rem;
+}
+
+.finding-context-grid dl div,
+.finding-observation-list dl div,
+.finding-detail-dates div {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.finding-context-grid dt,
+.finding-observation-list dt,
+.finding-detail-dates dt {
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+
+.finding-context-grid dd,
+.finding-observation-list dd,
+.finding-detail-dates dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.finding-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.finding-source-list span {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.finding-review-options {
+  margin-top: 1rem;
+}
+
+.finding-review-options ul,
+.finding-detail-content ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.65;
+}
+
+.finding-card-footer {
+  display: flex;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--border-soft);
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+
+.finding-detail-backdrop {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: flex;
+  padding: 2rem;
+  justify-content: flex-end;
+  background: rgba(1, 6, 12, 0.78);
+}
+
+.finding-detail-panel {
+  width: min(760px, 100%);
+  height: 100%;
+  padding: 1.25rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background-soft);
+  box-shadow: -20px 0 80px rgba(0, 0, 0, 0.38);
+}
+
+.finding-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.finding-detail-heading h2,
+.finding-detail-heading p {
+  margin: 0;
+}
+
+.finding-detail-heading p:last-child {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.detail-finding-id {
+  display: block;
+  margin-top: 1rem;
+}
+
+.finding-detail-shadow-note,
+.finding-stale-message {
+  margin: 1rem 0;
+  padding: 0.8rem;
+  border: 1px solid rgba(244, 199, 108, 0.36);
+  border-radius: 10px;
+  background: rgba(244, 199, 108, 0.06);
+  color: var(--warning);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.finding-detail-content {
+  display: grid;
+  margin-top: 1rem;
+  gap: 1rem;
+}
+
+.finding-detail-content > section {
+  min-width: 0;
+}
+
+.finding-observation-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.finding-observation-list article {
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: rgba(7, 16, 29, 0.52);
+}
+
+.finding-observation-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.finding-observation-heading span {
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+
+.finding-detail-panel :focus-visible,
+.conflict-findings-shell :focus-visible {
+  outline: 3px solid rgba(78, 199, 239, 0.55);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1100px) {
+  .finding-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .finding-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .conflict-findings-heading,
+  .finding-section-heading,
+  .finding-card-heading,
+  .finding-card-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .conflict-findings-heading .summary-pill,
+  .finding-card-count {
+    align-self: flex-start;
+    text-align: left;
+  }
+
+  .shadow-mode-notice,
+  .finding-identity-grid,
+  .finding-context-grid,
+  .finding-detail-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .finding-section-heading > p {
+    max-width: none;
+    text-align: left;
+  }
+
+  .finding-detail-backdrop {
+    padding: 0.75rem;
+  }
+
+  .finding-detail-heading {
+    flex-direction: column-reverse;
+  }
+
+  .finding-detail-heading .button {
+    align-self: flex-end;
+  }
+}
+
+@media (max-width: 520px) {
+  .finding-filter-grid,
+  .finding-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .finding-filter-actions {
+    grid-column: auto;
+  }
+
+  .finding-filter-actions,
+  .finding-filter-actions .button,
+  .finding-card-footer .button {
+    width: 100%;
+  }
+
+  .finding-inline-error,
+  .finding-observation-heading,
+  .finding-context-grid dl div,
+  .finding-observation-list dl div,
+  .finding-detail-dates div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .finding-context-grid dd,
+  .finding-observation-list dd,
+  .finding-detail-dates dd {
+    text-align: left;
+  }
+
+  .finding-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .finding-pagination .pagination-actions,
+  .finding-pagination button {
+    width: 100%;
+  }
+}
+
 .pagination {
   display: flex;
   margin-top: 1.1rem;
