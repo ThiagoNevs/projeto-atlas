@@ -157,8 +157,9 @@ Como extensão técnica opcional, explique que o backend já consegue apontar em
 hostnames duplicados, IP compartilhado por hostnames diferentes e divergências históricas. Essa
 análise não cria conflito formal nem decide se houve duplicidade, mudança de hostname ou
 reutilização de IP. A API também oferece um inventário agregado, paginado e deduplicado desses
-achados para localizar casos de revisão sem abrir cada ativo. A interface e a fila operacional serão
-construídas em etapas futuras.
+achados. Abra `/conflict-findings`, mostre o resumo, aplique um filtro e abra a análise detalhada sob
+demanda. Reforce que as possibilidades de revisão são informativas e que nenhuma decisão é aplicada.
+A fila operacional e a resolução desses achados continuam fora desta etapa.
 
 ## 8. Busca, filtros e paginação — 1 minuto
 

@@ -1,5 +1,13 @@
 import { ApiError, normalizeApiError } from './api-error.ts';
 import {
+  parseConflictFindingsResponse,
+  parseIdentityNetworkAnalysisResponse,
+  serializeConflictFindingQuery,
+  type ConflictFindingQueryParams,
+  type ConflictFindingsResponse,
+  type IdentityNetworkAnalysisResponse,
+} from './conflict-findings.ts';
+import {
   parseEvidenceAnalysisResponse,
   type AssetEvidenceAnalysisResponse,
 } from './evidence-provenance.ts';
@@ -22,16 +30,42 @@ export type {
   ShadowRecommendedCandidate,
   ShadowTiedValue,
 } from './evidence-provenance';
+export type {
+  ConflictFindingAsset,
+  ConflictFindingDetail,
+  ConflictFindingListItem,
+  ConflictFindingQueryParams,
+  ConflictFindingSortDirection,
+  ConflictFindingSortField,
+  ConflictFindingType,
+  ConflictFindingsResponse,
+  ConflictObservation,
+  ConflictObservationAttribute,
+  ConflictReviewOption,
+  ConflictSourceType,
+  ConflictTemporalContext,
+  ConflictTemporalRelationship,
+  IdentityNetworkAnalysisResponse,
+} from './conflict-findings';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const API_URL = configuredApiUrl.replace(/\/$/, '');
 export const EVIDENCE_PROVENANCE_TIMEOUT_MS = 10_000;
+export const CONFLICT_FINDINGS_TIMEOUT_MS = 10_000;
 
 type FetchImplementation = (input: string, init: RequestInit) => Promise<Response>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 export interface EvidenceAnalysisRequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  fetchImplementation?: FetchImplementation;
+  scheduleTimeout?: (callback: () => void, timeoutMs: number) => TimeoutHandle;
+  cancelTimeout?: (handle: TimeoutHandle) => void;
+}
+
+export interface ConflictFindingsRequestOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   fetchImplementation?: FetchImplementation;
@@ -799,6 +833,77 @@ export function getAssetEvidences(id: string): Promise<AssetEvidence[]> {
 
 export function getAssetTimeline(id: string): Promise<AssetTimelineEvent[]> {
   return fetchJson(`/assets/${encodeURIComponent(id)}/timeline`);
+}
+
+export function getConflictFindings(
+  params: ConflictFindingQueryParams = {},
+  options: ConflictFindingsRequestOptions = {},
+): Promise<ConflictFindingsResponse> {
+  const query = serializeConflictFindingQuery(params);
+  return fetchParsedConflictAnalysis(
+    `/conflict-analysis/findings${query ? `?${query}` : ''}`,
+    parseConflictFindingsResponse,
+    'A API retornou um inventário de achados inválido.',
+    'Não foi possível carregar os achados de identidade e rede. Tente novamente.',
+    options,
+  );
+}
+
+export function getAssetConflictAnalysis(
+  id: string,
+  options: ConflictFindingsRequestOptions = {},
+): Promise<IdentityNetworkAnalysisResponse> {
+  return fetchParsedConflictAnalysis(
+    `/assets/${encodeURIComponent(id)}/conflict-analysis`,
+    parseIdentityNetworkAnalysisResponse,
+    'A API retornou uma análise detalhada inválida.',
+    'Não foi possível carregar a análise detalhada. Tente novamente.',
+    options,
+  );
+}
+
+async function fetchParsedConflictAnalysis<T>(
+  path: string,
+  parser: (value: unknown) => T | null,
+  invalidResponseMessage: string,
+  unavailableMessage: string,
+  options: ConflictFindingsRequestOptions,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? CONFLICT_FINDINGS_TIMEOUT_MS;
+  const scheduleTimeout = options.scheduleTimeout ?? setTimeout;
+  const cancelTimeout = options.cancelTimeout ?? clearTimeout;
+  let timedOut = false;
+  const abortFromExternalSignal = (): void => controller.abort(options.signal?.reason);
+
+  if (options.signal?.aborted) abortFromExternalSignal();
+  else options.signal?.addEventListener('abort', abortFromExternalSignal, { once: true });
+
+  const timeoutHandle = scheduleTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const body = await fetchJson<unknown>(
+      path,
+      { signal: controller.signal },
+      options.fetchImplementation,
+    );
+    const parsed = parser(body);
+    if (!parsed) throw new ApiError(invalidResponseMessage, 502);
+    return parsed;
+  } catch (error) {
+    if (timedOut) throw new ApiError(unavailableMessage, 408);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ApiError(unavailableMessage, 0);
+    }
+    if (error instanceof SyntaxError) throw new ApiError(invalidResponseMessage, 502);
+    throw error;
+  } finally {
+    cancelTimeout(timeoutHandle);
+    options.signal?.removeEventListener('abort', abortFromExternalSignal);
+  }
 }
 
 export async function getAssetEvidenceAnalysis(

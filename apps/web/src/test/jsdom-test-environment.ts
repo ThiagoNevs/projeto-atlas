@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 
 const domGlobalNames = [
   'window',
+  'self',
   'document',
   'navigator',
   'Window',
@@ -44,6 +45,7 @@ export function createJsdomTestEnvironment(): JsdomTestEnvironment {
   };
 
   install('window', dom.window);
+  install('self', dom.window);
   install('document', dom.window.document);
   install('navigator', dom.window.navigator);
   install('Window', dom.window.Window);

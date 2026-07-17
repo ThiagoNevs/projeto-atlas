@@ -26,6 +26,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               <Link href="/">Dashboard</Link>
               <Link href="/assets">Ativos</Link>
               <Link href="/conflicts">Conflitos</Link>
+              <Link href="/conflict-findings">Achados de identidade e rede</Link>
               <Link href="/network-discovery">Descoberta de rede</Link>
               <Link href="/audit">Auditoria</Link>
               <Link href="/data-quality">Qualidade dos dados</Link>

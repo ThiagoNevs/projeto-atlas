@@ -95,7 +95,8 @@ compartilhado por hostnames diferentes e divergência de hostname no mesmo ativo
 explicáveis, temporários e somente leitura: nenhum conflito formal, decisão, mesclagem ou alteração
 do inventário é persistida. `GET /conflict-analysis/findings` acrescenta uma visão global paginada,
 filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mesma política. A interface,
-a fila operacional e a resolução humana auditada permanecem futuras.
+disponível em `/conflict-findings`, apresenta resumo, filtros, paginação, limitações e detalhe sob
+demanda sem persistir decisões. Uma fila operacional e a resolução humana auditada permanecem futuras.
 
 ### Tipos compartilhados
 
@@ -145,3 +146,4 @@ frontend.
 11. Execução simulada com resultados, ativos, evidências e histórico.
 12. Rejeição e auditoria de configurações inseguras ou perfis desabilitados.
 13. Fontes de Dados mostrando cadastro manual, enriquecimento manual, descoberta simulada e conectores futuros.
+14. Inventário de achados de identidade e rede em modo sombra, com filtros, contexto, limitações e detalhe somente leitura.
