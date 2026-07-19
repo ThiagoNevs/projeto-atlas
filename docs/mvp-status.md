@@ -111,7 +111,11 @@ e contratos futuros, não por trigger no banco.
 ator/escopo, chave idempotente e payload semântico; não armazena header bruto e ainda não oferece
 idempotência HTTP. A relação com `Asset` usa `ON DELETE SET NULL` e mantém o identificador e o nome
 capturados na criação, preservando contexto histórico quando o ativo deixa de existir. A versão e os
-eventos apenas preparam o modelo para concorrência otimista; nenhum locking funcional está ativo.
+eventos apenas preparam o modelo para concorrência otimista; nenhum locking funcional está ativo. A
+unicidade global por versão foi removida para permitir que múltiplos eventos futuros referenciem a
+mesma versão do caso. Um índice não único em caso, versão, data de criação e identificador oferece
+consulta e ordenação determinística sem usar a tabela de eventos como mecanismo de locking. Eventos
+append-only funcionais e comentários ainda não foram implementados.
 
 Ainda não existem `POST` ou `GET` de casos, serviço de criação, feature flag funcional, `AuditLog` da
 criação, transação da aplicação, listagem, detalhe, frontend, botão de criação, autenticação, RBAC,

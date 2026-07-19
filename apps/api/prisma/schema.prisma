@@ -363,8 +363,8 @@ model FindingReviewEvent {
 
   reviewCase FindingReviewCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
-  @@unique([caseId, versionAfter])
   @@unique([caseId, requestId])
+  @@index([caseId, versionAfter, createdAt, id])
   @@index([caseId, occurredAt(sort: Desc), id])
   @@index([actorId, occurredAt(sort: Desc)])
   @@map("finding_review_events")

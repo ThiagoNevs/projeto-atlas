@@ -117,7 +117,7 @@ describe('FindingReviewCase minimal persistence (e2e)', () => {
     ]);
   });
 
-  it('persists the original snapshot, multiple assets and the versioned creation event', async () => {
+  it('persists the original snapshot, multiple assets and the versioned creation event without structural inventory writes', async () => {
     const assets = await Promise.all(
       ['A', 'B'].map((suffix) =>
         prisma.asset.create({
@@ -147,6 +147,19 @@ describe('FindingReviewCase minimal persistence (e2e)', () => {
         lastSeenAt: true,
       },
     });
+    const relatedInventoryBefore = await Promise.all([
+      prisma.assetAttribute.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.networkInterface.count({
+        where: { assetId: { in: assets.map((asset) => asset.id) } },
+      }),
+      prisma.assetEvidence.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.conflict.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.conflictValue.count({
+        where: { conflict: { assetId: { in: assets.map((asset) => asset.id) } } },
+      }),
+      prisma.assetEvent.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.auditLog.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+    ]);
 
     const reviewSubjectKey = `finding-review-subject:v1:${testRunId}`;
     const createdBy = `test-actor:${testRunId}`;
@@ -243,16 +256,115 @@ describe('FindingReviewCase minimal persistence (e2e)', () => {
       },
     });
     expect(inventoryAfter).toEqual(inventoryBefore);
-    expect(
-      await prisma.assetEvidence.count({
+    const relatedInventoryAfter = await Promise.all([
+      prisma.assetAttribute.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.networkInterface.count({
         where: { assetId: { in: assets.map((asset) => asset.id) } },
       }),
-    ).toBe(0);
-    expect(
-      await prisma.conflict.count({
-        where: { assetId: { in: assets.map((asset) => asset.id) } },
+      prisma.assetEvidence.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.conflict.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.conflictValue.count({
+        where: { conflict: { assetId: { in: assets.map((asset) => asset.id) } } },
       }),
-    ).toBe(0);
+      prisma.assetEvent.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+      prisma.auditLog.count({ where: { assetId: { in: assets.map((asset) => asset.id) } } }),
+    ]);
+    expect(relatedInventoryAfter).toEqual(relatedInventoryBefore);
+  });
+
+  it('structurally allows future append-only events to share a case version with deterministic ordering', async () => {
+    const reviewCase = await createCase({
+      suffix: 'append-only-main',
+      reviewSubjectKey: `finding-review-subject:append-only-main:${testRunId}`,
+      activeReviewSubjectKey: `finding-review-subject:append-only-main:${testRunId}`,
+    });
+    const otherCase = await createCase({
+      suffix: 'append-only-other',
+      reviewSubjectKey: `finding-review-subject:append-only-other:${testRunId}`,
+      activeReviewSubjectKey: `finding-review-subject:append-only-other:${testRunId}`,
+    });
+    const sharedCreatedAt = new Date(reviewCase.createdAt.getTime() + 1_000);
+    const appendOnlyIds = [randomUUID(), randomUUID()];
+
+    await prisma.findingReviewEvent.createMany({
+      data: appendOnlyIds.map((id, index) => ({
+        id,
+        caseId: reviewCase.id,
+        eventType: `STRUCTURAL_APPEND_ONLY_${index + 1}`,
+        versionBefore: 1,
+        versionAfter: 1,
+        actorId: `test-actor:${testRunId}`,
+        requestId: sha256(`append-only|${index}|${testRunId}`),
+        occurredAt: sharedCreatedAt,
+        createdAt: sharedCreatedAt,
+      })),
+    });
+
+    const versionTwoEvent = await prisma.$transaction(async (tx) => {
+      await tx.findingReviewCase.update({
+        where: { id: reviewCase.id },
+        data: { version: 2 },
+      });
+      return tx.findingReviewEvent.create({
+        data: {
+          caseId: reviewCase.id,
+          eventType: 'STRUCTURAL_VERSION_ADVANCED',
+          versionBefore: 1,
+          versionAfter: 2,
+          actorId: `test-actor:${testRunId}`,
+          requestId: sha256(`version-two|${testRunId}`),
+          occurredAt: new Date(sharedCreatedAt.getTime() + 1_000),
+          createdAt: new Date(sharedCreatedAt.getTime() + 1_000),
+        },
+      });
+    });
+    await prisma.findingReviewEvent.create({
+      data: {
+        caseId: otherCase.id,
+        eventType: 'STRUCTURAL_APPEND_ONLY_OTHER_CASE',
+        versionBefore: 1,
+        versionAfter: 1,
+        actorId: `test-actor:${testRunId}`,
+        requestId: sha256(`append-only-other|${testRunId}`),
+      },
+    });
+
+    const orderBy = [
+      { versionAfter: 'asc' as const },
+      { createdAt: 'asc' as const },
+      { id: 'asc' as const },
+    ];
+    const orderedEvents = await prisma.findingReviewEvent.findMany({
+      where: { caseId: reviewCase.id },
+      orderBy,
+    });
+    const repeatedOrder = await prisma.findingReviewEvent.findMany({
+      where: { caseId: reviewCase.id },
+      orderBy,
+      select: { id: true },
+    });
+
+    expect(orderedEvents[0]).toMatchObject({
+      eventType: 'CASE_CREATED',
+      versionBefore: null,
+      versionAfter: 1,
+    });
+    expect(
+      orderedEvents
+        .filter((event) => event.eventType.startsWith('STRUCTURAL_APPEND_ONLY_'))
+        .map((event) => event.id),
+    ).toEqual([...appendOnlyIds].sort());
+    expect(orderedEvents.at(-1)).toMatchObject({
+      id: versionTwoEvent.id,
+      versionBefore: 1,
+      versionAfter: 2,
+    });
+    expect(repeatedOrder.map((event) => event.id)).toEqual(orderedEvents.map((event) => event.id));
+    expect(
+      await prisma.findingReviewEvent.count({
+        where: { caseId: otherCase.id, versionAfter: 1 },
+      }),
+    ).toBe(2);
   });
 
   it('prevents more than one active case for the same review subject', async () => {
