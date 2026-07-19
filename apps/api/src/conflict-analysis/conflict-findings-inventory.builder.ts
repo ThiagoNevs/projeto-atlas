@@ -58,14 +58,7 @@ export class ConflictFindingsInventoryBuilder {
       throw new BadRequestException('ip must be a valid IPv4 or IPv6 address');
     }
 
-    const candidateAssetIds = this.candidateAssetIds(orderedSnapshots);
-    const findings = new Map<string, ConflictFinding>();
-    for (const assetId of candidateAssetIds) {
-      const analysis = this.policy.analyze(assetId, orderedSnapshots);
-      for (const finding of analysis.findings) {
-        if (!findings.has(finding.findingId)) findings.set(finding.findingId, finding);
-      }
-    }
+    const findings = this.collectFindings(orderedSnapshots);
 
     const assetNames = new Map(assets.map((asset) => [asset.assetId, asset.persistedName]));
     const filtered = [...findings.values()].filter((finding) =>
@@ -103,6 +96,28 @@ export class ConflictFindingsInventoryBuilder {
       items: pageFindings.map((finding) => this.listItem(finding, assetNames)),
       limitations: [...GLOBAL_LIMITATIONS],
     };
+  }
+
+  findById(snapshots: AssetIdentitySnapshot[], findingId: string): ConflictFinding | null {
+    const orderedSnapshots = [...snapshots].sort((left, right) =>
+      left.assetId.localeCompare(right.assetId),
+    );
+    return this.collectFindings(orderedSnapshots).get(findingId) ?? null;
+  }
+
+  generatedAtFor(snapshots: AssetIdentitySnapshot[]): string {
+    return this.generatedAt(snapshots);
+  }
+
+  private collectFindings(snapshots: AssetIdentitySnapshot[]): Map<string, ConflictFinding> {
+    const findings = new Map<string, ConflictFinding>();
+    for (const assetId of this.candidateAssetIds(snapshots)) {
+      const analysis = this.policy.analyze(assetId, snapshots);
+      for (const finding of analysis.findings) {
+        if (!findings.has(finding.findingId)) findings.set(finding.findingId, finding);
+      }
+    }
+    return findings;
   }
 
   private candidateAssetIds(snapshots: AssetIdentitySnapshot[]): string[] {

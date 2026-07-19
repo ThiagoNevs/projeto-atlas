@@ -712,3 +712,45 @@ resumo do conjunto filtrado antes da paginação e itens compactos deduplicados 
 achado aparece uma vez, ainda que envolva vários ativos. A consulta não cria conflito formal, fila,
 auditoria, evento ou decisão e não altera o inventário. O detalhe permanece em
 `GET /assets/:id/conflict-analysis`.
+
+## Criação experimental de caso de revisão
+
+A criação está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
+desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
+`atlas-mvp-user` é somente uma identificação provisória do MVP.
+
+Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:
+
+```powershell
+curl.exe -X POST http://localhost:3001/conflict-review-cases `
+  -H "Content-Type: application/json" `
+  -H "Idempotency-Key: demonstracao-caso-001" `
+  -d '{"findingId":"finding_0123456789abcdef01234567"}'
+```
+
+Uma criação nova retorna HTTP 201 e uma representação resumida do caso:
+
+```json
+{
+  "id": "CASE_UUID",
+  "findingId": "finding_0123456789abcdef01234567",
+  "findingType": "DUPLICATE_HOSTNAME_ACROSS_ASSETS",
+  "policyVersion": "2026-07-conflict-v1",
+  "reviewSubjectKey": "HASH_SHA256",
+  "status": "OPEN",
+  "staleness": "CURRENT",
+  "version": 1,
+  "affectedAssets": [],
+  "createdBy": "atlas-mvp-user",
+  "idempotentReplay": false
+}
+```
+
+Repetir exatamente a mesma chave e o mesmo `findingId` retorna o mesmo caso com HTTP 200 e
+`idempotentReplay: true`, sem novo evento ou auditoria. Reutilizar a chave com outro `findingId`, ou
+tentar abrir outro caso ativo para o mesmo assunto com uma chave diferente, retorna HTTP 409.
+
+O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body. Esses dados são
+recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem registrada em
+auditoria. Esta entrega não possui endpoints GET de casos, frontend, decisões ou integração com
+`Conflict`, e não altera o inventário.

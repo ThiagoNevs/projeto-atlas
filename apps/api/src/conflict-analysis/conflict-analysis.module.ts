@@ -15,6 +15,6 @@ import { ConflictFindingsService } from './conflict-findings.service';
     ConflictFindingsInventoryBuilder,
     ConflictFindingsService,
   ],
-  exports: [ConflictAnalysisService],
+  exports: [ConflictAnalysisService, ConflictFindingsService],
 })
 export class ConflictAnalysisModule {}

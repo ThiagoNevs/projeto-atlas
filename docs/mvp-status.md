@@ -97,31 +97,31 @@ do inventário é persistida. `GET /conflict-analysis/findings` acrescenta uma v
 filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mesma política. A interface,
 disponível em `/conflict-findings`, apresenta resumo, filtros, paginação, limitações e detalhe sob
 demanda sem persistir decisões. Uma fila operacional e a resolução humana auditada permanecem futuras.
-O desenho proposto para essa evolução está documentado em
-`docs/conflict-review-workflow-design.md`. A fundação de persistência está implementada; o fluxo
-funcional de criação ainda não foi implementado. O schema e a migration expand-only incluem os enums
-de status e staleness, `FindingReviewCase`, a relação multiativo `FindingReviewCaseAsset` e o evento
-mínimo versionado `FindingReviewEvent`. A estrutura preserva `findingId`, `findingType`,
-`policyVersion`, `reviewSubjectKey`, a chave ativa anulável e única, versão inicial, snapshot original
-e hash. O formato do snapshot é versionado dentro do próprio JSON por `snapshotVersion`; ele é
-destinado a ser imutável, mas essa imutabilidade e a validação do hash serão garantidas pelos serviços
-e contratos futuros, não por trigger no banco.
+O desenho aprovado para essa evolução está documentado em
+`docs/conflict-review-workflow-design.md`. A fundação de persistência foi criada por uma migration
+inicial expand-only. Uma segunda migration corretiva, também não destrutiva para os dados, relaxou a
+constraint global de versão dos eventos e a substituiu por índice não único, permitindo eventos
+append-only futuros na mesma versão sem usar a tabela de eventos como mecanismo de locking.
 
-`creationRequestFingerprint` representa a estrutura futura para um digest contextual de operação,
-ator/escopo, chave idempotente e payload semântico; não armazena header bruto e ainda não oferece
-idempotência HTTP. A relação com `Asset` usa `ON DELETE SET NULL` e mantém o identificador e o nome
-capturados na criação, preservando contexto histórico quando o ativo deixa de existir. A versão e os
-eventos apenas preparam o modelo para concorrência otimista; nenhum locking funcional está ativo. A
-unicidade global por versão foi removida para permitir que múltiplos eventos futuros referenciem a
-mesma versão do caso. Um índice não único em caso, versão, data de criação e identificador oferece
-consulta e ordenação determinística sem usar a tabela de eventos como mecanismo de locking. Eventos
-append-only funcionais e comentários ainda não foram implementados.
+O fluxo funcional mínimo de criação agora existe atrás de `FINDING_REVIEW_CASES_ENABLED`, desabilitada
+por padrão. `POST /conflict-review-cases` aceita somente `findingId` e exige `Idempotency-Key`. O
+servidor recalcula o finding pela política `2026-07-conflict-v1`, calcula a `reviewSubjectKey`, constrói
+e serializa canonicamente o snapshot original, calcula seu hash, relaciona todos os ativos afetados e
+cria o evento `CASE_CREATED` e o `AuditLog` na mesma transação. A chave bruta não é
+persistida: `creationRequestFingerprint` identifica operação, ator provisório e chave normalizada; o
+payload semântico é comparado pelo `findingId` persistido. Replay legítimo não cria novas escritas e
+reutilização da chave com outro finding retorna conflito. A chave ativa única continua sendo a
+proteção final contra dois casos ativos concorrentes para o mesmo assunto.
 
-Ainda não existem `POST` ou `GET` de casos, serviço de criação, feature flag funcional, `AuditLog` da
-criação, transação da aplicação, listagem, detalhe, frontend, botão de criação, autenticação, RBAC,
-atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração com `Conflict`
-ou Resolution Center. Nenhum caso ou finding é persistido automaticamente e nenhuma estrutura do
-inventário é alterada por esse fundamento.
+A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
+`NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
+`atlas-mvp-user` é provisório e não fornece autenticação, isolamento entre usuários ou RBAC; por isso a
+feature deve permanecer desabilitada fora da validação local controlada.
+
+Ainda não existem `GET` de casos, listagem, detalhe, frontend, botão de criação, atribuição,
+comentários, decisões, refresh, mudança de status, reabertura, integração com `Conflict` ou Resolution
+Center. Nenhum caso é criado automaticamente a partir da análise e nenhum finding derivado passa a
+ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 

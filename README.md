@@ -104,6 +104,10 @@ Em outro computador, ajuste apenas o caminho usado no `Set-Location`. O frontend
 `NEXT_PUBLIC_API_URL` para localizar a API. Variáveis `NEXT_PUBLIC_*` são públicas e nunca devem
 conter segredos.
 
+A criação experimental de casos de revisão permanece desabilitada por padrão. Para validá-la apenas
+em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. O fluxo
+ainda usa o ator provisório `atlas-mvp-user` e não representa autenticação, autorização ou RBAC reais.
+
 ### 2. Iniciar o PostgreSQL
 
 ```powershell
