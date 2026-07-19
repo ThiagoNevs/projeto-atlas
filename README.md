@@ -107,6 +107,9 @@ conter segredos.
 A criação experimental de casos de revisão permanece desabilitada por padrão. Para validá-la apenas
 em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. O fluxo
 ainda usa o ator provisório `atlas-mvp-user` e não representa autenticação, autorização ou RBAC reais.
+Com a flag desabilitada ou inválida, o endpoint inteiro retorna HTTP 503, inclusive em tentativas de
+replay. A `Idempotency-Key` é case-sensitive, aceita somente caracteres ASCII seguros e nunca é
+persistida em formato bruto.
 
 ### 2. Iniciar o PostgreSQL
 

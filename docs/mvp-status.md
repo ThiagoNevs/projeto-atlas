@@ -108,10 +108,17 @@ por padrão. `POST /conflict-review-cases` aceita somente `findingId` e exige `I
 servidor recalcula o finding pela política `2026-07-conflict-v1`, calcula a `reviewSubjectKey`, constrói
 e serializa canonicamente o snapshot original, calcula seu hash, relaciona todos os ativos afetados e
 cria o evento `CASE_CREATED` e o `AuditLog` na mesma transação. A chave bruta não é
-persistida: `creationRequestFingerprint` identifica operação, ator provisório e chave normalizada; o
+persistida: `creationRequestFingerprint` identifica operação, ator provisório e chave opaca validada; o
 payload semântico é comparado pelo `findingId` persistido. Replay legítimo não cria novas escritas e
 reutilização da chave com outro finding retorna conflito. A chave ativa única continua sendo a
 proteção final contra dois casos ativos concorrentes para o mesmo assunto.
+
+A `Idempotency-Key` é opaca, case-sensitive, limitada a 128 caracteres ASCII seguros e não recebe
+normalização Unicode. O replay é resolvido pelo fingerprint persistido antes do recálculo do finding,
+continuando disponível quando o achado deixa de ser detectado. A feature flag controla o endpoint
+inteiro: quando desabilitada ou inválida, criação e replay retornam HTTP 503. A serialização canônica
+não depende de locale, e testes com PostgreSQL real comprovam rollback integral em falhas nas relações,
+no evento ou no `AuditLog`.
 
 A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator

@@ -11,6 +11,7 @@ export const FINDING_REVIEW_CREATE_OPERATION = 'CREATE_FINDING_REVIEW_CASE';
 export const FINDING_REVIEW_CASE_CREATED_EVENT = 'CASE_CREATED';
 export const FINDING_REVIEW_SNAPSHOT_VERSION = 1;
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]+$/;
 
 export interface FindingReviewSnapshot {
   snapshotVersion: number;
@@ -37,6 +38,12 @@ export function canonicalSerialize(value: unknown): string {
   return JSON.stringify(canonicalize(value));
 }
 
+export function compareCanonicalStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function canonicalize(value: unknown): unknown {
   if (value === undefined) return null;
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -50,7 +57,7 @@ function canonicalize(value: unknown): unknown {
     const record = value as Record<string, unknown>;
     return Object.fromEntries(
       Object.keys(record)
-        .sort((left, right) => left.localeCompare(right))
+        .sort(compareCanonicalStrings)
         .map((key) => [key, canonicalize(record[key])]),
     );
   }
@@ -59,12 +66,14 @@ function canonicalize(value: unknown): unknown {
 
 export function normalizeIdempotencyKey(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Idempotency-Key é obrigatório.');
-  const normalized = value.trim().normalize('NFC');
-  if (!normalized) throw new Error('Idempotency-Key não pode ser vazio.');
-  if (normalized.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+  if (!value) throw new Error('Idempotency-Key não pode ser vazio.');
+  if (value.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
     throw new Error(`Idempotency-Key deve ter no máximo ${MAX_IDEMPOTENCY_KEY_LENGTH} caracteres.`);
   }
-  return normalized;
+  if (!IDEMPOTENCY_KEY_PATTERN.test(value)) {
+    throw new Error('Idempotency-Key contém caracteres não permitidos.');
+  }
+  return value;
 }
 
 export function creationRequestFingerprint(idempotencyKey: string): string {
@@ -107,7 +116,7 @@ export function buildFindingReviewSnapshot(input: {
   affectedAssets: Array<{ assetId: string; name: string | null }>;
 }): FindingReviewSnapshot {
   const observations = [...input.finding.observations].sort((left, right) =>
-    canonicalSerialize(left).localeCompare(canonicalSerialize(right)),
+    compareCanonicalStrings(canonicalSerialize(left), canonicalSerialize(right)),
   );
   const sources = [
     ...new Map(
@@ -117,7 +126,7 @@ export function buildFindingReviewSnapshot(input: {
       ]),
     ).values(),
   ].sort((left, right) =>
-    `${left.type}:${left.identifier}`.localeCompare(`${right.type}:${right.identifier}`),
+    compareCanonicalStrings(`${left.type}:${left.identifier}`, `${right.type}:${right.identifier}`),
   );
 
   return {
@@ -127,7 +136,7 @@ export function buildFindingReviewSnapshot(input: {
     policyVersion: input.policyVersion,
     generatedAt: new Date(input.generatedAt).toISOString(),
     affectedAssets: [...input.affectedAssets].sort((left, right) =>
-      left.assetId.localeCompare(right.assetId),
+      compareCanonicalStrings(left.assetId, right.assetId),
     ),
     normalizedHostname: input.finding.normalizedHostname,
     normalizedIp: input.finding.normalizedIp,
@@ -135,7 +144,7 @@ export function buildFindingReviewSnapshot(input: {
     sources,
     temporalContext: input.finding.temporalContext,
     explanation: [...input.finding.explanation],
-    limitations: [...input.finding.limitations].sort((left, right) => left.localeCompare(right)),
+    limitations: [...input.finding.limitations].sort(compareCanonicalStrings),
     reviewOptions: [...input.finding.reviewOptions],
   };
 }

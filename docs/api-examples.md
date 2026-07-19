@@ -719,6 +719,10 @@ A criação está desabilitada por padrão e ainda não possui autenticação ou
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.
 
+A flag controla o endpoint inteiro: quando estiver ausente, desabilitada ou inválida, tanto uma
+criação nova quanto o replay de um caso existente retornam HTTP 503. Ao reabilitar a flag, o replay
+volta a retornar o caso original.
+
 Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:
 
 ```powershell
@@ -750,7 +754,20 @@ Repetir exatamente a mesma chave e o mesmo `findingId` retorna o mesmo caso com 
 `idempotentReplay: true`, sem novo evento ou auditoria. Reutilizar a chave com outro `findingId`, ou
 tentar abrir outro caso ativo para o mesmo assunto com uma chave diferente, retorna HTTP 409.
 
+`Idempotency-Key` é case-sensitive, possui de 1 a 128 caracteres e aceita somente letras ASCII,
+números e os caracteres `._~:+/=-`. Espaços e Unicode são rejeitados; não ocorre trim, conversão de
+maiúsculas/minúsculas ou normalização Unicode. A chave é tratada como valor opaco: `ABC` e `abc` são
+chaves diferentes.
+
+O replay é procurado pelo fingerprint antes de o servidor recalcular o finding. Portanto, uma
+repetição legítima continua retornando o mesmo caso mesmo quando o finding original deixou de ser
+detectado. A serialização usada nos fingerprints e snapshots utiliza ordenação canônica independente
+da localidade do sistema.
+
 O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body. Esses dados são
 recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem registrada em
 auditoria. Esta entrega não possui endpoints GET de casos, frontend, decisões ou integração com
 `Conflict`, e não altera o inventário.
+
+Caso a criação falhe ao relacionar os ativos, criar o evento ou registrar o `AuditLog`, a transação
+PostgreSQL é revertida integralmente. O fingerprint permanece disponível para uma nova tentativa.

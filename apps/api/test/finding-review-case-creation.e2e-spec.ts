@@ -10,9 +10,11 @@ import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
 import type { ConflictFinding } from '../src/conflict-analysis/types/conflict-analysis';
+import type { Prisma } from '../src/generated/prisma/client';
 import {
   buildFindingReviewSnapshot,
   canonicalSerialize,
+  compareCanonicalStrings,
   creationRequestFingerprint,
   MAX_IDEMPOTENCY_KEY_LENGTH,
   normalizeIdempotencyKey,
@@ -26,6 +28,74 @@ import {
 import { PrismaService } from '../src/prisma/prisma.service';
 
 const NOW = '2026-07-19T12:00:00.000Z';
+
+type TransactionFailureStep = 'relations' | 'event' | 'audit';
+type UnknownFunction = (...args: unknown[]) => unknown;
+
+class FaultInjectingPrismaService extends PrismaService {
+  private transactionFailure: TransactionFailureStep | null = null;
+
+  constructor() {
+    super();
+    const realTransaction = this.$transaction.bind(this) as unknown as UnknownFunction;
+    this.$transaction = ((input: unknown, ...options: unknown[]) => {
+      if (typeof input !== 'function') {
+        return Reflect.apply(realTransaction, this, [input, ...options]);
+      }
+
+      const callback = input as (client: Prisma.TransactionClient) => Promise<unknown>;
+      return Reflect.apply(realTransaction, this, [
+        (client: Prisma.TransactionClient) => callback(this.wrapTransaction(client)),
+        ...options,
+      ]);
+    }) as typeof this.$transaction;
+  }
+
+  failNextTransactionAt(step: TransactionFailureStep): void {
+    this.transactionFailure = step;
+  }
+
+  clearTransactionFailure(): void {
+    this.transactionFailure = null;
+  }
+
+  private wrapTransaction(client: Prisma.TransactionClient): Prisma.TransactionClient {
+    return new Proxy(client, {
+      get: (target, property) => {
+        const delegate = (target as unknown as Record<PropertyKey, unknown>)[property];
+        const step = this.delegateFailureStep(property);
+        if (!step || typeof delegate !== 'object' || delegate === null) return delegate;
+
+        return new Proxy(delegate, {
+          get: (delegateTarget, method) => {
+            const operation = (delegateTarget as Record<PropertyKey, unknown>)[method];
+            if (typeof operation !== 'function') return operation;
+            return (...args: unknown[]) => {
+              if (this.shouldFail(step, method)) {
+                this.transactionFailure = null;
+                throw new Error(`TEST_TRANSACTION_FAILURE:${step}`);
+              }
+              return Reflect.apply(operation as UnknownFunction, delegateTarget, args);
+            };
+          },
+        });
+      },
+    });
+  }
+
+  private delegateFailureStep(property: string | symbol): TransactionFailureStep | null {
+    if (property === 'findingReviewCaseAsset') return 'relations';
+    if (property === 'findingReviewEvent') return 'event';
+    if (property === 'auditLog') return 'audit';
+    return null;
+  }
+
+  private shouldFail(step: TransactionFailureStep, method: string | symbol): boolean {
+    if (this.transactionFailure !== step) return false;
+    if (step === 'relations') return method === 'createMany';
+    return method === 'create';
+  }
+}
 
 interface CaseResponseBody {
   id: string;
@@ -57,7 +127,10 @@ function finding(overrides: Partial<ConflictFinding> = {}): ConflictFinding {
     type: 'DUPLICATE_HOSTNAME_ACROSS_ASSETS',
     mode: 'SHADOW',
     requiresHumanReview: true,
-    affectedAssetIds: ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'],
+    affectedAssetIds: [
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000002',
+    ],
     normalizedHostname: 'srv-app-01',
     normalizedIp: null,
     observations: [],
@@ -82,6 +155,61 @@ describe('Finding review case creation primitives', () => {
     expect(canonicalSerialize({ values: ['a', 'b'] })).not.toBe(
       canonicalSerialize({ values: ['b', 'a'] }),
     );
+  });
+
+  it('uses locale-independent canonical ordering for ASCII, case and accented strings', () => {
+    expect(['é', 'a', 'Z', 'z'].sort(compareCanonicalStrings)).toEqual(['Z', 'a', 'z', 'é']);
+    expect(canonicalSerialize({ é: 1, a: 2, Z: 3 })).toBe(canonicalSerialize({ Z: 3, a: 2, é: 1 }));
+  });
+
+  it('hashes equivalent snapshot sets identically regardless of insertion order', () => {
+    const observations: ConflictFinding['observations'] = [
+      {
+        assetId: '00000000-0000-4000-8000-000000000001',
+        value: 'Servidor Árvore',
+        normalizedValue: 'servidor-arvore',
+        attribute: 'HOSTNAME',
+        source: 'Fonte Á',
+        sourceType: 'MANUAL',
+        evidenceId: null,
+        observedAt: NOW,
+        ingestedAt: NOW,
+        current: true,
+      },
+      {
+        assetId: '00000000-0000-4000-8000-000000000002',
+        value: 'Servidor Z',
+        normalizedValue: 'servidor-z',
+        attribute: 'HOSTNAME',
+        source: 'Fonte Z',
+        sourceType: 'TECHNICAL',
+        evidenceId: null,
+        observedAt: NOW,
+        ingestedAt: NOW,
+        current: true,
+      },
+    ];
+    const affectedAssets = [
+      { assetId: '00000000-0000-4000-8000-000000000002', name: 'Z' },
+      { assetId: '00000000-0000-4000-8000-000000000001', name: 'Á' },
+    ];
+    const first = buildFindingReviewSnapshot({
+      finding: finding({ observations, limitations: ['Zulu', 'Árvore'] }),
+      policyVersion: '2026-07-conflict-v1',
+      generatedAt: NOW,
+      affectedAssets,
+    });
+    const second = buildFindingReviewSnapshot({
+      finding: finding({
+        observations: [...observations].reverse(),
+        limitations: ['Árvore', 'Zulu'],
+      }),
+      policyVersion: '2026-07-conflict-v1',
+      generatedAt: NOW,
+      affectedAssets: [...affectedAssets].reverse(),
+    });
+    expect(canonicalSerialize(first)).toBe(canonicalSerialize(second));
+    expect(snapshotHash(first)).toBe(snapshotHash(second));
   });
 
   it('creates the same subject for equivalent hostnames and a different subject for another type', () => {
@@ -138,18 +266,37 @@ describe('Finding review case creation primitives', () => {
     expect(snapshotHash(snapshot)).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it('fingerprints operation, provisional actor and normalized key without exposing the raw key', () => {
-    const normalized = normalizeIdempotencyKey('  Chave-Única  ');
-    const fingerprint = creationRequestFingerprint(normalized);
-    expect(normalized).toBe('Chave-Única');
+  it('fingerprints operation, provisional actor and the exact validated key without exposing it', () => {
+    const key = normalizeIdempotencyKey('review:123e4567-e89b-12d3-a456-426614174000');
+    const fingerprint = creationRequestFingerprint(key);
+    expect(key).toBe('review:123e4567-e89b-12d3-a456-426614174000');
     expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(fingerprint).not.toContain(normalized);
-    expect(creationRequestFingerprint(normalized)).toBe(fingerprint);
+    expect(fingerprint).not.toContain(key);
+    expect(creationRequestFingerprint(key)).toBe(fingerprint);
   });
 
-  it('rejects missing, blank and oversized idempotency keys', () => {
+  it('keeps idempotency keys case-sensitive', () => {
+    expect(normalizeIdempotencyKey('123e4567-e89b-12d3-a456-426614174000')).toBe(
+      '123e4567-e89b-12d3-a456-426614174000',
+    );
+    expect(normalizeIdempotencyKey('AtlasReview123')).toBe('AtlasReview123');
+    expect(normalizeIdempotencyKey('ABC')).toBe('ABC');
+    expect(normalizeIdempotencyKey('abc')).toBe('abc');
+    expect(creationRequestFingerprint('ABC')).not.toBe(creationRequestFingerprint('abc'));
+  });
+
+  it.each([undefined, '', '   ', 'key with space', 'é', `e\u0301`, 'key\u0007control'])(
+    'rejects an absent or non-ASCII idempotency key: %p',
+    (value) => {
+      expect(() => normalizeIdempotencyKey(value)).toThrow(/obrigatório|vazio|não permitidos/);
+    },
+  );
+
+  it('rejects an oversized idempotency key', () => {
     expect(() => normalizeIdempotencyKey(undefined)).toThrow('obrigatório');
-    expect(() => normalizeIdempotencyKey('   ')).toThrow('vazio');
+    expect(normalizeIdempotencyKey('x'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH))).toHaveLength(
+      MAX_IDEMPOTENCY_KEY_LENGTH,
+    );
     expect(() => normalizeIdempotencyKey('x'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH + 1))).toThrow(
       'no máximo',
     );
@@ -166,7 +313,7 @@ describe('Finding review case creation primitives', () => {
 describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   let app: INestApplication;
   let server: Server;
-  let prisma: PrismaService;
+  let prisma: FaultInjectingPrismaService;
   const testRunId = randomUUID();
   const assetIds: string[] = [];
   const caseIds = new Set<string>();
@@ -175,14 +322,18 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
-    const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const module = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(PrismaService)
+      .useClass(FaultInjectingPrismaService)
+      .compile();
     app = module.createNestApplication();
+    app.useLogger(false);
     app.useGlobalPipes(
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
     server = app.getHttpServer() as Server;
-    prisma = app.get(PrismaService);
+    prisma = app.get<FaultInjectingPrismaService>(PrismaService);
   });
 
   afterAll(async () => {
@@ -192,7 +343,10 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
           ...caseIds,
           ...(
             await prisma.findingReviewCase.findMany({
-              where: { findingId: { startsWith: 'finding_' }, assets: { some: { assetId: { in: assetIds } } } },
+              where: {
+                findingId: { startsWith: 'finding_' },
+                assets: { some: { assetId: { in: assetIds } } },
+              },
               select: { id: true },
             })
           ).map((item) => item.id),
@@ -211,25 +365,46 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     if (app) await app.close();
   });
 
-  async function createDuplicateHostnameFinding(label: string): Promise<string> {
+  async function createDuplicateHostnameFindingFixture(label: string): Promise<{
+    findingId: string;
+    hostname: string;
+    firstAssetId: string;
+    secondAssetId: string;
+  }> {
     const hostname = `pr18-${label}-${testRunId.slice(0, 8)}`.toLowerCase();
     const firstId = randomUUID();
     const secondId = randomUUID();
     assetIds.push(firstId, secondId);
     await prisma.asset.createMany({
       data: [
-        { id: firstId, canonicalKey: `pr18:${label}:a:${testRunId}`, name: hostname, kind: 'SERVER' },
-        { id: secondId, canonicalKey: `pr18:${label}:b:${testRunId}`, name: hostname, kind: 'SERVER' },
+        {
+          id: firstId,
+          canonicalKey: `pr18:${label}:a:${testRunId}`,
+          name: hostname,
+          kind: 'SERVER',
+        },
+        {
+          id: secondId,
+          canonicalKey: `pr18:${label}:b:${testRunId}`,
+          name: hostname,
+          kind: 'SERVER',
+        },
       ],
     });
     const response = await request(server)
       .get('/conflict-analysis/findings')
       .query({ hostname, pageSize: 100 })
       .expect(200);
-    const items = responseBody<{ items: Array<{ findingId: string; type: string }> }>(response).items;
+    const items = responseBody<{ items: Array<{ findingId: string; type: string }> }>(
+      response,
+    ).items;
     const match = items.find((item) => item.type === 'DUPLICATE_HOSTNAME_ACROSS_ASSETS');
     if (!match) throw new Error(`Fixture ${label} did not produce a finding.`);
-    return match.findingId;
+    return { findingId: match.findingId, hostname, firstAssetId: firstId, secondAssetId: secondId };
+  }
+
+  async function createDuplicateHostnameFinding(label: string): Promise<string> {
+    return (await createDuplicateHostnameFindingFixture(label)).findingId;
   }
 
   async function postCase(findingId: string, key: string) {
@@ -240,6 +415,16 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     const body = responseBody<Partial<CaseResponseBody>>(response);
     if (body.id) caseIds.add(body.id);
     return response;
+  }
+
+  async function reviewPersistenceCounts() {
+    const [cases, relations, events, audits] = await Promise.all([
+      prisma.findingReviewCase.count(),
+      prisma.findingReviewCaseAsset.count(),
+      prisma.findingReviewEvent.count(),
+      prisma.auditLog.count({ where: { entityType: 'FindingReviewCase' } }),
+    ]);
+    return { cases, relations, events, audits };
   }
 
   it('keeps the endpoint disabled by default/configuration and writes nothing', async () => {
@@ -284,7 +469,10 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     const body = responseBody<ErrorResponseBody>(response);
     expect(response.status).toBe(404);
     expect(body).toEqual(
-      expect.objectContaining({ code: 'FINDING_NOT_FOUND', message: expect.stringContaining('não existe') }),
+      expect.objectContaining({
+        code: 'FINDING_NOT_FOUND',
+        message: expect.stringContaining('não existe'),
+      }),
     );
   });
 
@@ -353,6 +541,128 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(await prisma.auditLog.count({ where: { entityId: createdBody.id } })).toBe(auditBefore);
   });
 
+  it('replays the original case after the finding is no longer detected', async () => {
+    const fixture = await createDuplicateHostnameFindingFixture('replay-missing-finding');
+    const key = `replay-missing-finding-${testRunId}`;
+    const created = await postCase(fixture.findingId, key);
+    const createdBody = responseBody<CaseResponseBody>(created);
+    expect(created.status).toBe(201);
+
+    await prisma.asset.update({
+      where: { id: fixture.secondAssetId },
+      data: { name: `${fixture.hostname}-renamed` },
+    });
+    const findingsAfterChange = await request(server)
+      .get('/conflict-analysis/findings')
+      .query({ hostname: fixture.hostname, pageSize: 100 })
+      .expect(200);
+    expect(
+      responseBody<{ items: Array<{ findingId: string }> }>(findingsAfterChange).items.some(
+        (item) => item.findingId === fixture.findingId,
+      ),
+    ).toBe(false);
+
+    const persistenceBefore = await reviewPersistenceCounts();
+    const inventoryBefore = await inventoryCounts();
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: createdBody.id },
+      select: { updatedAt: true },
+    });
+    const changedAssetBefore = await prisma.asset.findUniqueOrThrow({
+      where: { id: fixture.secondAssetId },
+      select: { name: true, updatedAt: true },
+    });
+
+    const replayed = await postCase(fixture.findingId, key);
+    const replayedBody = responseBody<CaseResponseBody>(replayed);
+    expect(replayed.status).toBe(200);
+    expect(replayedBody.id).toBe(createdBody.id);
+    expect(replayedBody.idempotentReplay).toBe(true);
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+    expect(await inventoryCounts()).toEqual(inventoryBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({
+        where: { id: createdBody.id },
+        select: { updatedAt: true },
+      }),
+    ).toEqual(caseBefore);
+    expect(
+      await prisma.asset.findUniqueOrThrow({
+        where: { id: fixture.secondAssetId },
+        select: { name: true, updatedAt: true },
+      }),
+    ).toEqual(changedAssetBefore);
+  });
+
+  it('blocks replay while the feature flag is disabled and restores it without writes', async () => {
+    const findingId = await createDuplicateHostnameFinding('replay-disabled');
+    const key = `replay-disabled-${testRunId}`;
+    const created = await postCase(findingId, key);
+    const createdBody = responseBody<CaseResponseBody>(created);
+    expect(created.status).toBe(201);
+    const persistenceBefore = await reviewPersistenceCounts();
+    const inventoryBefore = await inventoryCounts();
+
+    let disabledReplay: Awaited<ReturnType<typeof postCase>>;
+    process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'false';
+    try {
+      disabledReplay = await postCase(findingId, key);
+    } finally {
+      process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
+    }
+
+    expect(disabledReplay.status).toBe(503);
+    expect(responseBody<ErrorResponseBody>(disabledReplay).code).toBe(
+      'FINDING_REVIEW_CASES_DISABLED',
+    );
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+    expect(await inventoryCounts()).toEqual(inventoryBefore);
+
+    const enabledReplay = await postCase(findingId, key);
+    expect(enabledReplay.status).toBe(200);
+    expect(responseBody<CaseResponseBody>(enabledReplay).id).toBe(createdBody.id);
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+  });
+
+  async function expectDatabaseRollback(step: TransactionFailureStep, label: string) {
+    const findingId = await createDuplicateHostnameFinding(label);
+    const key = `${label}-${testRunId}`;
+    const persistenceBefore = await reviewPersistenceCounts();
+    const inventoryBefore = await inventoryCounts();
+
+    prisma.failNextTransactionAt(step);
+    let failed: Awaited<ReturnType<typeof postCase>>;
+    try {
+      failed = await postCase(findingId, key);
+    } finally {
+      prisma.clearTransactionFailure();
+    }
+
+    expect(failed.status).toBe(500);
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+    expect(await inventoryCounts()).toEqual(inventoryBefore);
+
+    const retry = await postCase(findingId, key);
+    const retryBody = responseBody<CaseResponseBody>(retry);
+    expect(retry.status).toBe(201);
+    expect(retryBody.idempotentReplay).toBe(false);
+    expect(await prisma.findingReviewCaseAsset.count({ where: { caseId: retryBody.id } })).toBe(2);
+    expect(await prisma.findingReviewEvent.count({ where: { caseId: retryBody.id } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { entityId: retryBody.id } })).toBe(1);
+  }
+
+  it('rolls back the PostgreSQL transaction when an asset relation fails', async () => {
+    await expectDatabaseRollback('relations', 'rollback-relations');
+  });
+
+  it('rolls back the PostgreSQL transaction when the case event fails', async () => {
+    await expectDatabaseRollback('event', 'rollback-event');
+  });
+
+  it('rolls back the PostgreSQL transaction when the AuditLog fails', async () => {
+    await expectDatabaseRollback('audit', 'rollback-audit');
+  });
+
   it('rejects reuse of the same key with another semantic payload', async () => {
     const firstFinding = await createDuplicateHostnameFinding('payload-a');
     const secondFinding = await createDuplicateHostnameFinding('payload-b');
@@ -376,7 +686,10 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(created.status).toBe(201);
     expect(response.status).toBe(409);
     expect(body).toEqual(
-      expect.objectContaining({ code: 'ACTIVE_REVIEW_CASE_EXISTS', existingCaseId: createdBody.id }),
+      expect.objectContaining({
+        code: 'ACTIVE_REVIEW_CASE_EXISTS',
+        existingCaseId: createdBody.id,
+      }),
     );
   });
 
@@ -389,7 +702,11 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect([first.status, second.status].sort()).toEqual([201, 409]);
     const created = first.status === 201 ? first : second;
     const createdBody = responseBody<CaseResponseBody>(created);
-    expect(await prisma.findingReviewCase.count({ where: { reviewSubjectKey: createdBody.reviewSubjectKey } })).toBe(1);
+    expect(
+      await prisma.findingReviewCase.count({
+        where: { reviewSubjectKey: createdBody.reviewSubjectKey },
+      }),
+    ).toBe(1);
     expect(await prisma.findingReviewEvent.count({ where: { caseId: createdBody.id } })).toBe(1);
     expect(await prisma.auditLog.count({ where: { entityId: createdBody.id } })).toBe(1);
   });
