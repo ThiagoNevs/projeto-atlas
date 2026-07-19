@@ -49,6 +49,24 @@ enum ConflictStatus {
   DISMISSED
 }
 
+enum FindingReviewCaseStatus {
+  OPEN
+  IN_REVIEW
+  WAITING_FOR_EVIDENCE
+  RESOLVED
+  DISMISSED
+  CANCELLED
+}
+
+enum FindingReviewStaleness {
+  CURRENT
+  CHANGED
+  NO_LONGER_DETECTED
+  POLICY_VERSION_CHANGED
+  ASSET_UNAVAILABLE
+  REQUIRES_REFRESH
+}
+
 enum NetworkDiscoveryMode {
   PASSIVE
   LIGHT
@@ -91,13 +109,14 @@ model Asset {
   createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  attributes        AssetAttribute[]
-  evidence          AssetEvidence[]
-  events            AssetEvent[]
-  networkInterfaces NetworkInterface[]
-  conflicts         Conflict[]
-  auditLogs         AuditLog[]
-  discoveryResults  NetworkDiscoveryResult[]
+  attributes         AssetAttribute[]
+  evidence           AssetEvidence[]
+  events             AssetEvent[]
+  networkInterfaces  NetworkInterface[]
+  conflicts          Conflict[]
+  auditLogs          AuditLog[]
+  discoveryResults   NetworkDiscoveryResult[]
+  findingReviewCases FindingReviewCaseAsset[]
 
   @@index([kind])
   @@index([operationalStatus])
@@ -278,6 +297,77 @@ model AuditLog {
   @@index([entityType, entityId, occurredAt(sort: Desc)])
   @@index([actorType, actorId, occurredAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model FindingReviewCase {
+  id                         String                  @id @default(uuid()) @db.Uuid
+  findingId                  String                  @map("finding_id")
+  findingType                String                  @map("finding_type")
+  policyVersion              String                  @map("policy_version")
+  reviewSubjectKey           String                  @map("review_subject_key")
+  activeReviewSubjectKey     String?                 @unique @map("active_review_subject_key")
+  /// Fingerprint SHA-256 futuro de operação, ator/escopo, chave idempotente e payload semântico.
+  creationRequestFingerprint String                  @unique @map("creation_request_id")
+  status                     FindingReviewCaseStatus @default(OPEN)
+  staleness                  FindingReviewStaleness  @default(CURRENT)
+  originalSnapshot           Json                    @map("original_snapshot") @db.JsonB
+  originalSnapshotHash       String                  @map("original_snapshot_hash")
+  version                    Int                     @default(1)
+  createdBy                  String                  @map("created_by")
+  findingGeneratedAt         DateTime                @map("finding_generated_at") @db.Timestamptz(3)
+  createdAt                  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  assets FindingReviewCaseAsset[]
+  events FindingReviewEvent[]
+
+  @@index([status, updatedAt(sort: Desc)])
+  @@index([staleness, updatedAt(sort: Desc)])
+  @@index([findingId, policyVersion])
+  @@index([reviewSubjectKey])
+  @@index([createdAt(sort: Desc), id])
+  @@map("finding_review_cases")
+}
+
+model FindingReviewCaseAsset {
+  caseId              String   @map("case_id") @db.Uuid
+  assetId             String?  @map("asset_id") @db.Uuid
+  assetIdAtCreation   String   @map("asset_id_at_creation") @db.Uuid
+  assetNameAtCreation String?  @map("asset_name_at_creation")
+  role                String
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reviewCase FindingReviewCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  asset      Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@id([caseId, assetIdAtCreation])
+  @@index([assetId])
+  @@map("finding_review_case_assets")
+}
+
+model FindingReviewEvent {
+  id             String                   @id @default(uuid()) @db.Uuid
+  caseId         String                   @map("case_id") @db.Uuid
+  eventType      String                   @map("event_type")
+  versionBefore  Int?                     @map("version_before")
+  versionAfter   Int                      @map("version_after")
+  actorId        String                   @map("actor_id")
+  requestId      String?                  @map("request_id")
+  previousStatus FindingReviewCaseStatus? @map("previous_status")
+  nextStatus     FindingReviewCaseStatus? @map("next_status")
+  before         Json?                    @db.JsonB
+  after          Json?                    @db.JsonB
+  metadata       Json?                    @db.JsonB
+  occurredAt     DateTime                 @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reviewCase FindingReviewCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, requestId])
+  @@index([caseId, versionAfter, createdAt, id])
+  @@index([caseId, occurredAt(sort: Desc), id])
+  @@index([actorId, occurredAt(sort: Desc)])
+  @@map("finding_review_events")
 }
 
 model NetworkDiscoveryProfile {
