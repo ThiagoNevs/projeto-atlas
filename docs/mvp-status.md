@@ -98,8 +98,26 @@ filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mes
 disponível em `/conflict-findings`, apresenta resumo, filtros, paginação, limitações e detalhe sob
 demanda sem persistir decisões. Uma fila operacional e a resolução humana auditada permanecem futuras.
 O desenho proposto para essa evolução está documentado em
-`docs/conflict-review-workflow-design.md`. O fluxo persistido ainda não foi implementado: não existem
-novos casos, endpoints, ações de resolução ou migrations, e nenhuma decisão altera o inventário.
+`docs/conflict-review-workflow-design.md`. A fundação de persistência está implementada; o fluxo
+funcional de criação ainda não foi implementado. O schema e a migration expand-only incluem os enums
+de status e staleness, `FindingReviewCase`, a relação multiativo `FindingReviewCaseAsset` e o evento
+mínimo versionado `FindingReviewEvent`. A estrutura preserva `findingId`, `findingType`,
+`policyVersion`, `reviewSubjectKey`, a chave ativa anulável e única, versão inicial, snapshot original
+e hash. O formato do snapshot é versionado dentro do próprio JSON por `snapshotVersion`; ele é
+destinado a ser imutável, mas essa imutabilidade e a validação do hash serão garantidas pelos serviços
+e contratos futuros, não por trigger no banco.
+
+`creationRequestFingerprint` representa a estrutura futura para um digest contextual de operação,
+ator/escopo, chave idempotente e payload semântico; não armazena header bruto e ainda não oferece
+idempotência HTTP. A relação com `Asset` usa `ON DELETE SET NULL` e mantém o identificador e o nome
+capturados na criação, preservando contexto histórico quando o ativo deixa de existir. A versão e os
+eventos apenas preparam o modelo para concorrência otimista; nenhum locking funcional está ativo.
+
+Ainda não existem `POST` ou `GET` de casos, serviço de criação, feature flag funcional, `AuditLog` da
+criação, transação da aplicação, listagem, detalhe, frontend, botão de criação, autenticação, RBAC,
+atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração com `Conflict`
+ou Resolution Center. Nenhum caso ou finding é persistido automaticamente e nenhuma estrutura do
+inventário é alterada por esse fundamento.
 
 ### Tipos compartilhados
 
