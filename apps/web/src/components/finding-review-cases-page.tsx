@@ -86,6 +86,16 @@ interface LocationState {
 
 const DETAIL_PANEL_ID = 'finding-review-case-detail';
 const IDEMPOTENCY_STORAGE_PREFIX = 'atlas:pending-review-case:';
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]{1,128}$/;
+export const PENDING_REVIEW_CASE_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+
+export interface PendingFindingReviewCaseAttempt {
+  version: 1;
+  findingId: string;
+  idempotencyKey: string;
+  createdAt: string;
+  expiresAt: string;
+}
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -183,8 +193,44 @@ function dateTimeLocalValue(value: string | undefined): string {
 
 function isoFromDateTimeLocal(value: string): string | undefined {
   if (!value) return undefined;
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(value);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? 0);
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || 0);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    year < 1
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > daysInMonth[month - 1]!
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    return undefined;
+  }
+  const parsed = new Date(0);
+  parsed.setFullYear(year, month - 1, day);
+  parsed.setHours(hour, minute, second, millisecond);
+  if (
+    parsed.getFullYear() !== year
+    || parsed.getMonth() !== month - 1
+    || parsed.getDate() !== day
+    || parsed.getHours() !== hour
+    || parsed.getMinutes() !== minute
+    || parsed.getSeconds() !== second
+    || parsed.getMilliseconds() !== millisecond
+  ) {
+    return undefined;
+  }
+  return parsed.toISOString();
 }
 
 export function buildFindingReviewCaseQueryFromForm(
@@ -263,10 +309,72 @@ function pendingStorageKey(findingId: string): string {
   return `${IDEMPOTENCY_STORAGE_PREFIX}${findingId}`;
 }
 
+export function createPendingFindingReviewCaseAttempt(
+  findingId: string,
+  idempotencyKey: string,
+  now = Date.now(),
+): PendingFindingReviewCaseAttempt {
+  return {
+    version: 1,
+    findingId,
+    idempotencyKey,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + PENDING_REVIEW_CASE_ATTEMPT_TTL_MS).toISOString(),
+  };
+}
+
+export function parsePendingFindingReviewCaseAttempt(
+  serialized: string,
+  expectedFindingId: string,
+  now = Date.now(),
+): PendingFindingReviewCaseAttempt | null {
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    const keys = Object.keys(candidate).sort();
+    if (keys.join(',') !== 'createdAt,expiresAt,findingId,idempotencyKey,version') return null;
+    if (
+      candidate.version !== 1
+      || candidate.findingId !== expectedFindingId
+      || !isFindingReviewFindingId(candidate.findingId)
+      || typeof candidate.idempotencyKey !== 'string'
+      || !IDEMPOTENCY_KEY_PATTERN.test(candidate.idempotencyKey)
+      || typeof candidate.createdAt !== 'string'
+      || typeof candidate.expiresAt !== 'string'
+    ) {
+      return null;
+    }
+    const createdAt = Date.parse(candidate.createdAt);
+    const expiresAt = Date.parse(candidate.expiresAt);
+    if (
+      !Number.isFinite(createdAt)
+      || !Number.isFinite(expiresAt)
+      || new Date(createdAt).toISOString() !== candidate.createdAt
+      || new Date(expiresAt).toISOString() !== candidate.expiresAt
+      || createdAt > now
+      || expiresAt <= now
+      || expiresAt - createdAt !== PENDING_REVIEW_CASE_ATTEMPT_TTL_MS
+    ) {
+      return null;
+    }
+    return candidate as unknown as PendingFindingReviewCaseAttempt;
+  } catch {
+    return null;
+  }
+}
+
 function readPendingIdempotencyKey(findingId: string): string | null {
   try {
-    const value = window.sessionStorage.getItem(pendingStorageKey(findingId));
-    return value && /^atlas-ui-[A-Za-z0-9._~:+/=-]{1,128}$/.test(value) ? value : null;
+    const storageKey = pendingStorageKey(findingId);
+    const serialized = window.sessionStorage.getItem(storageKey);
+    if (serialized === null) return null;
+    const attempt = parsePendingFindingReviewCaseAttempt(serialized, findingId);
+    if (!attempt) {
+      window.sessionStorage.removeItem(storageKey);
+      return null;
+    }
+    return attempt.idempotencyKey;
   } catch {
     return null;
   }
@@ -274,7 +382,8 @@ function readPendingIdempotencyKey(findingId: string): string | null {
 
 function storePendingIdempotencyKey(findingId: string, value: string): void {
   try {
-    window.sessionStorage.setItem(pendingStorageKey(findingId), value);
+    const attempt = createPendingFindingReviewCaseAttempt(findingId, value);
+    window.sessionStorage.setItem(pendingStorageKey(findingId), JSON.stringify(attempt));
   } catch {
     // The in-memory reference still protects retries while this page remains mounted.
   }
@@ -441,9 +550,14 @@ export function FindingReviewCasesPage({
   }, []);
 
   useEffect(() => {
-    if (!expandedId || !detailPanel.current) return;
+    if (
+      !expandedId
+      || detailLoading
+      || (!detail && !detailError)
+      || !detailPanel.current
+    ) return;
     window.requestAnimationFrame(() => detailPanel.current?.focus());
-  }, [expandedId]);
+  }, [detail, detailError, detailLoading, expandedId]);
 
   function canCommitList(
     sequence: number,
@@ -579,11 +693,16 @@ export function FindingReviewCasesPage({
     setCreationLoading(true);
     setCreationError(null);
     setExistingCaseId(null);
-    idempotencyKey.current ??= readPendingIdempotencyKey(creationFindingId)
-      ?? createFindingReviewIdempotencyKey(() => crypto.randomUUID());
-    storePendingIdempotencyKey(creationFindingId, idempotencyKey.current);
+    if (!idempotencyKey.current) {
+      idempotencyKey.current = readPendingIdempotencyKey(creationFindingId);
+    }
+    if (!idempotencyKey.current) {
+      idempotencyKey.current = createFindingReviewIdempotencyKey(() => crypto.randomUUID());
+      storePendingIdempotencyKey(creationFindingId, idempotencyKey.current);
+    }
+    const currentIdempotencyKey = idempotencyKey.current;
     try {
-      const created = await createCase(creationFindingId, idempotencyKey.current, {
+      const created = await createCase(creationFindingId, currentIdempotencyKey, {
         signal: controller.signal,
       });
       clearPendingIdempotencyKey(creationFindingId);

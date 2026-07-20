@@ -6,7 +6,10 @@ import { createRoot, type Root } from 'react-dom/client';
 
 import {
   FindingReviewCasesPage,
+  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
   buildFindingReviewCaseQueryFromForm,
+  createPendingFindingReviewCaseAttempt,
+  parsePendingFindingReviewCaseAttempt,
 } from './finding-review-cases-page.tsx';
 import { ApiError } from '../lib/api-error.ts';
 import type {
@@ -371,6 +374,33 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
   }
 });
 
+test('move o foco para o detalhe somente depois da conclusão do carregamento', async () => {
+  const pending = deferred<FindingReviewCaseDetail>();
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => pending.promise,
+  });
+  try {
+    const trigger = findButton(harness.environment.container, 'Ver detalhe');
+    trigger.focus();
+    await act(async () => { trigger.click(); await flush(); });
+    const panel = harness.environment.container.querySelector<HTMLElement>('#finding-review-case-detail');
+    assert.ok(panel);
+    await act(async () => {
+      await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
+    });
+    assert.notEqual(harness.environment.window.document.activeElement, panel);
+
+    await act(async () => { pending.resolve(detailResponse); await flush(); });
+    await act(async () => {
+      await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
+    });
+    assert.equal(harness.environment.window.document.activeElement, panel);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
 test('popstate restaura filtros, paginação, ordenação e caso sem criar loop', async () => {
   const calls: Array<Record<string, unknown>> = [];
   let detailCalls = 0;
@@ -459,6 +489,27 @@ test('rejeita intervalo invertido antes de formar a consulta', () => {
   });
   assert.equal(parsed.query, null);
   assert.match(parsed.error ?? '', /data inicial não pode ser posterior/);
+});
+
+test('rejeita datas calendariamente impossíveis sem normalização silenciosa', () => {
+  for (const value of ['2026-02-30T09:00', '2025-02-29T09:00', '2026-13-01T09:00']) {
+    const parsed = buildFindingReviewCaseQueryFromForm({
+      status: '', staleness: '', findingType: '', findingId: '', createdBy: '', assetId: '',
+      createdFrom: value,
+      createdTo: '',
+      sortBy: 'createdAt', sortDirection: 'desc', pageSize: '25',
+    });
+    assert.equal(parsed.query, null);
+    assert.match(parsed.error ?? '', /datas e horários válidos/);
+  }
+  const leapDay = buildFindingReviewCaseQueryFromForm({
+    status: '', staleness: '', findingType: '', findingId: '', createdBy: '', assetId: '',
+    createdFrom: '2024-02-29T09:00',
+    createdTo: '',
+    sortBy: 'createdAt', sortDirection: 'desc', pageSize: '25',
+  });
+  assert.equal(leapDay.error, null);
+  assert.ok(leapDay.query?.createdFrom);
 });
 
 test('clique duplo dispara um único POST', async () => {
@@ -551,6 +602,12 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
   const firstButton = findButton(firstContainer, 'Criar caso');
   await act(async () => { firstButton.click(); await flush(); });
   assert.match(firstContainer.textContent ?? '', /mesma chave idempotente será reutilizada/);
+  const storedAttempt = environment.window.sessionStorage.getItem(
+    `atlas:pending-review-case:${FINDING_ID}`,
+  );
+  assert.ok(storedAttempt);
+  const parsedAttempt = parsePendingFindingReviewCaseAttempt(storedAttempt, FINDING_ID);
+  assert.equal(parsedAttempt?.idempotencyKey, keys[0]);
   await act(async () => firstRoot.unmount());
 
   const secondContainer = environment.window.document.createElement('div');
@@ -569,6 +626,10 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
     await flush();
   });
   try {
+    assert.equal(
+      environment.window.sessionStorage.getItem(`atlas:pending-review-case:${FINDING_ID}`),
+      storedAttempt,
+    );
     const secondButton = findButton(secondContainer, 'Criar caso');
     await act(async () => { secondButton.click(); await flush(); });
     assert.equal(keys.length, 2);
@@ -582,6 +643,89 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
     await act(async () => secondRoot.unmount());
     secondContainer.remove();
     environment.cleanup();
+  }
+});
+
+test('tentativa pendente usa envelope versionado e expira sem renovar silenciosamente', () => {
+  const now = Date.parse('2026-07-20T12:00:00.000Z');
+  const key = 'atlas-ui-11111111-1111-4111-8111-111111111111';
+  const attempt = createPendingFindingReviewCaseAttempt(FINDING_ID, key, now);
+  assert.deepEqual(attempt, {
+    version: 1,
+    findingId: FINDING_ID,
+    idempotencyKey: key,
+    createdAt: '2026-07-20T12:00:00.000Z',
+    expiresAt: '2026-07-20T12:15:00.000Z',
+  });
+  const serialized = JSON.stringify(attempt);
+  assert.deepEqual(
+    parsePendingFindingReviewCaseAttempt(serialized, FINDING_ID, now + 1),
+    attempt,
+  );
+  assert.equal(
+    parsePendingFindingReviewCaseAttempt(
+      serialized,
+      FINDING_ID,
+      now + PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+    ),
+    null,
+  );
+});
+
+test('tentativa pendente rejeita conteúdo inválido, adulterado ou associado a outro finding', () => {
+  const now = Date.parse('2026-07-20T12:00:00.000Z');
+  const key = 'atlas-ui-11111111-1111-4111-8111-111111111111';
+  const valid = createPendingFindingReviewCaseAttempt(FINDING_ID, key, now);
+  const invalidValues = [
+    'not-json',
+    JSON.stringify({ ...valid, version: 2 }),
+    JSON.stringify({ ...valid, findingId: SECOND_FINDING_ID }),
+    JSON.stringify({ ...valid, idempotencyKey: `${key} espaço` }),
+    JSON.stringify({ ...valid, expiresAt: '2026-07-20T13:00:00.000Z' }),
+    JSON.stringify({ ...valid, unexpected: true }),
+  ];
+  for (const value of invalidValues) {
+    assert.equal(parsePendingFindingReviewCaseAttempt(value, FINDING_ID, now + 1), null);
+  }
+});
+
+test('conteúdo pendente inválido ou expirado é removido antes de uma nova tentativa', async () => {
+  const expired = createPendingFindingReviewCaseAttempt(
+    FINDING_ID,
+    'atlas-ui-expired',
+    Date.parse('2020-01-01T00:00:00.000Z'),
+  );
+  for (const storedValue of ['{invalid', JSON.stringify(expired)]) {
+    const environment = createJsdomTestEnvironment();
+    const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
+    environment.window.sessionStorage.setItem(storageKey, storedValue);
+    const keys: string[] = [];
+    const root = createRoot(environment.container);
+    await act(async () => {
+      root.render(createElement(FindingReviewCasesPage, {
+        initialSearchParams: { create: '1', findingId: FINDING_ID },
+        loadCases: async () => listResponse,
+        createCase: async (_findingId: string, key: string) => {
+          keys.push(key);
+          throw new ApiError('Falha de rede', 0);
+        },
+      }));
+      await flush();
+    });
+    try {
+      await act(async () => { findButton(environment.container, 'Criar caso').click(); await flush(); });
+      assert.equal(keys.length, 1);
+      assert.notEqual(keys[0], 'atlas-ui-expired');
+      const replacement = environment.window.sessionStorage.getItem(storageKey);
+      assert.ok(replacement);
+      assert.equal(
+        parsePendingFindingReviewCaseAttempt(replacement, FINDING_ID)?.idempotencyKey,
+        keys[0],
+      );
+    } finally {
+      await act(async () => root.unmount());
+      environment.cleanup();
+    }
   }
 });
 

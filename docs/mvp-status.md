@@ -159,9 +159,11 @@ de existir. Nenhum caso é criado automaticamente e nenhuma dessas ações alter
 A tela expõe todos os filtros de leitura, inclusive ativo e intervalo de criação, converte datas locais
 para timestamps ISO 8601 completos e mantém filtros, paginação, ordenação e `caseId` sincronizados com o
 histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e validam as respostas em
-runtime. A criação possui timeout controlado, bloqueio síncrono contra clique duplo e preserva no
-`sessionStorage` apenas a chave de uma tentativa cujo resultado ficou incerto; o retry reutiliza essa
-chave e respostas conclusivas removem o registro temporário.
+runtime. A criação possui timeout de dez segundos, bloqueio síncrono contra clique duplo e preserva no
+`sessionStorage` um envelope versionado da tentativa antes do POST, para que um resultado incerto possa
+ser repetido com a mesma chave. O envelope expira em 15 minutos; registros expirados, adulterados ou
+associados a outro finding são removidos antes de uma nova tentativa. Respostas conclusivas também
+removem o registro temporário.
 
 Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
 com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.

@@ -724,10 +724,12 @@ local do navegador são convertidas para ISO 8601 com timezone antes da consulta
 um deep link com `caseId`, e Voltar/Avançar restaura filtros, paginação, ordenação e detalhe. Requisições
 obsoletas são canceladas e respostas fora de ordem são ignoradas.
 
-Se uma criação terminar com timeout ou falha de rede, o resultado é tratado como incerto. A chave dessa
-tentativa é mantida temporariamente no `sessionStorage` da aba e reutilizada no retry, inclusive após uma
-remontagem da página. A chave não é colocada na URL, no corpo da requisição ou em mensagens. Respostas
-conclusivas removem o registro temporário.
+Se uma criação ultrapassar o timeout de dez segundos ou terminar com falha de rede, o resultado é tratado
+como incerto. Antes do POST, a tentativa é registrada no `sessionStorage` da aba em um envelope versionado
+com `findingId`, chave idempotente, criação e expiração. O envelope é válido por 15 minutos e reutilizado
+no retry, inclusive após uma remontagem da página. Registros expirados, inválidos, adulterados ou de outro
+finding são removidos antes de uma nova tentativa. A chave não é colocada na URL, no corpo da requisição
+ou em mensagens. Respostas conclusivas removem o registro temporário.
 
 A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
