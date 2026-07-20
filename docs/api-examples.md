@@ -725,11 +725,13 @@ um deep link com `caseId`, e Voltar/Avançar restaura filtros, paginação, orde
 obsoletas são canceladas e respostas fora de ordem são ignoradas.
 
 Se uma criação ultrapassar o timeout de dez segundos ou terminar com falha de rede, o resultado é tratado
-como incerto. Antes do POST, a tentativa é registrada no `sessionStorage` da aba em um envelope versionado
-com `findingId`, chave idempotente, criação e expiração. O envelope é válido por 15 minutos e reutilizado
-no retry, inclusive após uma remontagem da página. Registros expirados, inválidos, adulterados ou de outro
-finding são removidos antes de uma nova tentativa. A chave não é colocada na URL, no corpo da requisição
-ou em mensagens. Respostas conclusivas removem o registro temporário.
+como incerto. O frontend cria em memória um envelope versionado com `findingId`, chave idempotente,
+criação e expiração no clique explícito, mas só o registra no `sessionStorage` da aba depois desse resultado
+incerto. O envelope é válido por 15 minutos e reutilizado no retry, inclusive após remontagem, sem renovar
+`createdAt` ou `expiresAt`. Todo retry revalida também a cópia em memória. Registros expirados, inválidos,
+adulterados ou de outro finding são removidos e encerram o gesto sem POST; somente um novo clique cria
+outra chave. A chave não é colocada na URL, no corpo ou em mensagens. Respostas conclusivas limpam o
+registro mesmo após desmontagem da tela.
 
 A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator

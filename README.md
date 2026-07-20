@@ -127,9 +127,12 @@ continuam fora do escopo.
 
 Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
 navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e trata como incerto um
-POST de criação que ultrapasse dez segundos ou termine com falha de rede. Nesse caso, a tentativa é
-preservada em um envelope versionado no `sessionStorage` por no máximo 15 minutos e reutiliza a mesma
-chave no retry, sem expô-la na URL. Conteúdo inválido ou expirado é removido antes de uma nova tentativa.
+POST de criação que ultrapasse dez segundos ou termine com falha de rede. A tentativa nasce em memória
+no clique explícito e só é persistida no `sessionStorage` quando o resultado fica incerto. Seu envelope
+versionado mantém criação e expiração fixas por 15 minutos: retries reutilizam a mesma chave sem renovar
+o TTL. Todo retry revalida o envelope; conteúdo inválido ou expirado é removido e interrompe o clique sem
+enviar POST. Uma nova chave só nasce em outra ação explícita. Respostas conclusivas limpam a tentativa
+mesmo se a tela já tiver sido desmontada, e a chave nunca é exposta na URL.
 
 Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
 sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal

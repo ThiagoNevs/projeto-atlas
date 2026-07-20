@@ -160,10 +160,12 @@ A tela expõe todos os filtros de leitura, inclusive ativo e intervalo de criaç
 para timestamps ISO 8601 completos e mantém filtros, paginação, ordenação e `caseId` sincronizados com o
 histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e validam as respostas em
 runtime. A criação possui timeout de dez segundos, bloqueio síncrono contra clique duplo e preserva no
-`sessionStorage` um envelope versionado da tentativa antes do POST, para que um resultado incerto possa
-ser repetido com a mesma chave. O envelope expira em 15 minutos; registros expirados, adulterados ou
-associados a outro finding são removidos antes de uma nova tentativa. Respostas conclusivas também
-removem o registro temporário.
+`sessionStorage` um envelope versionado somente depois que timeout ou falha de rede tornam o resultado
+incerto. O envelope conserva `createdAt` e `expiresAt` originais durante todos os retries e expira em 15
+minutos sem renovação silenciosa. Cada retry revalida inclusive a tentativa mantida na mesma aba. Se o
+registro estiver expirado, adulterado ou associado a outro finding, ele é removido e nenhum POST ocorre
+nesse gesto; uma nova chave exige outro clique explícito. Respostas conclusivas removem o registro
+temporário mesmo quando o componente já foi desmontado.
 
 Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
 com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.

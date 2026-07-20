@@ -357,11 +357,14 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
     assert.equal(trigger.getAttribute('aria-expanded'), 'true');
     assert.match(harness.environment.window.location.search, new RegExp(`caseId=${CASE_ID}`));
     const panel = harness.environment.container.querySelector<HTMLElement>('#finding-review-case-detail');
-    assert.ok(panel);
+    const heading = harness.environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
+    assert.ok(panel && heading);
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.equal(harness.environment.window.document.activeElement, panel);
+    assert.equal(harness.environment.window.document.activeElement, heading);
+    assert.equal(heading.tabIndex, -1);
+    assert.equal(panel.hasAttribute('tabindex'), false);
     const closeButton = findButton(harness.environment.container, 'Fechar detalhe');
     await act(async () => { closeButton.click(); await flush(); });
     await act(async () => {
@@ -389,13 +392,67 @@ test('move o foco para o detalhe somente depois da conclusão do carregamento', 
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.notEqual(harness.environment.window.document.activeElement, panel);
+    assert.notEqual(
+      harness.environment.window.document.activeElement,
+      harness.environment.container.querySelector('#review-case-detail-title'),
+    );
 
     await act(async () => { pending.resolve(detailResponse); await flush(); });
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.equal(harness.environment.window.document.activeElement, panel);
+    const heading = harness.environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
+    assert.ok(heading);
+    assert.equal(harness.environment.window.document.activeElement, heading);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('cancela o foco agendado do caso anterior durante troca rápida de detalhe', async () => {
+  const first = deferred<FindingReviewCaseDetail>();
+  const second = deferred<FindingReviewCaseDetail>();
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async (id) => id === CASE_ID ? first.promise : second.promise,
+  });
+  try {
+    const trigger = findButton(harness.environment.container, 'Ver detalhe');
+    await act(async () => { trigger.click(); await flush(); });
+    await act(async () => { first.resolve(detailResponse); await flush(); });
+
+    harness.environment.window.history.pushState(
+      null,
+      '',
+      `/conflict-review-cases?caseId=${SECOND_CASE_ID}`,
+    );
+    await act(async () => {
+      harness.environment.window.dispatchEvent(
+        new harness.environment.window.PopStateEvent('popstate'),
+      );
+      await flush();
+    });
+    const loadingHeading = harness.environment.container.querySelector<HTMLHeadingElement>(
+      '#review-case-detail-title',
+    );
+    assert.ok(loadingHeading);
+    await act(async () => {
+      await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
+    });
+    assert.notEqual(harness.environment.window.document.activeElement, loadingHeading);
+
+    await act(async () => {
+      second.resolve({ ...detailResponse, id: SECOND_CASE_ID });
+      await flush();
+    });
+    await act(async () => {
+      await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
+    });
+    const finalHeading = harness.environment.container.querySelector<HTMLHeadingElement>(
+      '#review-case-detail-title',
+    );
+    assert.ok(finalHeading);
+    assert.equal(harness.environment.window.document.activeElement, finalHeading);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -545,11 +602,17 @@ test('unmount cancela a criação pendente sem atualizar a interface', async () 
       return pending.promise;
     },
   });
+  const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
+  harness.environment.window.sessionStorage.setItem(
+    storageKey,
+    JSON.stringify(createPendingFindingReviewCaseAttempt(FINDING_ID, 'atlas-ui-unmount-success')),
+  );
   const button = findButton(harness.environment.container, 'Criar caso');
   await act(async () => { button.click(); await flush(); });
   await act(async () => harness.root.unmount());
   assert.equal(signal?.aborted, true);
   await act(async () => { pending.resolve(creationResponse); await flush(); });
+  assert.equal(harness.environment.window.sessionStorage.getItem(storageKey), null);
   harness.environment.cleanup();
 });
 
@@ -586,6 +649,7 @@ test('navegação pelo histórico cancela criação pendente e ignora sua respos
 test('resultado incerto preserva a chave entre remontagem e replay', async () => {
   const environment = createJsdomTestEnvironment();
   const keys: string[] = [];
+  const uncertain = deferred<CreateFindingReviewCaseResponse>();
   const firstContainer = environment.container;
   const firstRoot = createRoot(firstContainer);
   await act(async () => {
@@ -594,13 +658,21 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
       loadCases: async () => listResponse,
       createCase: async (_findingId: string, key: string) => {
         keys.push(key);
-        throw new ApiError('Falha de rede', 0);
+        return uncertain.promise;
       },
     }));
     await flush();
   });
   const firstButton = findButton(firstContainer, 'Criar caso');
   await act(async () => { firstButton.click(); await flush(); });
+  assert.equal(
+    environment.window.sessionStorage.getItem(`atlas:pending-review-case:${FINDING_ID}`),
+    null,
+  );
+  await act(async () => {
+    uncertain.reject(new ApiError('Falha de rede', 0));
+    await flush();
+  });
   assert.match(firstContainer.textContent ?? '', /mesma chave idempotente será reutilizada/);
   const storedAttempt = environment.window.sessionStorage.getItem(
     `atlas:pending-review-case:${FINDING_ID}`,
@@ -689,7 +761,7 @@ test('tentativa pendente rejeita conteúdo inválido, adulterado ou associado a 
   }
 });
 
-test('conteúdo pendente inválido ou expirado é removido antes de uma nova tentativa', async () => {
+test('conteúdo pendente inválido ou expirado exige um novo gesto antes do POST', async () => {
   const expired = createPendingFindingReviewCaseAttempt(
     FINDING_ID,
     'atlas-ui-expired',
@@ -714,6 +786,11 @@ test('conteúdo pendente inválido ou expirado é removido antes de uma nova ten
     });
     try {
       await act(async () => { findButton(environment.container, 'Criar caso').click(); await flush(); });
+      assert.equal(keys.length, 0);
+      assert.equal(environment.window.sessionStorage.getItem(storageKey), null);
+      assert.match(environment.container.textContent ?? '', /foi descartad[oa].*Clique novamente/s);
+
+      await act(async () => { findButton(environment.container, 'Criar caso').click(); await flush(); });
       assert.equal(keys.length, 1);
       assert.notEqual(keys[0], 'atlas-ui-expired');
       const replacement = environment.window.sessionStorage.getItem(storageKey);
@@ -726,6 +803,147 @@ test('conteúdo pendente inválido ou expirado é removido antes de uma nova ten
       await act(async () => root.unmount());
       environment.cleanup();
     }
+  }
+});
+
+test('dois resultados incertos na mesma aba preservam chave e expiração originais', async () => {
+  const keys: string[] = [];
+  const harness = await renderPage({
+    initialSearchParams: { create: '1', findingId: FINDING_ID },
+    loadCases: async () => listResponse,
+    createCase: async (_findingId, key) => {
+      keys.push(key);
+      throw new ApiError('Falha de rede', 0);
+    },
+  });
+  const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
+  try {
+    const button = findButton(harness.environment.container, 'Criar caso');
+    await act(async () => { button.click(); await flush(); });
+    const firstEnvelope = harness.environment.window.sessionStorage.getItem(storageKey);
+    assert.ok(firstEnvelope);
+    const firstAttempt = parsePendingFindingReviewCaseAttempt(firstEnvelope, FINDING_ID);
+    assert.ok(firstAttempt);
+
+    await act(async () => { button.click(); await flush(); });
+    const secondEnvelope = harness.environment.window.sessionStorage.getItem(storageKey);
+    assert.equal(secondEnvelope, firstEnvelope);
+    assert.deepEqual(
+      parsePendingFindingReviewCaseAttempt(secondEnvelope ?? '', FINDING_ID),
+      firstAttempt,
+    );
+    assert.deepEqual(keys, [firstAttempt.idempotencyKey, firstAttempt.idempotencyKey]);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('retry expirado na mesma aba não envia POST e exige novo gesto', async () => {
+  const originalNow = Date.now;
+  let now = Date.parse('2026-07-20T12:00:00.000Z');
+  Date.now = () => now;
+  const keys: string[] = [];
+  const harness = await renderPage({
+    initialSearchParams: { create: '1', findingId: FINDING_ID },
+    loadCases: async () => listResponse,
+    createCase: async (_findingId, key) => {
+      keys.push(key);
+      throw new ApiError('Falha de rede', 0);
+    },
+  });
+  const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
+  try {
+    const button = findButton(harness.environment.container, 'Criar caso');
+    await act(async () => { button.click(); await flush(); });
+    const originalEnvelope = harness.environment.window.sessionStorage.getItem(storageKey);
+    assert.ok(originalEnvelope);
+
+    now += PENDING_REVIEW_CASE_ATTEMPT_TTL_MS;
+    await act(async () => { button.click(); await flush(); });
+    assert.equal(keys.length, 1);
+    assert.equal(harness.environment.window.sessionStorage.getItem(storageKey), null);
+    assert.match(harness.environment.container.textContent ?? '', /tentativa anterior expirou/);
+
+    await act(async () => { button.click(); await flush(); });
+    assert.equal(keys.length, 2);
+    assert.notEqual(keys[1], keys[0]);
+    const replacement = harness.environment.window.sessionStorage.getItem(storageKey);
+    assert.ok(replacement);
+    assert.notEqual(replacement, originalEnvelope);
+  } finally {
+    Date.now = originalNow;
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('tentativas incertas permanecem isoladas por finding durante navegação', async () => {
+  const harness = await renderPage({
+    initialSearchParams: { create: '1', findingId: FINDING_ID },
+    loadCases: async () => listResponse,
+    createCase: async () => { throw new ApiError('Falha de rede', 0); },
+  });
+  try {
+    await act(async () => {
+      findButton(harness.environment.container, 'Criar caso').click();
+      await flush();
+    });
+    const firstStorageKey = `atlas:pending-review-case:${FINDING_ID}`;
+    const firstAttempt = harness.environment.window.sessionStorage.getItem(firstStorageKey);
+    assert.ok(firstAttempt);
+
+    harness.environment.window.history.pushState(
+      null,
+      '',
+      `/conflict-review-cases?create=1&findingId=${SECOND_FINDING_ID}`,
+    );
+    await act(async () => {
+      harness.environment.window.dispatchEvent(
+        new harness.environment.window.PopStateEvent('popstate'),
+      );
+      await flush();
+      findButton(harness.environment.container, 'Criar caso').click();
+      await flush();
+    });
+    const secondStorageKey = `atlas:pending-review-case:${SECOND_FINDING_ID}`;
+    const secondAttempt = harness.environment.window.sessionStorage.getItem(secondStorageKey);
+    assert.ok(secondAttempt);
+    assert.equal(harness.environment.window.sessionStorage.getItem(firstStorageKey), firstAttempt);
+    assert.notEqual(secondAttempt, firstAttempt);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('respostas conclusivas limpam a tentativa mesmo depois do unmount', async () => {
+  for (const status of [400, 404, 409, 503]) {
+    const environment = createJsdomTestEnvironment();
+    const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
+    const attempt = createPendingFindingReviewCaseAttempt(
+      FINDING_ID,
+      `atlas-ui-conclusive-${status}`,
+    );
+    environment.window.sessionStorage.setItem(storageKey, JSON.stringify(attempt));
+    const pending = deferred<CreateFindingReviewCaseResponse>();
+    const root = createRoot(environment.container);
+    await act(async () => {
+      root.render(createElement(FindingReviewCasesPage, {
+        initialSearchParams: { create: '1', findingId: FINDING_ID },
+        loadCases: async () => listResponse,
+        createCase: async () => pending.promise,
+      }));
+      await flush();
+    });
+    await act(async () => {
+      findButton(environment.container, 'Criar caso').click();
+      await flush();
+    });
+    await act(async () => root.unmount());
+    await act(async () => {
+      pending.reject(new ApiError('Resposta conclusiva', status));
+      await flush();
+    });
+    assert.equal(environment.window.sessionStorage.getItem(storageKey), null);
+    environment.cleanup();
   }
 });
 

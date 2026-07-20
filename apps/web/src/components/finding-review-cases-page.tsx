@@ -4,6 +4,7 @@ import Link from 'next/link.js';
 import {
   FormEvent,
   MouseEvent as ReactMouseEvent,
+  type RefObject,
   useEffect,
   useMemo,
   useRef,
@@ -96,6 +97,13 @@ export interface PendingFindingReviewCaseAttempt {
   createdAt: string;
   expiresAt: string;
 }
+
+type PendingAttemptInspection =
+  | { status: 'valid'; attempt: PendingFindingReviewCaseAttempt }
+  | { status: 'invalid' | 'expired'; attempt: null };
+
+type StoredPendingAttempt = PendingAttemptInspection
+  | { status: 'missing'; attempt: null };
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -328,12 +336,25 @@ export function parsePendingFindingReviewCaseAttempt(
   expectedFindingId: string,
   now = Date.now(),
 ): PendingFindingReviewCaseAttempt | null {
+  const inspected = inspectPendingFindingReviewCaseAttempt(serialized, expectedFindingId, now);
+  return inspected.status === 'valid' ? inspected.attempt : null;
+}
+
+function inspectPendingFindingReviewCaseAttempt(
+  serialized: string,
+  expectedFindingId: string,
+  now = Date.now(),
+): PendingAttemptInspection {
   try {
     const value: unknown = JSON.parse(serialized);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { status: 'invalid', attempt: null };
+    }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'createdAt,expiresAt,findingId,idempotencyKey,version') return null;
+    if (keys.join(',') !== 'createdAt,expiresAt,findingId,idempotencyKey,version') {
+      return { status: 'invalid', attempt: null };
+    }
     if (
       candidate.version !== 1
       || candidate.findingId !== expectedFindingId
@@ -343,7 +364,7 @@ export function parsePendingFindingReviewCaseAttempt(
       || typeof candidate.createdAt !== 'string'
       || typeof candidate.expiresAt !== 'string'
     ) {
-      return null;
+      return { status: 'invalid', attempt: null };
     }
     const createdAt = Date.parse(candidate.createdAt);
     const expiresAt = Date.parse(candidate.expiresAt);
@@ -353,48 +374,69 @@ export function parsePendingFindingReviewCaseAttempt(
       || new Date(createdAt).toISOString() !== candidate.createdAt
       || new Date(expiresAt).toISOString() !== candidate.expiresAt
       || createdAt > now
-      || expiresAt <= now
       || expiresAt - createdAt !== PENDING_REVIEW_CASE_ATTEMPT_TTL_MS
     ) {
-      return null;
+      return { status: 'invalid', attempt: null };
     }
-    return candidate as unknown as PendingFindingReviewCaseAttempt;
+    if (expiresAt <= now) return { status: 'expired', attempt: null };
+    return {
+      status: 'valid',
+      attempt: candidate as unknown as PendingFindingReviewCaseAttempt,
+    };
   } catch {
-    return null;
+    return { status: 'invalid', attempt: null };
   }
 }
 
-function readPendingIdempotencyKey(findingId: string): string | null {
+function readPendingFindingReviewCaseAttempt(findingId: string): StoredPendingAttempt {
   try {
     const storageKey = pendingStorageKey(findingId);
     const serialized = window.sessionStorage.getItem(storageKey);
-    if (serialized === null) return null;
-    const attempt = parsePendingFindingReviewCaseAttempt(serialized, findingId);
-    if (!attempt) {
+    if (serialized === null) return { status: 'missing', attempt: null };
+    const inspected = inspectPendingFindingReviewCaseAttempt(serialized, findingId);
+    if (inspected.status !== 'valid') {
       window.sessionStorage.removeItem(storageKey);
-      return null;
     }
-    return attempt.idempotencyKey;
+    return inspected;
   } catch {
-    return null;
+    return { status: 'missing', attempt: null };
   }
 }
 
-function storePendingIdempotencyKey(findingId: string, value: string): void {
+function storePendingFindingReviewCaseAttempt(attempt: PendingFindingReviewCaseAttempt): void {
   try {
-    const attempt = createPendingFindingReviewCaseAttempt(findingId, value);
-    window.sessionStorage.setItem(pendingStorageKey(findingId), JSON.stringify(attempt));
+    window.sessionStorage.setItem(
+      pendingStorageKey(attempt.findingId),
+      JSON.stringify(attempt),
+    );
   } catch {
-    // The in-memory reference still protects retries while this page remains mounted.
+    // The complete in-memory attempt still protects its original TTL while this page remains mounted.
   }
 }
 
-function clearPendingIdempotencyKey(findingId: string): void {
+function clearPendingFindingReviewCaseAttempt(
+  findingId: string,
+  expectedAttempt?: PendingFindingReviewCaseAttempt,
+): void {
   try {
-    window.sessionStorage.removeItem(pendingStorageKey(findingId));
+    const storageKey = pendingStorageKey(findingId);
+    const serialized = window.sessionStorage.getItem(storageKey);
+    if (
+      serialized !== null
+      && (!expectedAttempt || serialized === JSON.stringify(expectedAttempt))
+    ) {
+      window.sessionStorage.removeItem(storageKey);
+    }
   } catch {
     // Storage can be unavailable in restrictive browser contexts.
   }
+}
+
+function pendingAttemptDiscardedMessage(status: 'invalid' | 'expired'): string {
+  if (status === 'expired') {
+    return 'A tentativa anterior expirou e foi descartada. Clique novamente para iniciar uma nova tentativa.';
+  }
+  return 'O registro temporário da tentativa era inválido e foi descartado. Clique novamente para iniciar uma nova tentativa.';
 }
 
 export function FindingReviewCasesPage({
@@ -427,8 +469,9 @@ export function FindingReviewCasesPage({
   const detailSequence = useRef(0);
   const detailController = useRef<AbortController | null>(null);
   const [detailReload, setDetailReload] = useState(0);
-  const detailPanel = useRef<HTMLElement | null>(null);
+  const detailHeading = useRef<HTMLHeadingElement | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
+  const restoreFocusFrame = useRef<number | null>(null);
 
   const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
     firstLocation.requestedFindingId,
@@ -440,7 +483,7 @@ export function FindingReviewCasesPage({
   const creationInFlight = useRef(false);
   const creationController = useRef<AbortController | null>(null);
   const creationSequence = useRef(0);
-  const idempotencyKey = useRef<string | null>(null);
+  const pendingCreationAttempt = useRef<PendingFindingReviewCaseAttempt | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -452,6 +495,9 @@ export function FindingReviewCasesPage({
       listController.current?.abort();
       detailController.current?.abort();
       creationController.current?.abort();
+      if (restoreFocusFrame.current !== null) {
+        window.cancelAnimationFrame(restoreFocusFrame.current);
+      }
     };
   }, []);
 
@@ -515,6 +561,10 @@ export function FindingReviewCasesPage({
   useEffect(() => {
     const restoreFromUrl = (): void => {
       const restored = browserLocationState();
+      if (restoreFocusFrame.current !== null) {
+        window.cancelAnimationFrame(restoreFocusFrame.current);
+        restoreFocusFrame.current = null;
+      }
       initialDateHydrationSuperseded.current = true;
       invalidateListRequest();
       queryRef.current = restored.query;
@@ -526,9 +576,7 @@ export function FindingReviewCasesPage({
       creationSequence.current += 1;
       creationController.current?.abort();
       creationController.current = null;
-      idempotencyKey.current = restored.requestedFindingId
-        ? readPendingIdempotencyKey(restored.requestedFindingId)
-        : null;
+      pendingCreationAttempt.current = null;
       creationInFlight.current = false;
       setCreationLoading(false);
       setCreationResult(null);
@@ -554,9 +602,15 @@ export function FindingReviewCasesPage({
       !expandedId
       || detailLoading
       || (!detail && !detailError)
-      || !detailPanel.current
+      || !detailHeading.current
     ) return;
-    window.requestAnimationFrame(() => detailPanel.current?.focus());
+    const requestedId = expandedId;
+    const frame = window.requestAnimationFrame(() => {
+      if (mounted.current && expandedIdRef.current === requestedId) {
+        detailHeading.current?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [detail, detailError, detailLoading, expandedId]);
 
   function canCommitList(
@@ -608,7 +662,7 @@ export function FindingReviewCasesPage({
     creationSequence.current += 1;
     creationController.current?.abort();
     creationController.current = null;
-    idempotencyKey.current = next ? readPendingIdempotencyKey(next) : null;
+    pendingCreationAttempt.current = null;
     creationInFlight.current = false;
     setCreationLoading(false);
     setCreationResult(null);
@@ -645,6 +699,10 @@ export function FindingReviewCasesPage({
 
   function openDetail(id: string, trigger?: HTMLButtonElement): void {
     if (!isFindingReviewCaseId(id)) return;
+    if (restoreFocusFrame.current !== null) {
+      window.cancelAnimationFrame(restoreFocusFrame.current);
+      restoreFocusFrame.current = null;
+    }
     if (expandedIdRef.current === id) {
       closeDetail(true);
       return;
@@ -670,7 +728,13 @@ export function FindingReviewCasesPage({
     if (updateHistory) pushLocation(queryRef.current, null, requestedFindingId);
     const trigger = detailTrigger.current;
     detailTrigger.current = null;
-    window.requestAnimationFrame(() => trigger?.focus());
+    if (restoreFocusFrame.current !== null) {
+      window.cancelAnimationFrame(restoreFocusFrame.current);
+    }
+    restoreFocusFrame.current = window.requestAnimationFrame(() => {
+      restoreFocusFrame.current = null;
+      if (mounted.current && expandedIdRef.current === null) trigger?.focus();
+    });
   }
 
   function retryDetail(): void {
@@ -686,6 +750,36 @@ export function FindingReviewCasesPage({
   async function submitCreation(): Promise<void> {
     if (!requestedFindingId || creationInFlight.current) return;
     const creationFindingId = requestedFindingId;
+    let attempt = pendingCreationAttempt.current;
+    if (attempt) {
+      const inspected = inspectPendingFindingReviewCaseAttempt(
+        JSON.stringify(attempt),
+        creationFindingId,
+      );
+      if (inspected.status !== 'valid') {
+        clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
+        pendingCreationAttempt.current = null;
+        setCreationError(pendingAttemptDiscardedMessage(inspected.status));
+        setExistingCaseId(null);
+        return;
+      }
+      attempt = inspected.attempt;
+      pendingCreationAttempt.current = attempt;
+    } else {
+      const stored = readPendingFindingReviewCaseAttempt(creationFindingId);
+      if (stored.status === 'invalid' || stored.status === 'expired') {
+        setCreationError(pendingAttemptDiscardedMessage(stored.status));
+        setExistingCaseId(null);
+        return;
+      }
+      attempt = stored.status === 'valid'
+        ? stored.attempt
+        : createPendingFindingReviewCaseAttempt(
+          creationFindingId,
+          createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
+        );
+      pendingCreationAttempt.current = attempt;
+    }
     const sequence = ++creationSequence.current;
     creationInFlight.current = true;
     const controller = new AbortController();
@@ -693,46 +787,36 @@ export function FindingReviewCasesPage({
     setCreationLoading(true);
     setCreationError(null);
     setExistingCaseId(null);
-    if (!idempotencyKey.current) {
-      idempotencyKey.current = readPendingIdempotencyKey(creationFindingId);
-    }
-    if (!idempotencyKey.current) {
-      idempotencyKey.current = createFindingReviewIdempotencyKey(() => crypto.randomUUID());
-      storePendingIdempotencyKey(creationFindingId, idempotencyKey.current);
-    }
-    const currentIdempotencyKey = idempotencyKey.current;
     try {
-      const created = await createCase(creationFindingId, currentIdempotencyKey, {
+      const created = await createCase(creationFindingId, attempt.idempotencyKey, {
         signal: controller.signal,
       });
-      clearPendingIdempotencyKey(creationFindingId);
-      idempotencyKey.current = null;
+      clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
+      if (pendingCreationAttempt.current === attempt) pendingCreationAttempt.current = null;
       if (!mounted.current || sequence !== creationSequence.current) return;
       setCreationResult(created);
       openDetail(created.id);
       retryList();
     } catch (cause) {
+      const conclusive = cause instanceof ApiError
+        && [400, 404, 409, 503].includes(cause.status);
+      if (conclusive) {
+        clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
+        if (pendingCreationAttempt.current === attempt) pendingCreationAttempt.current = null;
+      } else {
+        storePendingFindingReviewCaseAttempt(attempt);
+      }
       if (!mounted.current || sequence !== creationSequence.current) return;
       if (cause instanceof ApiError && cause.status === 409 && cause.existingCaseId) {
-        clearPendingIdempotencyKey(creationFindingId);
-        idempotencyKey.current = null;
         setExistingCaseId(cause.existingCaseId);
         setCreationError('Já existe um caso ativo para este assunto.');
       } else if (cause instanceof ApiError && cause.status === 409) {
-        clearPendingIdempotencyKey(creationFindingId);
-        idempotencyKey.current = null;
         setCreationError('A chave da tentativa anterior não pode ser reutilizada. Tente novamente.');
       } else if (cause instanceof ApiError && cause.status === 503) {
-        clearPendingIdempotencyKey(creationFindingId);
-        idempotencyKey.current = null;
         setCreationError('A criação de casos está desabilitada neste ambiente. Nenhum dado foi alterado.');
       } else if (cause instanceof ApiError && cause.status === 404) {
-        clearPendingIdempotencyKey(creationFindingId);
-        idempotencyKey.current = null;
         setCreationError('O achado não está mais disponível. Atualize a lista de achados antes de tentar novamente.');
       } else if (cause instanceof ApiError && cause.status === 400) {
-        clearPendingIdempotencyKey(creationFindingId);
-        idempotencyKey.current = null;
         setCreationError('A solicitação de criação é inválida. Revise o achado selecionado.');
       } else {
         setCreationError(
@@ -818,8 +902,8 @@ export function FindingReviewCasesPage({
       ) : null}
 
       {expandedId ? (
-        <section id={DETAIL_PANEL_ID} ref={detailPanel} className="review-case-detail" aria-labelledby="review-case-detail-title" tabIndex={-1}>
-          <ReviewCaseDetail detail={detail} loading={detailLoading} error={detailError} retry={retryDetail} close={() => closeDetail(true)} />
+        <section id={DETAIL_PANEL_ID} className="review-case-detail" aria-labelledby="review-case-detail-title">
+          <ReviewCaseDetail detail={detail} loading={detailLoading} error={detailError} retry={retryDetail} close={() => closeDetail(true)} headingRef={detailHeading} />
         </section>
       ) : null}
     </main>
@@ -832,19 +916,21 @@ function ReviewCaseDetail({
   error,
   retry,
   close,
+  headingRef,
 }: {
   detail: FindingReviewCaseDetail | null;
   loading: boolean;
   error: string | null;
   retry: () => void;
   close: () => void;
+  headingRef: RefObject<HTMLHeadingElement | null>;
 }) {
-  if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title">Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
-  if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title">Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
+  if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
+  if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
   if (!detail) return null;
   return (
     <>
-      <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title">Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
+      <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
       <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Atualidade</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}</dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
       <div className="review-detail-grid">
         <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
