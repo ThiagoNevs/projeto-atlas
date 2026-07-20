@@ -11,6 +11,19 @@ import {
   parseEvidenceAnalysisResponse,
   type AssetEvidenceAnalysisResponse,
 } from './evidence-provenance.ts';
+import type {
+  CreateFindingReviewCaseResponse,
+  FindingReviewCaseDetail,
+  FindingReviewCaseListResponse,
+  FindingReviewCaseQuery,
+} from './finding-review-cases.ts';
+import {
+  parseCreateFindingReviewCaseResponse,
+  parseFindingReviewCaseDetail,
+  parseFindingReviewCaseListResponse,
+  isFindingReviewCaseId,
+  serializeFindingReviewCaseQuery,
+} from './finding-review-cases.ts';
 
 export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error.ts';
 export type {
@@ -47,12 +60,26 @@ export type {
   ConflictTemporalRelationship,
   IdentityNetworkAnalysisResponse,
 } from './conflict-findings';
+export type {
+  CreateFindingReviewCaseResponse,
+  FindingReviewCaseAsset,
+  FindingReviewCaseDetail,
+  FindingReviewCaseEvent,
+  FindingReviewCaseListItem,
+  FindingReviewCaseListResponse,
+  FindingReviewCaseQuery,
+  FindingReviewCaseSortField,
+  FindingReviewCaseStatus,
+  FindingReviewSortDirection,
+  FindingReviewStaleness,
+} from './finding-review-cases';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export const API_URL = configuredApiUrl.replace(/\/$/, '');
 export const EVIDENCE_PROVENANCE_TIMEOUT_MS = 10_000;
 export const CONFLICT_FINDINGS_TIMEOUT_MS = 10_000;
+export const FINDING_REVIEW_CASES_TIMEOUT_MS = 10_000;
 
 type FetchImplementation = (input: string, init: RequestInit) => Promise<Response>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
@@ -785,6 +812,36 @@ async function readErrorMessage(response: Response): Promise<string> {
   return message;
 }
 
+export interface FindingReviewCasesRequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  fetchImplementation?: FetchImplementation;
+  scheduleTimeout?: (callback: () => void, timeoutMs: number) => TimeoutHandle;
+  cancelTimeout?: (handle: TimeoutHandle) => void;
+}
+
+async function readApiError(response: Response): Promise<ApiError> {
+  let message = response.status === 404
+    ? 'O recurso solicitado não foi encontrado.'
+    : 'Não foi possível concluir a solicitação.';
+  let code: string | undefined;
+  let existingCaseId: string | undefined;
+  try {
+    const body = (await response.json()) as {
+      message?: string | string[];
+      code?: unknown;
+      existingCaseId?: unknown;
+    };
+    if (Array.isArray(body.message)) message = body.message.join(' ');
+    else if (body.message) message = body.message;
+    if (typeof body.code === 'string') code = body.code;
+    if (isFindingReviewCaseId(body.existingCaseId)) existingCaseId = body.existingCaseId;
+  } catch {
+    // Preserve the controlled fallback for non-JSON errors.
+  }
+  return new ApiError(message, response.status, code, existingCaseId);
+}
+
 async function fetchJson<T>(
   path: string,
   init: RequestInit = {},
@@ -847,6 +904,109 @@ export function getConflictFindings(
     'Não foi possível carregar os achados de identidade e rede. Tente novamente.',
     options,
   );
+}
+
+export function getFindingReviewCases(
+  params: FindingReviewCaseQuery = {},
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<FindingReviewCaseListResponse> {
+  const query = serializeFindingReviewCaseQuery(params);
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases${query ? `?${query}` : ''}`,
+    {},
+    parseFindingReviewCaseListResponse,
+    'A API retornou uma lista de casos de revisão inválida.',
+    options,
+  );
+}
+
+export function getFindingReviewCase(
+  id: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<FindingReviewCaseDetail> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(id)}`,
+    {},
+    parseFindingReviewCaseDetail,
+    'A API retornou um caso de revisão inválido.',
+    options,
+  );
+}
+
+export async function createFindingReviewCase(
+  findingId: string,
+  idempotencyKey: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<CreateFindingReviewCaseResponse> {
+  return fetchParsedFindingReviewCase(
+    '/conflict-review-cases',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({ findingId }),
+    },
+    parseCreateFindingReviewCaseResponse,
+    'A API retornou uma criação de caso de revisão inválida.',
+    options,
+  );
+}
+
+async function fetchParsedFindingReviewCase<T>(
+  path: string,
+  init: RequestInit,
+  parser: (value: unknown) => T | null,
+  invalidResponseMessage: string,
+  options: FindingReviewCasesRequestOptions,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? FINDING_REVIEW_CASES_TIMEOUT_MS;
+  const scheduleTimeout = options.scheduleTimeout ?? setTimeout;
+  const cancelTimeout = options.cancelTimeout ?? clearTimeout;
+  let timedOut = false;
+  const abortFromExternalSignal = (): void => controller.abort(options.signal?.reason);
+
+  if (options.signal?.aborted) abortFromExternalSignal();
+  else options.signal?.addEventListener('abort', abortFromExternalSignal, { once: true });
+
+  const timeoutHandle = scheduleTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetchWithNetworkHandling(
+      `${API_URL}${path}`,
+      {
+        ...init,
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: { Accept: 'application/json', ...init.headers },
+      },
+      options.fetchImplementation,
+    );
+    if (!response.ok) throw await readApiError(response);
+    const parsed = parser(await response.json());
+    if (!parsed) throw new ApiError(invalidResponseMessage, 502);
+    return parsed;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(
+        'A solicitação demorou mais que o esperado. O resultado pode ser incerto; tente novamente.',
+        408,
+      );
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ApiError('A solicitação foi cancelada.', 0);
+    }
+    if (error instanceof SyntaxError) throw new ApiError(invalidResponseMessage, 502);
+    throw error;
+  } finally {
+    cancelTimeout(timeoutHandle);
+    options.signal?.removeEventListener('abort', abortFromExternalSignal);
+  }
 }
 
 export function getAssetConflictAnalysis(

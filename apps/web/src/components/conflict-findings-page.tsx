@@ -729,6 +729,15 @@ function FindingCard({
 
       <p className="finding-explanation">{item.explanationSummary}</p>
 
+      <div className="finding-case-action">
+        <Link
+          className="button button-secondary"
+          href={`/conflict-review-cases?create=1&findingId=${encodeURIComponent(item.findingId)}`}
+        >
+          Criar caso de revisão
+        </Link>
+      </div>
+
       <div className="finding-identity-grid">
         {item.normalizedHostname ? (
           <div>

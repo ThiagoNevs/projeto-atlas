@@ -150,9 +150,29 @@ de execução; índices adicionais podem ser avaliados futuramente, por migratio
 Como a paginação atual é baseada em offset, inserções concorrentes podem deslocar registros entre
 chamadas; cursor pagination permanece uma evolução futura e nenhuma fotografia imutável é prometida.
 
-Ainda não existem frontend, botão de criação, atribuição, comentários, decisões, refresh, mudança de
-status, reabertura, integração com `Conflict` ou Resolution Center. Nenhum caso é criado automaticamente
-a partir da análise e nenhum finding derivado passa a ser persistido como fonte de verdade.
+O frontend agora disponibiliza `/conflict-review-cases` com listagem, filtros, paginação e detalhe sob
+demanda. O detalhe apresenta snapshot histórico, hash, ativos na criação, vínculos atuais disponíveis e
+eventos. Em `/conflict-findings`, o usuário pode iniciar explicitamente a criação de um caso. A interface
+trata criação, replay idempotente, caso ativo existente, indisponibilidade da feature e achado que deixou
+de existir. Nenhum caso é criado automaticamente e nenhuma dessas ações altera o inventário.
+
+A tela expõe todos os filtros de leitura, inclusive ativo e intervalo de criação, converte datas locais
+para timestamps ISO 8601 completos e mantém filtros, paginação, ordenação e `caseId` sincronizados com o
+histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e validam as respostas em
+runtime. A criação possui timeout de dez segundos, bloqueio síncrono contra clique duplo e preserva no
+`sessionStorage` um envelope versionado somente depois que timeout ou falha de rede tornam o resultado
+incerto. O envelope conserva `createdAt` e `expiresAt` originais durante todos os retries e expira em 15
+minutos sem renovação silenciosa. Cada retry revalida inclusive a tentativa mantida na mesma aba: antes
+do limite reutiliza a chave e, quando `now >= expiresAt`, bloqueia o POST. Se o registro estiver expirado,
+adulterado ou associado a outro finding, ele é removido e nenhum POST ocorre nesse gesto; uma nova chave
+exige outro clique explícito. Se o `sessionStorage` não puder ser lido ou escrito, o envelope completo em
+memória preserva chave e TTL durante a montagem atual, mas não pode ser recuperado após remontagem.
+Respostas conclusivas removem somente o registro correspondente mesmo quando o componente já foi
+desmontado ou a interface mudou de finding. O detalhe direciona o foco ao heading após sucesso ou erro e
+cancela frames pendentes em fechamento, troca de caso e unmount.
+
+Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
+com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 

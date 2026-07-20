@@ -549,36 +549,38 @@ O mecanismo ainda não existe. Antes de comandos de escrita, recomenda-se RBAC m
 Separação de funções é recomendada para ações futuras sobre inventário. O ator simulado não deverá
 ser aceito como identidade produtiva.
 
-## 14. Contratos de API propostos
+## 14. Contratos de API
 
-Nenhum endpoint desta seção existe atualmente.
+Os contratos mínimos de criação e leitura foram implementados sob o prefixo
+`/conflict-review-cases`. Os contratos de decisão, comentários, atribuição e refresh abaixo permanecem
+propostos e fora do MVP atual.
 
-### 14.1 `POST /finding-review-cases`
+### 14.1 `POST /conflict-review-cases` — implementado
 
 - **Objetivo:** criar caso explicitamente a partir de finding recalculado.
-- **Request:** `findingId`, `policyVersion`, `expectedFindingHash` opcional.
-- **Headers:** autenticação e `Idempotency-Key` obrigatórios.
-- **Response:** `201` com caso, snapshot resumido, `version` e ETag; `200` em replay idempotente.
-- **Validações:** finding existe, paridade material, permissão, cálculo servidor da
+- **Request:** somente `findingId`.
+- **Headers:** `Idempotency-Key` obrigatória; autenticação ainda não existe.
+- **Response:** `201` com resumo do caso; `200` em replay idempotente.
+- **Validações:** finding existe, paridade material e cálculo servidor da
   `reviewSubjectKey` e ausência de caso ativo duplicado.
 - **Erros:** `400`, `401`, `403`, `404`, `409`, `422` e `503` controlado.
 - **Efeitos:** cria caso, vínculos, snapshot, evento e `AuditLog`; não altera inventário.
 
-### 14.2 `GET /finding-review-cases`
+### 14.2 `GET /conflict-review-cases` — implementado
 
 - **Objetivo:** listar casos com busca, filtros, ordenação e paginação.
-- **Filtros propostos:** status, staleness, tipo, ativo, responsável e período.
-- **Response:** `{ items, total, page, pageSize, totalPages }`.
+- **Filtros:** status, staleness, tipo, ativo histórico, criador, finding e período.
+- **Response:** `{ items, pagination: { page, pageSize, totalItems, totalPages } }`.
 - **Efeitos:** nenhum.
 
-### 14.3 `GET /finding-review-cases/:id`
+### 14.3 `GET /conflict-review-cases/:id` — implementado
 
-- **Objetivo:** consultar snapshot, análise atual conhecida, diferenças, estado, decisão e histórico.
-- **Response:** contrato minimizado, `version` e ETag.
-- **Erros:** `401`, `403`, `404`.
+- **Objetivo:** consultar snapshot histórico, hash, estado, ativos históricos/atuais e eventos.
+- **Response:** contrato minimizado com `version`; não existe ETag nesta etapa.
+- **Erros:** `400`, `404` e `503` controlados.
 - **Efeitos:** nenhum; não recalcula implicitamente se isso alterar histórico.
 
-### 14.4 `PATCH /finding-review-cases/:id/status`
+### 14.4 `PATCH /conflict-review-cases/:id/status` — proposto
 
 - **Request:** `status`, `reason`, `comment`, `expectedVersion`.
 - **Validações:** máquina de estados, campos obrigatórios e permissão.
@@ -586,7 +588,7 @@ Nenhum endpoint desta seção existe atualmente.
 - **Concorrência:** `409` em versão divergente.
 - **Efeitos:** atualiza caso e cria eventos/auditoria na mesma transação.
 
-### 14.5 `PATCH /finding-review-cases/:id/assignment`
+### 14.5 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
 - **Request:** `assignedTo`, `reason` e `expectedVersion`.
 - **Autorização:** assumir o próprio caso exige permissão de revisão; atribuir a terceiros exige
@@ -596,7 +598,7 @@ Nenhum endpoint desta seção existe atualmente.
 - **Concorrência:** update condicional por versão e `409` em divergência.
 - **Efeitos:** altera apenas o responsável, incrementa versão e cria evento/AuditLog.
 
-### 14.6 `POST /finding-review-cases/:id/comments`
+### 14.6 `POST /conflict-review-cases/:id/comments` — proposto
 
 - **Request:** `kind`, `comment`, referências técnicas opcionais e `expectedVersion`.
 - **Tipos:** `REVIEW_COMMENT`, `HUMAN_PROVIDED_CONTEXT` ou
@@ -604,7 +606,7 @@ Nenhum endpoint desta seção existe atualmente.
 - **Validações:** texto não vazio, limites, referência autorizada e conteúdo seguro.
 - **Efeitos:** comentário append-only e auditoria; não cria `AssetEvidence`.
 
-### 14.7 `POST /finding-review-cases/:id/decision`
+### 14.7 `POST /conflict-review-cases/:id/decision` — proposto
 
 - **Request:** `identityConclusion`, componentes estruturados, justificativa, `expectedVersion` e
   idempotency key.
@@ -614,7 +616,7 @@ Nenhum endpoint desta seção existe atualmente.
 - **Response:** decisão imutável registrada, componentes e nova versão.
 - **Efeitos:** decisão e auditoria; não altera inventário nem cria `Conflict`.
 
-### 14.8 `POST /finding-review-cases/:id/refresh`
+### 14.8 `POST /conflict-review-cases/:id/refresh` — proposto
 
 - **Objetivo:** recalcular e comparar o finding.
 - **Request:** `expectedVersion`.
