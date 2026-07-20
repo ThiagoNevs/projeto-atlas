@@ -728,10 +728,17 @@ Se uma criação ultrapassar o timeout de dez segundos ou terminar com falha de 
 como incerto. O frontend cria em memória um envelope versionado com `findingId`, chave idempotente,
 criação e expiração no clique explícito, mas só o registra no `sessionStorage` da aba depois desse resultado
 incerto. O envelope é válido por 15 minutos e reutilizado no retry, inclusive após remontagem, sem renovar
-`createdAt` ou `expiresAt`. Todo retry revalida também a cópia em memória. Registros expirados, inválidos,
-adulterados ou de outro finding são removidos e encerram o gesto sem POST; somente um novo clique cria
-outra chave. A chave não é colocada na URL, no corpo ou em mensagens. Respostas conclusivas limpam o
-registro mesmo após desmontagem da tela.
+`createdAt` ou `expiresAt`. Todo retry revalida também a cópia em memória: antes dos 15 minutos reutiliza
+a chave original e, quando `now >= expiresAt`, não envia POST. Registros expirados, inválidos, adulterados
+ou de outro finding são removidos e encerram o gesto; somente um novo clique cria outra chave. Se o
+`sessionStorage` estiver indisponível, a mesma montagem continua protegida pelo envelope completo em
+memória e pelo TTL original; depois de uma remontagem, a tentativa não pode ser recuperada sem o storage.
+A chave não é colocada na URL, no corpo ou em mensagens. Respostas conclusivas limpam somente o envelope
+do finding correspondente, inclusive depois de unmount ou troca de finding.
+
+O detalhe recebe foco programático em seu heading, com `tabIndex="-1"`, somente quando o carregamento
+termina em sucesso ou erro. Frames pendentes são cancelados ao fechar, trocar de caso ou desmontar a tela;
+o foco não é movido para um painel obsoleto.
 
 A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator

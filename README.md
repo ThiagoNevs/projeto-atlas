@@ -130,9 +130,15 @@ navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e 
 POST de criação que ultrapasse dez segundos ou termine com falha de rede. A tentativa nasce em memória
 no clique explícito e só é persistida no `sessionStorage` quando o resultado fica incerto. Seu envelope
 versionado mantém criação e expiração fixas por 15 minutos: retries reutilizam a mesma chave sem renovar
-o TTL. Todo retry revalida o envelope; conteúdo inválido ou expirado é removido e interrompe o clique sem
-enviar POST. Uma nova chave só nasce em outra ação explícita. Respostas conclusivas limpam a tentativa
-mesmo se a tela já tiver sido desmontada, e a chave nunca é exposta na URL.
+o TTL. Todo retry revalida o envelope: antes dos 15 minutos reutiliza a chave original; quando
+`now >= expiresAt`, a tentativa é expirada. Conteúdo inválido ou expirado é removido e interrompe o
+clique sem enviar POST. Uma nova chave só nasce em outra ação explícita. Se o `sessionStorage` estiver
+indisponível, o envelope completo em memória ainda protege a montagem atual e aplica o mesmo TTL; uma
+remontagem não consegue recuperar essa tentativa sem o storage. Respostas conclusivas limpam somente o
+envelope correspondente, mesmo se a tela já tiver sido desmontada, e a chave nunca é exposta na URL.
+
+No detalhe, o foco é direcionado ao título somente após sucesso ou erro concluir o carregamento. O frame
+pendente é cancelado ao fechar, trocar de caso ou desmontar a tela, evitando foco em conteúdo obsoleto.
 
 Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
 sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal

@@ -162,10 +162,14 @@ histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e v
 runtime. A criação possui timeout de dez segundos, bloqueio síncrono contra clique duplo e preserva no
 `sessionStorage` um envelope versionado somente depois que timeout ou falha de rede tornam o resultado
 incerto. O envelope conserva `createdAt` e `expiresAt` originais durante todos os retries e expira em 15
-minutos sem renovação silenciosa. Cada retry revalida inclusive a tentativa mantida na mesma aba. Se o
-registro estiver expirado, adulterado ou associado a outro finding, ele é removido e nenhum POST ocorre
-nesse gesto; uma nova chave exige outro clique explícito. Respostas conclusivas removem o registro
-temporário mesmo quando o componente já foi desmontado.
+minutos sem renovação silenciosa. Cada retry revalida inclusive a tentativa mantida na mesma aba: antes
+do limite reutiliza a chave e, quando `now >= expiresAt`, bloqueia o POST. Se o registro estiver expirado,
+adulterado ou associado a outro finding, ele é removido e nenhum POST ocorre nesse gesto; uma nova chave
+exige outro clique explícito. Se o `sessionStorage` não puder ser lido ou escrito, o envelope completo em
+memória preserva chave e TTL durante a montagem atual, mas não pode ser recuperado após remontagem.
+Respostas conclusivas removem somente o registro correspondente mesmo quando o componente já foi
+desmontado ou a interface mudou de finding. O detalhe direciona o foco ao heading após sucesso ou erro e
+cancela frames pendentes em fechamento, troca de caso e unmount.
 
 Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
 com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.

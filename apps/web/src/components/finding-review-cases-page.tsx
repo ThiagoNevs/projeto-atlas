@@ -471,6 +471,7 @@ export function FindingReviewCasesPage({
   const [detailReload, setDetailReload] = useState(0);
   const detailHeading = useRef<HTMLHeadingElement | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
+  const detailFocusFrame = useRef<number | null>(null);
   const restoreFocusFrame = useRef<number | null>(null);
 
   const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
@@ -495,8 +496,13 @@ export function FindingReviewCasesPage({
       listController.current?.abort();
       detailController.current?.abort();
       creationController.current?.abort();
+      if (detailFocusFrame.current !== null) {
+        window.cancelAnimationFrame(detailFocusFrame.current);
+        detailFocusFrame.current = null;
+      }
       if (restoreFocusFrame.current !== null) {
         window.cancelAnimationFrame(restoreFocusFrame.current);
+        restoreFocusFrame.current = null;
       }
     };
   }, []);
@@ -598,6 +604,10 @@ export function FindingReviewCasesPage({
   }, []);
 
   useEffect(() => {
+    if (detailFocusFrame.current !== null) {
+      window.cancelAnimationFrame(detailFocusFrame.current);
+      detailFocusFrame.current = null;
+    }
     if (
       !expandedId
       || detailLoading
@@ -605,12 +615,23 @@ export function FindingReviewCasesPage({
       || !detailHeading.current
     ) return;
     const requestedId = expandedId;
-    const frame = window.requestAnimationFrame(() => {
-      if (mounted.current && expandedIdRef.current === requestedId) {
-        detailHeading.current?.focus();
+    const requestedHeading = detailHeading.current;
+    detailFocusFrame.current = window.requestAnimationFrame(() => {
+      detailFocusFrame.current = null;
+      if (
+        mounted.current
+        && expandedIdRef.current === requestedId
+        && detailHeading.current === requestedHeading
+      ) {
+        requestedHeading.focus();
       }
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      if (detailFocusFrame.current !== null) {
+        window.cancelAnimationFrame(detailFocusFrame.current);
+        detailFocusFrame.current = null;
+      }
+    };
   }, [detail, detailError, detailLoading, expandedId]);
 
   function canCommitList(
@@ -645,6 +666,10 @@ export function FindingReviewCasesPage({
     detailSequence.current += 1;
     detailController.current?.abort();
     detailController.current = null;
+    if (detailFocusFrame.current !== null) {
+      window.cancelAnimationFrame(detailFocusFrame.current);
+      detailFocusFrame.current = null;
+    }
   }
 
   function updateQuery(next: FindingReviewCaseQuery, nextRequestedFindingId = requestedFindingId): void {
