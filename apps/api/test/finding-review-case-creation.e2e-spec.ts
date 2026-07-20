@@ -19,6 +19,7 @@ import {
   MAX_IDEMPOTENCY_KEY_LENGTH,
   normalizeIdempotencyKey,
   reviewSubjectKey,
+  sha256,
   snapshotHash,
 } from '../src/finding-review-cases/finding-review-case-creation';
 import {
@@ -162,6 +163,31 @@ describe('Finding review case creation primitives', () => {
     expect(canonicalSerialize({ é: 1, a: 2, Z: 3 })).toBe(canonicalSerialize({ Z: 3, a: 2, é: 1 }));
   });
 
+  it('pins the locale-independent canonical serialization contract with a fixed vector', () => {
+    const expected =
+      '{"ascii":"Atlas","nested":{"A":"primeiro","z":"último"},"ordered":["Árvore","Zulu"],"set":["Zulu","Árvore"],"unicode":"ação"}';
+    const expectedHash = '6d8d18572cb6e4c4a2d7dddc0efb624f6764f00c5edb5444a3828eb4be42c809';
+    const first = {
+      unicode: 'ação',
+      set: ['Árvore', 'Zulu'].sort(compareCanonicalStrings),
+      ordered: ['Árvore', 'Zulu'],
+      nested: { z: 'último', A: 'primeiro' },
+      ascii: 'Atlas',
+    };
+    const second = {
+      ascii: 'Atlas',
+      nested: { A: 'primeiro', z: 'último' },
+      ordered: ['Árvore', 'Zulu'],
+      set: ['Zulu', 'Árvore'].sort(compareCanonicalStrings),
+      unicode: 'ação',
+    };
+
+    expect(canonicalSerialize(first)).toBe(expected);
+    expect(canonicalSerialize(second)).toBe(expected);
+    expect(sha256(expected)).toBe(expectedHash);
+    expect(canonicalSerialize({ ...first, ordered: ['Zulu', 'Árvore'] })).not.toBe(expected);
+  });
+
   it('hashes equivalent snapshot sets identically regardless of insertion order', () => {
     const observations: ConflictFinding['observations'] = [
       {
@@ -210,6 +236,57 @@ describe('Finding review case creation primitives', () => {
     });
     expect(canonicalSerialize(first)).toBe(canonicalSerialize(second));
     expect(snapshotHash(first)).toBe(snapshotHash(second));
+  });
+
+  it('pins the binary snapshotVersion 1 serialization and hash with a realistic Unicode vector', () => {
+    const observations: ConflictFinding['observations'] = [
+      {
+        assetId: '00000000-0000-4000-8000-000000000001',
+        value: 'Servidor Árvore',
+        normalizedValue: 'servidor-arvore',
+        attribute: 'HOSTNAME',
+        source: 'Árvore',
+        sourceType: 'MANUAL',
+        evidenceId: null,
+        observedAt: NOW,
+        ingestedAt: NOW,
+        current: true,
+      },
+      {
+        assetId: '00000000-0000-4000-8000-000000000002',
+        value: 'Servidor Z',
+        normalizedValue: 'servidor-z',
+        attribute: 'HOSTNAME',
+        source: 'Zulu',
+        sourceType: 'MANUAL',
+        evidenceId: null,
+        observedAt: NOW,
+        ingestedAt: NOW,
+        current: true,
+      },
+    ];
+    const snapshot = buildFindingReviewSnapshot({
+      finding: finding({
+        observations,
+        limitations: ['Árvore', 'Zulu'],
+      }),
+      policyVersion: '2026-07-conflict-v1',
+      generatedAt: NOW,
+      affectedAssets: [
+        { assetId: '00000000-0000-4000-8000-000000000002', name: 'Z' },
+        { assetId: '00000000-0000-4000-8000-000000000001', name: 'Á' },
+      ],
+    });
+    const expected =
+      '{"affectedAssets":[{"assetId":"00000000-0000-4000-8000-000000000001","name":"Á"},{"assetId":"00000000-0000-4000-8000-000000000002","name":"Z"}],"explanation":["Revisão humana necessária."],"findingId":"finding_0123456789abcdef01234567","findingType":"DUPLICATE_HOSTNAME_ACROSS_ASSETS","generatedAt":"2026-07-19T12:00:00.000Z","limitations":["Zulu","Árvore"],"normalizedHostname":"srv-app-01","normalizedIp":null,"observations":[{"assetId":"00000000-0000-4000-8000-000000000001","attribute":"HOSTNAME","current":true,"evidenceId":null,"ingestedAt":"2026-07-19T12:00:00.000Z","normalizedValue":"servidor-arvore","observedAt":"2026-07-19T12:00:00.000Z","source":"Árvore","sourceType":"MANUAL","value":"Servidor Árvore"},{"assetId":"00000000-0000-4000-8000-000000000002","attribute":"HOSTNAME","current":true,"evidenceId":null,"ingestedAt":"2026-07-19T12:00:00.000Z","normalizedValue":"servidor-z","observedAt":"2026-07-19T12:00:00.000Z","source":"Zulu","sourceType":"MANUAL","value":"Servidor Z"}],"policyVersion":"2026-07-conflict-v1","reviewOptions":["SAME_ASSET","DIFFERENT_ASSETS"],"snapshotVersion":1,"sources":[{"identifier":"Zulu","type":"MANUAL"},{"identifier":"Árvore","type":"MANUAL"}],"temporalContext":{"differenceMilliseconds":null,"firstObservedAt":null,"lastObservedAt":null,"relationship":"NO_TEMPORAL_CONTEXT"}}';
+    const expectedHash = '637c77692340fdd261fb47be257febc9c884f7a222993eb2a7d8b4d4107fd1b7';
+
+    expect(snapshot.snapshotVersion).toBe(1);
+    expect(snapshot.limitations).toEqual(['Zulu', 'Árvore']);
+    expect(snapshot.sources.map((source) => source.identifier)).toEqual(['Zulu', 'Árvore']);
+    expect(canonicalSerialize(snapshot)).toBe(expected);
+    expect(snapshotHash(snapshot)).toBe(expectedHash);
+    expect(sha256(expected)).toBe(expectedHash);
   });
 
   it('creates the same subject for equivalent hostnames and a different subject for another type', () => {
@@ -269,8 +346,19 @@ describe('Finding review case creation primitives', () => {
   it('fingerprints operation, provisional actor and the exact validated key without exposing it', () => {
     const key = normalizeIdempotencyKey('review:123e4567-e89b-12d3-a456-426614174000');
     const fingerprint = creationRequestFingerprint(key);
+    const expectedSerialization =
+      '{"actorId":"atlas-mvp-user","idempotencyKey":"review:123e4567-e89b-12d3-a456-426614174000","operation":"CREATE_FINDING_REVIEW_CASE"}';
+    const expectedFingerprint = 'f9c074c76aef039b409c0312f054348e079fad3e964f458f93051c4835d165db';
     expect(key).toBe('review:123e4567-e89b-12d3-a456-426614174000');
-    expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      canonicalSerialize({
+        operation: 'CREATE_FINDING_REVIEW_CASE',
+        actorId: 'atlas-mvp-user',
+        idempotencyKey: key,
+      }),
+    ).toBe(expectedSerialization);
+    expect(sha256(expectedSerialization)).toBe(expectedFingerprint);
+    expect(fingerprint).toBe(expectedFingerprint);
     expect(fingerprint).not.toContain(key);
     expect(creationRequestFingerprint(key)).toBe(fingerprint);
   });
@@ -285,12 +373,28 @@ describe('Finding review case creation primitives', () => {
     expect(creationRequestFingerprint('ABC')).not.toBe(creationRequestFingerprint('abc'));
   });
 
-  it.each([undefined, '', '   ', 'key with space', 'é', `e\u0301`, 'key\u0007control'])(
-    'rejects an absent or non-ASCII idempotency key: %p',
-    (value) => {
-      expect(() => normalizeIdempotencyKey(value)).toThrow(/obrigatório|vazio|não permitidos/);
-    },
-  );
+  it.each([
+    undefined,
+    null,
+    123,
+    ['key'],
+    '',
+    ' ',
+    ' key',
+    'key ',
+    'key with space',
+    '\t',
+    '\r',
+    '\n',
+    '\u0000',
+    'key\u0007control',
+    'é',
+    `e\u0301`,
+    '😀',
+    'key,other',
+  ])('rejects an absent or non-ASCII idempotency key: %p', (value) => {
+    expect(() => normalizeIdempotencyKey(value)).toThrow(/obrigatório|vazio|não permitidos/);
+  });
 
   it('rejects an oversized idempotency key', () => {
     expect(() => normalizeIdempotencyKey(undefined)).toThrow('obrigatório');
@@ -300,6 +404,19 @@ describe('Finding review case creation primitives', () => {
     expect(() => normalizeIdempotencyKey('x'.repeat(MAX_IDEMPOTENCY_KEY_LENGTH + 1))).toThrow(
       'no máximo',
     );
+  });
+
+  it.each([
+    'A',
+    'a',
+    '0',
+    '123e4567-e89b-12d3-a456-426614174000',
+    'ABC',
+    'abc',
+    '._~:+/=-',
+    'Abc123._~:+/=-',
+  ])('preserves an allowed opaque idempotency key exactly: %s', (value) => {
+    expect(normalizeIdempotencyKey(value)).toBe(value);
   });
 
   it('keeps the feature disabled by default and validates explicit values', () => {
@@ -314,6 +431,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   let app: INestApplication;
   let server: Server;
   let prisma: FaultInjectingPrismaService;
+  let receivedIdempotencyHeader: string | string[] | undefined;
   const testRunId = randomUUID();
   const assetIds: string[] = [];
   const caseIds = new Set<string>();
@@ -328,6 +446,16 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
       .compile();
     app = module.createNestApplication();
     app.useLogger(false);
+    app.use(
+      (
+        request: { headers: Record<string, string | string[] | undefined> },
+        _response: unknown,
+        next: () => void,
+      ) => {
+        receivedIdempotencyHeader = request.headers['idempotency-key'];
+        next();
+      },
+    );
     app.useGlobalPipes(
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
@@ -464,6 +592,67 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(JSON.stringify(response.body)).not.toMatch(/Prisma|SQL|stack/i);
   });
 
+  it('recognizes the header name case-insensitively and preserves its value', async () => {
+    const findingId = await createDuplicateHostnameFinding('header-name-case');
+    const key = `Header-Case-${testRunId}`;
+    const created = await request(server)
+      .post('/conflict-review-cases')
+      .set('iDeMpOtEnCy-KeY', key)
+      .send({ findingId });
+    const createdBody = responseBody<CaseResponseBody>(created);
+    expect(created.status).toBe(201);
+    expect(receivedIdempotencyHeader).toBe(key);
+
+    const replay = await request(server)
+      .post('/conflict-review-cases')
+      .set('IDEMPOTENCY-KEY', key)
+      .send({ findingId });
+    expect(replay.status).toBe(200);
+    expect(responseBody<CaseResponseBody>(replay).id).toBe(createdBody.id);
+    expect(receivedIdempotencyHeader).toBe(key);
+  });
+
+  it('rejects a missing Idempotency-Key with a stable safe error and no writes', async () => {
+    const persistenceBefore = await reviewPersistenceCounts();
+    const response = await request(server)
+      .post('/conflict-review-cases')
+      .send({ findingId: 'finding_0123456789abcdef01234567' });
+    const body = responseBody<ErrorResponseBody>(response);
+    expect(response.status).toBe(400);
+    expect(body.code).toBe('INVALID_IDEMPOTENCY_KEY');
+    expect(body.message).toBe('Idempotency-Key é obrigatório.');
+    expect(JSON.stringify(body)).not.toMatch(/Prisma|SQL|stack|0123456789abcdef/i);
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+  });
+
+  it('rejects duplicated Idempotency-Key headers after Node combines their values', async () => {
+    const persistenceBefore = await reviewPersistenceCounts();
+    receivedIdempotencyHeader = undefined;
+    const response = await request(server)
+      .post('/conflict-review-cases')
+      .set('Idempotency-Key', ['duplicate-a', 'duplicate-b'] as unknown as string)
+      .send({ findingId: 'finding_0123456789abcdef01234567' });
+    const body = responseBody<ErrorResponseBody>(response);
+    expect(receivedIdempotencyHeader).toBe('duplicate-a, duplicate-b');
+    expect(response.status).toBe(400);
+    expect(body.code).toBe('INVALID_IDEMPOTENCY_KEY');
+    expect(body.message).toBe('Idempotency-Key contém caracteres não permitidos.');
+    expect(JSON.stringify(body)).not.toMatch(/duplicate-a|duplicate-b|Prisma|SQL|stack/i);
+    expect(await reviewPersistenceCounts()).toEqual(persistenceBefore);
+  });
+
+  it('treats different value casing as a different key instead of a replay', async () => {
+    const findingId = await createDuplicateHostnameFinding('header-value-case');
+    const upperKey = `VALUE-CASE-${testRunId}`;
+    const lowerKey = upperKey.toLowerCase();
+    const created = await postCase(findingId, upperKey);
+    const response = await postCase(findingId, lowerKey);
+    expect(created.status).toBe(201);
+    expect(response.status).toBe(409);
+    expect(responseBody<ErrorResponseBody>(response).code).toBe('ACTIVE_REVIEW_CASE_EXISTS');
+    expect(creationRequestFingerprint(upperKey)).not.toBe(creationRequestFingerprint(lowerKey));
+  });
+
   it('returns a controlled 404 when the recalculated finding no longer exists', async () => {
     const response = await postCase('finding_0123456789abcdef01234567', `missing-${testRunId}`);
     const body = responseBody<ErrorResponseBody>(response);
@@ -566,7 +755,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     const inventoryBefore = await inventoryCounts();
     const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
       where: { id: createdBody.id },
-      select: { updatedAt: true },
+      select: { updatedAt: true, originalSnapshot: true, originalSnapshotHash: true },
     });
     const changedAssetBefore = await prisma.asset.findUniqueOrThrow({
       where: { id: fixture.secondAssetId },
@@ -583,7 +772,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(
       await prisma.findingReviewCase.findUniqueOrThrow({
         where: { id: createdBody.id },
-        select: { updatedAt: true },
+        select: { updatedAt: true, originalSnapshot: true, originalSnapshotHash: true },
       }),
     ).toEqual(caseBefore);
     expect(

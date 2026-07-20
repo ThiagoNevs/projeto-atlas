@@ -120,6 +120,13 @@ inteiro: quando desabilitada ou inválida, criação e replay retornam HTTP 503.
 não depende de locale, e testes com PostgreSQL real comprovam rollback integral em falhas nas relações,
 no evento ou no `AuditLog`.
 
+Vetores sintéticos fixos protegem a serialização, o fingerprint ASCII e o hash do snapshot. O contrato
+final `snapshotVersion: 1` usa comparação binária com `<` e `>`, normaliza explicitamente somente os
+arrays tratados como conjuntos, preserva listas semanticamente ordenadas e calcula SHA-256 hexadecimal.
+A versão provisória com `localeCompare` permaneceu apenas no draft e não integrou a `main`, portanto
+não exige uma versão 2. O nome do header é case-insensitive, o valor é case-sensitive e duplicidades
+são rejeitadas; refresh e revalidação continuam fora do escopo.
+
 A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
 `atlas-mvp-user` é provisório e não fornece autenticação, isolamento entre usuários ou RBAC; por isso a

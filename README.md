@@ -109,7 +109,14 @@ em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de in
 ainda usa o ator provisório `atlas-mvp-user` e não representa autenticação, autorização ou RBAC reais.
 Com a flag desabilitada ou inválida, o endpoint inteiro retorna HTTP 503, inclusive em tentativas de
 replay. A `Idempotency-Key` é case-sensitive, aceita somente caracteres ASCII seguros e nunca é
-persistida em formato bruto.
+persistida em formato bruto. O nome HTTP do header não diferencia maiúsculas de minúsculas, mas o
+valor diferencia; headers duplicados são rejeitados.
+
+O fingerprint usa SHA-256 sobre uma estrutura canônica com operação, ator provisório e chave exata.
+O contrato `snapshotVersion: 1` usa comparação binária com `<` e `>`, independente de locale e ICU:
+conjuntos aprovados são normalizados explicitamente, listas semanticamente ordenadas são preservadas
+e o hash é SHA-256 hexadecimal. Vetores sintéticos fixos protegem esses contratos; refresh e
+revalidação de snapshots continuam fora do escopo.
 
 ### 2. Iniciar o PostgreSQL
 

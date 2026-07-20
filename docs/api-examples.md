@@ -757,12 +757,25 @@ tentar abrir outro caso ativo para o mesmo assunto com uma chave diferente, reto
 `Idempotency-Key` é case-sensitive, possui de 1 a 128 caracteres e aceita somente letras ASCII,
 números e os caracteres `._~:+/=-`. Espaços e Unicode são rejeitados; não ocorre trim, conversão de
 maiúsculas/minúsculas ou normalização Unicode. A chave é tratada como valor opaco: `ABC` e `abc` são
-chaves diferentes.
+chaves diferentes. O nome HTTP `Idempotency-Key` é case-insensitive, conforme o protocolo, mas seu
+valor não é. Headers duplicados são rejeitados com HTTP 400 depois que o transporte combina seus
+valores em uma única string separada por vírgula.
+
+O fingerprint é o SHA-256 hexadecimal da serialização canônica de uma estrutura que contém a operação
+`CREATE_FINDING_REVIEW_CASE`, o ator provisório `atlas-mvp-user` e o valor exato da chave. Um vetor
+sintético ASCII fixo protege a compatibilidade dessa fórmula sem publicar dados reais.
 
 O replay é procurado pelo fingerprint antes de o servidor recalcular o finding. Portanto, uma
 repetição legítima continua retornando o mesmo caso mesmo quando o finding original deixou de ser
 detectado. A serialização usada nos fingerprints e snapshots utiliza ordenação canônica independente
 da localidade do sistema.
+
+O contrato `snapshotVersion: 1` representa o algoritmo binário final deste PR: propriedades e
+conjuntos aprovados são ordenados por comparação explícita com `<` e `>`, sem `localeCompare`, ICU ou
+locale do sistema; listas cuja ordem possui significado são preservadas. O hash é SHA-256 hexadecimal
+sobre a serialização canônica. Vetores literais com Unicode e um snapshot realista fixam texto e hash.
+A implementação provisória anterior existiu somente no draft e não chegou à `main`; por isso não há
+`snapshotVersion: 2`. Refresh e revalidação de snapshots permanecem fora do escopo.
 
 O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body. Esses dados são
 recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem registrada em
