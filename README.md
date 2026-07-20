@@ -125,6 +125,10 @@ alteram casos ou inventário. A interface em `/conflict-review-cases` lista, fil
 permite iniciar a criação a partir de um achado atual. Decisões, comentários, atribuição e refresh
 continuam fora do escopo.
 
+Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
+navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e reutiliza a chave de uma
+criação com resultado incerto durante a sessão da aba, sem expô-la na URL.
+
 Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
 sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal
 canônica, sem whitespace ou notação científica, e o backend protege inteiros e offsets numericamente

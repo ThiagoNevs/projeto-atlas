@@ -156,6 +156,13 @@ eventos. Em `/conflict-findings`, o usuário pode iniciar explicitamente a cria�
 trata criação, replay idempotente, caso ativo existente, indisponibilidade da feature e achado que deixou
 de existir. Nenhum caso é criado automaticamente e nenhuma dessas ações altera o inventário.
 
+A tela expõe todos os filtros de leitura, inclusive ativo e intervalo de criação, converte datas locais
+para timestamps ISO 8601 completos e mantém filtros, paginação, ordenação e `caseId` sincronizados com o
+histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e validam as respostas em
+runtime. A criação possui timeout controlado, bloqueio síncrono contra clique duplo e preserva no
+`sessionStorage` apenas a chave de uma tentativa cujo resultado ficou incerto; o retry reutiliza essa
+chave e respostas conclusivas removem o registro temporário.
+
 Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
 com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.
 

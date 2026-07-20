@@ -719,6 +719,16 @@ A interface web equivalente está disponível em `http://localhost:3000/conflict
 é iniciada explicitamente na tela `http://localhost:3000/conflict-findings`; o frontend gera uma
 `Idempotency-Key` ASCII opaca e preserva o contrato de replay do backend.
 
+Na interface, os filtros de ativo e datas usam o mesmo contrato da API. As datas informadas no horário
+local do navegador são convertidas para ISO 8601 com timezone antes da consulta. Abrir um detalhe produz
+um deep link com `caseId`, e Voltar/Avançar restaura filtros, paginação, ordenação e detalhe. Requisições
+obsoletas são canceladas e respostas fora de ordem são ignoradas.
+
+Se uma criação terminar com timeout ou falha de rede, o resultado é tratado como incerto. A chave dessa
+tentativa é mantida temporariamente no `sessionStorage` da aba e reutilizada no retry, inclusive após uma
+remontagem da página. A chave não é colocada na URL, no corpo da requisição ou em mensagens. Respostas
+conclusivas removem o registro temporário.
+
 A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.

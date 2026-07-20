@@ -4378,8 +4378,21 @@ input {
   grid-column: 1 / -1;
 }
 
+.review-case-filter-grid label > small {
+  color: var(--faint);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.review-filter-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .review-cases-table {
-  min-width: 1080px;
+  min-width: 1480px;
 }
 
 .review-cases-table td:first-child {
@@ -4398,6 +4411,24 @@ input {
 .review-case-detail {
   display: grid;
   gap: 1.25rem;
+  outline: none;
+}
+
+.review-case-detail:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(78, 199, 239, 0.12);
+}
+
+.review-detail-toolbar,
+.review-detail-toolbar > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.review-detail-toolbar h2 {
+  margin: 0;
 }
 
 .review-case-metadata {
@@ -4524,6 +4555,12 @@ input {
 
   .review-create-card .button {
     width: 100%;
+  }
+
+  .review-detail-toolbar,
+  .review-detail-toolbar > div:last-child {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

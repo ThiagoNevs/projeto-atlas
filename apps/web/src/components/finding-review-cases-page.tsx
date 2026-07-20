@@ -1,7 +1,14 @@
 'use client';
 
 import Link from 'next/link.js';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FormEvent,
+  MouseEvent as ReactMouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { ErrorState, LoadingState } from './page-state';
 import {
@@ -13,6 +20,7 @@ import {
   type FindingReviewCaseDetail,
   type FindingReviewCaseListResponse,
   type FindingReviewCaseQuery,
+  type FindingReviewCasesRequestOptions,
 } from '../lib/api';
 import { CONFLICT_FINDING_TYPES, getConflictFindingTypeLabel } from '../lib/conflict-findings';
 import {
@@ -24,6 +32,9 @@ import {
   getFindingReviewCaseStatusLabel,
   getFindingReviewEventLabel,
   getFindingReviewStalenessLabel,
+  isFindingReviewCaseId,
+  isFindingReviewFindingId,
+  isFindingReviewTimestamp,
   serializeFindingReviewCaseQuery,
   type FindingReviewCaseSortField,
   type FindingReviewCaseStatus,
@@ -32,9 +43,19 @@ import {
 } from '../lib/finding-review-cases';
 import { formatDateTime } from '../lib/format';
 
-export type ReviewCasesLoader = (query: FindingReviewCaseQuery) => Promise<FindingReviewCaseListResponse>;
-export type ReviewCaseDetailLoader = (id: string) => Promise<FindingReviewCaseDetail>;
-export type ReviewCaseCreator = (findingId: string, key: string) => Promise<CreateFindingReviewCaseResponse>;
+export type ReviewCasesLoader = (
+  query: FindingReviewCaseQuery,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<FindingReviewCaseListResponse>;
+export type ReviewCaseDetailLoader = (
+  id: string,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<FindingReviewCaseDetail>;
+export type ReviewCaseCreator = (
+  findingId: string,
+  key: string,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<CreateFindingReviewCaseResponse>;
 
 interface Props {
   initialSearchParams?: Record<string, string | string[] | undefined>;
@@ -43,63 +64,186 @@ interface Props {
   createCase?: ReviewCaseCreator;
 }
 
-interface FormState {
+export interface FindingReviewCaseFilterForm {
   status: string;
   staleness: string;
   findingType: string;
   findingId: string;
   createdBy: string;
+  assetId: string;
+  createdFrom: string;
+  createdTo: string;
   sortBy: FindingReviewCaseSortField;
   sortDirection: FindingReviewSortDirection;
   pageSize: string;
 }
 
+interface LocationState {
+  query: FindingReviewCaseQuery;
+  caseId: string | null;
+  requestedFindingId: string | null;
+}
+
+const DETAIL_PANEL_ID = 'finding-review-case-detail';
+const IDEMPOTENCY_STORAGE_PREFIX = 'atlas:pending-review-case:';
+
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function initialQuery(params: Record<string, string | string[] | undefined>): FindingReviewCaseQuery {
-  const positive = (key: string, fallback: number): number => {
-    const value = Number(first(params[key]));
-    return Number.isInteger(value) && value > 0 ? value : fallback;
-  };
+function positiveInteger(value: string | undefined, fallback: number, maximum?: number): number {
+  if (!value || !/^[1-9][0-9]*$/.test(value)) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) return fallback;
+  return maximum ? Math.min(parsed, maximum) : parsed;
+}
+
+function queryFromParams(
+  params: Record<string, string | string[] | undefined>,
+): FindingReviewCaseQuery {
   const status = first(params.status);
   const staleness = first(params.staleness);
   const findingType = first(params.findingType);
   const sortBy = first(params.sortBy);
   const sortDirection = first(params.sortDirection);
+  const findingId = first(params.findingId);
+  const createdBy = first(params.createdBy)?.trim();
+  const assetId = first(params.assetId);
+  let createdFrom = first(params.createdFrom);
+  let createdTo = first(params.createdTo);
+  if (!isFindingReviewTimestamp(createdFrom)) createdFrom = undefined;
+  if (!isFindingReviewTimestamp(createdTo)) createdTo = undefined;
+  if (createdFrom && createdTo && Date.parse(createdFrom) > Date.parse(createdTo)) {
+    createdFrom = undefined;
+    createdTo = undefined;
+  }
   return {
-    page: positive('page', 1),
-    pageSize: Math.min(positive('pageSize', 25), 100),
+    page: positiveInteger(first(params.page), 1),
+    pageSize: positiveInteger(first(params.pageSize), 25, 100),
     status: FINDING_REVIEW_CASE_STATUSES.includes(status as FindingReviewCaseStatus)
       ? status as FindingReviewCaseStatus : undefined,
     staleness: FINDING_REVIEW_STALENESSES.includes(staleness as FindingReviewStaleness)
       ? staleness as FindingReviewStaleness : undefined,
-    findingType: CONFLICT_FINDING_TYPES.includes(findingType as never) ? findingType as never : undefined,
-    findingId: first(params.findingId)?.trim() || undefined,
-    createdBy: first(params.createdBy)?.trim() || undefined,
+    findingType: CONFLICT_FINDING_TYPES.includes(findingType as never)
+      ? findingType as FindingReviewCaseQuery['findingType'] : undefined,
+    findingId: isFindingReviewFindingId(findingId) ? findingId : undefined,
+    createdBy: createdBy && createdBy.length <= 100 ? createdBy : undefined,
+    assetId: isFindingReviewCaseId(assetId) ? assetId : undefined,
+    createdFrom,
+    createdTo,
     sortBy: FINDING_REVIEW_SORT_FIELDS.includes(sortBy as FindingReviewCaseSortField)
       ? sortBy as FindingReviewCaseSortField : 'createdAt',
     sortDirection: sortDirection === 'asc' ? 'asc' : 'desc',
   };
 }
 
-function formFromQuery(query: FindingReviewCaseQuery): FormState {
+function locationFromParams(
+  params: Record<string, string | string[] | undefined>,
+): LocationState {
+  const caseId = first(params.caseId);
+  const requestedFindingId = first(params.create) === '1' ? first(params.findingId) : undefined;
+  return {
+    query: queryFromParams(params),
+    caseId: isFindingReviewCaseId(caseId) ? caseId : null,
+    requestedFindingId: isFindingReviewFindingId(requestedFindingId) ? requestedFindingId : null,
+  };
+}
+
+function browserLocationState(): LocationState {
+  return locationFromParams(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
+}
+
+function formFromQuery(
+  query: FindingReviewCaseQuery,
+  includeBrowserLocalDates = true,
+): FindingReviewCaseFilterForm {
   return {
     status: query.status ?? '',
     staleness: query.staleness ?? '',
     findingType: query.findingType ?? '',
     findingId: query.findingId ?? '',
     createdBy: query.createdBy ?? '',
+    assetId: query.assetId ?? '',
+    createdFrom: includeBrowserLocalDates ? dateTimeLocalValue(query.createdFrom) : '',
+    createdTo: includeBrowserLocalDates ? dateTimeLocalValue(query.createdTo) : '',
     sortBy: query.sortBy ?? 'createdAt',
     sortDirection: query.sortDirection ?? 'desc',
     pageSize: String(query.pageSize ?? 25),
   };
 }
 
-function replaceUrl(query: FindingReviewCaseQuery): void {
-  const serialized = serializeFindingReviewCaseQuery(query);
-  window.history.pushState(null, '', `/conflict-review-cases${serialized ? `?${serialized}` : ''}`);
+function dateTimeLocalValue(value: string | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const pad = (part: number): string => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function isoFromDateTimeLocal(value: string): string | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined;
+}
+
+export function buildFindingReviewCaseQueryFromForm(
+  form: FindingReviewCaseFilterForm,
+): { query: FindingReviewCaseQuery | null; error: string | null } {
+  const createdFrom = isoFromDateTimeLocal(form.createdFrom);
+  const createdTo = isoFromDateTimeLocal(form.createdTo);
+  if ((form.createdFrom && !createdFrom) || (form.createdTo && !createdTo)) {
+    return { query: null, error: 'Informe datas e horários válidos.' };
+  }
+  if (createdFrom && createdTo && Date.parse(createdFrom) > Date.parse(createdTo)) {
+    return { query: null, error: 'A data inicial não pode ser posterior à data final.' };
+  }
+  if (form.assetId && !isFindingReviewCaseId(form.assetId.trim())) {
+    return { query: null, error: 'Informe um ID de ativo UUID válido.' };
+  }
+  if (form.findingId && !isFindingReviewFindingId(form.findingId.trim())) {
+    return { query: null, error: 'Informe um ID de achado válido.' };
+  }
+  return {
+    query: {
+      page: 1,
+      pageSize: Number(form.pageSize),
+      status: form.status as FindingReviewCaseStatus || undefined,
+      staleness: form.staleness as FindingReviewStaleness || undefined,
+      findingType: form.findingType as FindingReviewCaseQuery['findingType'] || undefined,
+      findingId: form.findingId.trim() || undefined,
+      createdBy: form.createdBy.trim() || undefined,
+      assetId: form.assetId.trim() || undefined,
+      createdFrom,
+      createdTo,
+      sortBy: form.sortBy,
+      sortDirection: form.sortDirection,
+    },
+    error: null,
+  };
+}
+
+function locationUrl(
+  query: FindingReviewCaseQuery,
+  caseId: string | null,
+  requestedFindingId: string | null,
+): string {
+  const search = new URLSearchParams(serializeFindingReviewCaseQuery(query));
+  if (caseId) search.set('caseId', caseId);
+  if (requestedFindingId) {
+    search.set('create', '1');
+    search.set('findingId', requestedFindingId);
+  }
+  const serialized = search.toString();
+  return `/conflict-review-cases${serialized ? `?${serialized}` : ''}`;
+}
+
+function pushLocation(
+  query: FindingReviewCaseQuery,
+  caseId: string | null,
+  requestedFindingId: string | null,
+): void {
+  window.history.pushState(null, '', locationUrl(query, caseId, requestedFindingId));
 }
 
 function displayError(error: unknown, fallback: string): string {
@@ -109,130 +253,377 @@ function displayError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function isAbort(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || (
+    error instanceof ApiError && error.status === 0 && /cancelada/i.test(error.message)
+  ));
+}
+
+function pendingStorageKey(findingId: string): string {
+  return `${IDEMPOTENCY_STORAGE_PREFIX}${findingId}`;
+}
+
+function readPendingIdempotencyKey(findingId: string): string | null {
+  try {
+    const value = window.sessionStorage.getItem(pendingStorageKey(findingId));
+    return value && /^atlas-ui-[A-Za-z0-9._~:+/=-]{1,128}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePendingIdempotencyKey(findingId: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(pendingStorageKey(findingId), value);
+  } catch {
+    // The in-memory reference still protects retries while this page remains mounted.
+  }
+}
+
+function clearPendingIdempotencyKey(findingId: string): void {
+  try {
+    window.sessionStorage.removeItem(pendingStorageKey(findingId));
+  } catch {
+    // Storage can be unavailable in restrictive browser contexts.
+  }
+}
+
 export function FindingReviewCasesPage({
   initialSearchParams = {},
   loadCases = getFindingReviewCases,
   loadDetail = getFindingReviewCase,
   createCase = createFindingReviewCase,
 }: Props) {
-  const firstQuery = useMemo(() => initialQuery(initialSearchParams), [initialSearchParams]);
-  const [query, setQuery] = useState<FindingReviewCaseQuery>(firstQuery);
-  const [form, setForm] = useState<FormState>(() => formFromQuery(firstQuery));
+  const firstLocation = useMemo(() => locationFromParams(initialSearchParams), [initialSearchParams]);
+  const [query, setQuery] = useState<FindingReviewCaseQuery>(firstLocation.query);
+  const queryRef = useRef(firstLocation.query);
+  const [form, setForm] = useState<FindingReviewCaseFilterForm>(
+    () => formFromQuery(firstLocation.query, false),
+  );
+  const initialDateHydrationSuperseded = useRef(false);
+  const [filterError, setFilterError] = useState<string | null>(null);
   const [result, setResult] = useState<FindingReviewCaseListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [reload, setReload] = useState(0);
+  const [listReload, setListReload] = useState(0);
+  const mounted = useRef(false);
   const listSequence = useRef(0);
+  const listController = useRef<AbortController | null>(null);
 
   const [detail, setDetail] = useState<FindingReviewCaseDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(Boolean(first(initialSearchParams.caseId)));
+  const [detailLoading, setDetailLoading] = useState(Boolean(firstLocation.caseId));
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(first(initialSearchParams.caseId) ?? null);
+  const [expandedId, setExpandedId] = useState<string | null>(firstLocation.caseId);
+  const expandedIdRef = useRef<string | null>(firstLocation.caseId);
+  const detailSequence = useRef(0);
+  const detailController = useRef<AbortController | null>(null);
+  const [detailReload, setDetailReload] = useState(0);
+  const detailPanel = useRef<HTMLElement | null>(null);
+  const detailTrigger = useRef<HTMLButtonElement | null>(null);
 
-  const requestedFindingId = first(initialSearchParams.create) === '1'
-    ? first(initialSearchParams.findingId) : undefined;
+  const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
+    firstLocation.requestedFindingId,
+  );
   const [creationLoading, setCreationLoading] = useState(false);
   const [creationResult, setCreationResult] = useState<CreateFindingReviewCaseResponse | null>(null);
   const [creationError, setCreationError] = useState<string | null>(null);
   const [existingCaseId, setExistingCaseId] = useState<string | null>(null);
+  const creationInFlight = useRef(false);
+  const creationController = useRef<AbortController | null>(null);
+  const creationSequence = useRef(0);
   const idempotencyKey = useRef<string | null>(null);
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      listSequence.current += 1;
+      detailSequence.current += 1;
+      creationSequence.current += 1;
+      listController.current?.abort();
+      detailController.current?.abort();
+      creationController.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Keep the server and the first browser render timezone-independent. Local
+    // datetime values are populated only after hydration in the browser.
+    const frame = window.requestAnimationFrame(() => {
+      if (!initialDateHydrationSuperseded.current) setForm(formFromQuery(firstLocation.query));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [firstLocation.query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listController.current = controller;
     const sequence = ++listSequence.current;
-    void loadCases(query)
-      .then((value) => { if (sequence === listSequence.current) setResult(value); })
-      .catch((cause) => { if (sequence === listSequence.current) setError(displayError(cause, 'Não foi possível carregar os casos.')); })
-      .finally(() => { if (sequence === listSequence.current) setLoading(false); });
-  }, [loadCases, query, reload]);
+    const expectedQuery = serializeFindingReviewCaseQuery(query);
+    queryRef.current = query;
+
+    void loadCases(query, { signal: controller.signal })
+      .then((value) => {
+        if (!canCommitList(sequence, controller, expectedQuery)) return;
+        setResult(value);
+      })
+      .catch((cause) => {
+        if (!canCommitList(sequence, controller, expectedQuery) || isAbort(cause)) return;
+        setError(displayError(cause, 'Não foi possível carregar os casos.'));
+      })
+      .finally(() => {
+        if (!canCommitList(sequence, controller, expectedQuery)) return;
+        setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [listReload, loadCases, query]);
 
   useEffect(() => {
     if (!expandedId) return;
-    let active = true;
-    void loadDetail(expandedId)
-      .then((value) => { if (active) setDetail(value); })
-      .catch((cause) => { if (active) setDetailError(displayError(cause, 'Não foi possível carregar o detalhe do caso.')); })
-      .finally(() => { if (active) setDetailLoading(false); });
-    return () => { active = false; };
-  }, [expandedId, loadDetail]);
+    const requestedId = expandedId;
+    const controller = new AbortController();
+    detailController.current = controller;
+    const sequence = ++detailSequence.current;
+
+    void loadDetail(requestedId, { signal: controller.signal })
+      .then((value) => {
+        if (!canCommitDetail(sequence, controller, requestedId)) return;
+        setDetail(value);
+      })
+      .catch((cause) => {
+        if (!canCommitDetail(sequence, controller, requestedId) || isAbort(cause)) return;
+        setDetailError(displayError(cause, 'Não foi possível carregar o detalhe do caso.'));
+      })
+      .finally(() => {
+        if (!canCommitDetail(sequence, controller, requestedId)) return;
+        setDetailLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [detailReload, expandedId, loadDetail]);
+
+  useEffect(() => {
+    const restoreFromUrl = (): void => {
+      const restored = browserLocationState();
+      initialDateHydrationSuperseded.current = true;
+      invalidateListRequest();
+      queryRef.current = restored.query;
+      setLoading(true);
+      setError(null);
+      setFilterError(null);
+      setForm(formFromQuery(restored.query));
+      setQuery(restored.query);
+      creationSequence.current += 1;
+      creationController.current?.abort();
+      creationController.current = null;
+      idempotencyKey.current = restored.requestedFindingId
+        ? readPendingIdempotencyKey(restored.requestedFindingId)
+        : null;
+      creationInFlight.current = false;
+      setCreationLoading(false);
+      setCreationResult(null);
+      setCreationError(null);
+      setExistingCaseId(null);
+      setRequestedFindingId(restored.requestedFindingId);
+      if (restored.caseId !== expandedIdRef.current) {
+        invalidateDetailRequest();
+        detailTrigger.current = null;
+        expandedIdRef.current = restored.caseId;
+        setExpandedId(restored.caseId);
+        setDetail(null);
+        setDetailError(null);
+        setDetailLoading(Boolean(restored.caseId));
+      }
+    };
+    window.addEventListener('popstate', restoreFromUrl);
+    return () => window.removeEventListener('popstate', restoreFromUrl);
+  }, []);
+
+  useEffect(() => {
+    if (!expandedId || !detailPanel.current) return;
+    window.requestAnimationFrame(() => detailPanel.current?.focus());
+  }, [expandedId]);
+
+  function canCommitList(
+    sequence: number,
+    controller: AbortController,
+    expectedQuery: string,
+  ): boolean {
+    return mounted.current
+      && sequence === listSequence.current
+      && !controller.signal.aborted
+      && expectedQuery === serializeFindingReviewCaseQuery(queryRef.current);
+  }
+
+  function canCommitDetail(
+    sequence: number,
+    controller: AbortController,
+    requestedId: string,
+  ): boolean {
+    return mounted.current
+      && sequence === detailSequence.current
+      && !controller.signal.aborted
+      && expandedIdRef.current === requestedId;
+  }
+
+  function invalidateListRequest(): void {
+    listSequence.current += 1;
+    listController.current?.abort();
+    listController.current = null;
+  }
+
+  function invalidateDetailRequest(): void {
+    detailSequence.current += 1;
+    detailController.current?.abort();
+    detailController.current = null;
+  }
+
+  function updateQuery(next: FindingReviewCaseQuery, nextRequestedFindingId = requestedFindingId): void {
+    invalidateListRequest();
+    queryRef.current = next;
+    setLoading(true);
+    setError(null);
+    pushLocation(next, expandedIdRef.current, nextRequestedFindingId);
+    updateRequestedFinding(nextRequestedFindingId);
+    setQuery(next);
+  }
+
+  function updateRequestedFinding(next: string | null): void {
+    if (next === requestedFindingId) return;
+    creationSequence.current += 1;
+    creationController.current?.abort();
+    creationController.current = null;
+    idempotencyKey.current = next ? readPendingIdempotencyKey(next) : null;
+    creationInFlight.current = false;
+    setCreationLoading(false);
+    setCreationResult(null);
+    setCreationError(null);
+    setExistingCaseId(null);
+    setRequestedFindingId(next);
+  }
 
   function submitFilters(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const next: FindingReviewCaseQuery = {
-      page: 1,
-      pageSize: Number(form.pageSize),
-      status: form.status as FindingReviewCaseStatus || undefined,
-      staleness: form.staleness as FindingReviewStaleness || undefined,
-      findingType: form.findingType as FindingReviewCaseQuery['findingType'] || undefined,
-      findingId: form.findingId.trim() || undefined,
-      createdBy: form.createdBy.trim() || undefined,
-      sortBy: form.sortBy,
-      sortDirection: form.sortDirection,
-    };
-    replaceUrl(next);
-    setLoading(true);
-    setError(null);
-    setQuery(next);
+    const parsed = buildFindingReviewCaseQueryFromForm(form);
+    setFilterError(parsed.error);
+    if (parsed.query) updateQuery(parsed.query, null);
   }
 
   function clearFilters(): void {
     const next = { ...DEFAULT_FINDING_REVIEW_CASE_QUERY };
     setForm(formFromQuery(next));
-    replaceUrl(next);
+    setFilterError(null);
+    updateQuery(next, null);
+  }
+
+  function retryList(): void {
+    invalidateListRequest();
     setLoading(true);
     setError(null);
-    setQuery(next);
+    setListReload((value) => value + 1);
   }
 
   function changePage(page: number): void {
-    const next = { ...query, page };
-    replaceUrl(next);
-    setLoading(true);
-    setError(null);
-    setQuery(next);
+    if (page < 1 || page === query.page) return;
+    updateQuery({ ...query, page });
   }
 
-  function openDetail(id: string): void {
-    if (expandedId === id) {
-      setExpandedId(null);
-      setDetail(null);
-      setDetailLoading(false);
-      setDetailError(null);
+  function openDetail(id: string, trigger?: HTMLButtonElement): void {
+    if (!isFindingReviewCaseId(id)) return;
+    if (expandedIdRef.current === id) {
+      closeDetail(true);
       return;
     }
+    invalidateDetailRequest();
+    if (trigger) detailTrigger.current = trigger;
+    else detailTrigger.current = null;
+    expandedIdRef.current = id;
+    setExpandedId(id);
     setDetail(null);
     setDetailError(null);
     setDetailLoading(true);
-    setExpandedId(id);
+    pushLocation(queryRef.current, id, requestedFindingId);
+  }
+
+  function closeDetail(updateHistory: boolean): void {
+    invalidateDetailRequest();
+    expandedIdRef.current = null;
+    setExpandedId(null);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(false);
+    if (updateHistory) pushLocation(queryRef.current, null, requestedFindingId);
+    const trigger = detailTrigger.current;
+    detailTrigger.current = null;
+    window.requestAnimationFrame(() => trigger?.focus());
+  }
+
+  function retryDetail(): void {
+    const current = expandedIdRef.current;
+    if (!current) return;
+    invalidateDetailRequest();
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    setDetailReload((value) => value + 1);
   }
 
   async function submitCreation(): Promise<void> {
-    if (!requestedFindingId || creationLoading) return;
+    if (!requestedFindingId || creationInFlight.current) return;
+    const creationFindingId = requestedFindingId;
+    const sequence = ++creationSequence.current;
+    creationInFlight.current = true;
+    const controller = new AbortController();
+    creationController.current = controller;
     setCreationLoading(true);
     setCreationError(null);
     setExistingCaseId(null);
-    idempotencyKey.current ??= createFindingReviewIdempotencyKey(() => crypto.randomUUID());
+    idempotencyKey.current ??= readPendingIdempotencyKey(creationFindingId)
+      ?? createFindingReviewIdempotencyKey(() => crypto.randomUUID());
+    storePendingIdempotencyKey(creationFindingId, idempotencyKey.current);
     try {
-      const created = await createCase(requestedFindingId, idempotencyKey.current);
+      const created = await createCase(creationFindingId, idempotencyKey.current, {
+        signal: controller.signal,
+      });
+      clearPendingIdempotencyKey(creationFindingId);
+      idempotencyKey.current = null;
+      if (!mounted.current || sequence !== creationSequence.current) return;
       setCreationResult(created);
-      setDetail(null);
-      setDetailError(null);
-      setDetailLoading(true);
-      setExpandedId(created.id);
-      setLoading(true);
-      setReload((value) => value + 1);
+      openDetail(created.id);
+      retryList();
     } catch (cause) {
+      if (!mounted.current || sequence !== creationSequence.current) return;
       if (cause instanceof ApiError && cause.status === 409 && cause.existingCaseId) {
+        clearPendingIdempotencyKey(creationFindingId);
+        idempotencyKey.current = null;
         setExistingCaseId(cause.existingCaseId);
         setCreationError('Já existe um caso ativo para este assunto.');
+      } else if (cause instanceof ApiError && cause.status === 409) {
+        clearPendingIdempotencyKey(creationFindingId);
+        idempotencyKey.current = null;
+        setCreationError('A chave da tentativa anterior não pode ser reutilizada. Tente novamente.');
       } else if (cause instanceof ApiError && cause.status === 503) {
+        clearPendingIdempotencyKey(creationFindingId);
+        idempotencyKey.current = null;
         setCreationError('A criação de casos está desabilitada neste ambiente. Nenhum dado foi alterado.');
       } else if (cause instanceof ApiError && cause.status === 404) {
+        clearPendingIdempotencyKey(creationFindingId);
+        idempotencyKey.current = null;
         setCreationError('O achado não está mais disponível. Atualize a lista de achados antes de tentar novamente.');
+      } else if (cause instanceof ApiError && cause.status === 400) {
+        clearPendingIdempotencyKey(creationFindingId);
+        idempotencyKey.current = null;
+        setCreationError('A solicitação de criação é inválida. Revise o achado selecionado.');
       } else {
-        setCreationError(displayError(cause, 'Não foi possível criar o caso de revisão.'));
+        setCreationError(
+          'Não foi possível confirmar o resultado. Tente novamente: a mesma chave idempotente será reutilizada.',
+        );
       }
     } finally {
-      setCreationLoading(false);
+      if (sequence === creationSequence.current) creationInFlight.current = false;
+      if (creationController.current === controller) creationController.current = null;
+      if (mounted.current && sequence === creationSequence.current) setCreationLoading(false);
     }
   }
 
@@ -259,66 +650,88 @@ export function FindingReviewCasesPage({
             {creationLoading ? 'Criando…' : creationResult ? 'Caso registrado' : 'Criar caso'}
           </button>
           {creationResult ? <p className="form-message form-message-success" role="status">{creationResult.idempotentReplay ? 'Caso recuperado por replay idempotente.' : 'Caso criado com sucesso.'}</p> : null}
-          {creationError ? <div className="form-message form-message-error" role="alert">{creationError}{existingCaseId ? <button className="table-link-button" type="button" onClick={() => openDetail(existingCaseId)}> Abrir caso existente</button> : null}</div> : null}
+          {creationError ? <div className="form-message form-message-error" role="alert">{creationError}{existingCaseId ? <button className="table-link-button" type="button" onClick={(event) => openDetail(existingCaseId, event.currentTarget)}> Abrir caso existente</button> : null}</div> : null}
         </section>
       ) : null}
 
       <section className="filter-card" aria-labelledby="review-filter-title">
         <div className="filter-card-heading"><div><p className="section-kicker">Refine a fila</p><h2 id="review-filter-title">Filtros e ordenação</h2></div></div>
         <form className="filter-grid review-case-filter-grid" onSubmit={submitFilters}>
-          <label>Status<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="">Todos</option>{FINDING_REVIEW_CASE_STATUSES.map((value) => <option key={value} value={value}>{getFindingReviewCaseStatusLabel(value)}</option>)}</select></label>
-          <label>Atualidade<select value={form.staleness} onChange={(event) => setForm({ ...form, staleness: event.target.value })}><option value="">Todas</option>{FINDING_REVIEW_STALENESSES.map((value) => <option key={value} value={value}>{getFindingReviewStalenessLabel(value)}</option>)}</select></label>
-          <label>Tipo de achado<select value={form.findingType} onChange={(event) => setForm({ ...form, findingType: event.target.value })}><option value="">Todos</option>{CONFLICT_FINDING_TYPES.map((value) => <option key={value} value={value}>{getConflictFindingTypeLabel(value)}</option>)}</select></label>
-          <label>ID do achado<input value={form.findingId} onChange={(event) => setForm({ ...form, findingId: event.target.value })} /></label>
-          <label>Criado por<input value={form.createdBy} onChange={(event) => setForm({ ...form, createdBy: event.target.value })} /></label>
-          <label>Ordenar por<select value={form.sortBy} onChange={(event) => setForm({ ...form, sortBy: event.target.value as FindingReviewCaseSortField })}><option value="createdAt">Criação</option><option value="updatedAt">Atualização</option><option value="status">Status</option><option value="staleness">Atualidade</option></select></label>
-          <label>Direção<select value={form.sortDirection} onChange={(event) => setForm({ ...form, sortDirection: event.target.value as FindingReviewSortDirection })}><option value="desc">Decrescente</option><option value="asc">Crescente</option></select></label>
-          <label>Itens por página<select value={form.pageSize} onChange={(event) => setForm({ ...form, pageSize: event.target.value })}>{[10, 25, 50, 100].map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Status<select value={form.status} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="">Todos</option>{FINDING_REVIEW_CASE_STATUSES.map((value) => <option key={value} value={value}>{getFindingReviewCaseStatusLabel(value)}</option>)}</select></label>
+          <label>Atualidade<select value={form.staleness} onChange={(event) => setForm((current) => ({ ...current, staleness: event.target.value }))}><option value="">Todas</option>{FINDING_REVIEW_STALENESSES.map((value) => <option key={value} value={value}>{getFindingReviewStalenessLabel(value)}</option>)}</select></label>
+          <label>Tipo de achado<select value={form.findingType} onChange={(event) => setForm((current) => ({ ...current, findingType: event.target.value }))}><option value="">Todos</option>{CONFLICT_FINDING_TYPES.map((value) => <option key={value} value={value}>{getConflictFindingTypeLabel(value)}</option>)}</select></label>
+          <label>ID do achado<input value={form.findingId} onChange={(event) => setForm((current) => ({ ...current, findingId: event.target.value }))} /></label>
+          <label>Criado por<input maxLength={100} value={form.createdBy} onChange={(event) => setForm((current) => ({ ...current, createdBy: event.target.value }))} /></label>
+          <label>ID do ativo<input placeholder="UUID do ativo" value={form.assetId} onChange={(event) => setForm((current) => ({ ...current, assetId: event.target.value }))} /></label>
+          <label>Criado a partir de<input type="datetime-local" step="1" value={form.createdFrom} onChange={(event) => setForm((current) => ({ ...current, createdFrom: event.target.value }))} /><small>Horário local do navegador</small></label>
+          <label>Criado até<input type="datetime-local" step="1" value={form.createdTo} onChange={(event) => setForm((current) => ({ ...current, createdTo: event.target.value }))} /><small>Horário local do navegador</small></label>
+          <label>Ordenar por<select value={form.sortBy} onChange={(event) => setForm((current) => ({ ...current, sortBy: event.target.value as FindingReviewCaseSortField }))}><option value="createdAt">Criação</option><option value="updatedAt">Atualização</option><option value="status">Status</option><option value="staleness">Atualidade</option></select></label>
+          <label>Direção<select value={form.sortDirection} onChange={(event) => setForm((current) => ({ ...current, sortDirection: event.target.value as FindingReviewSortDirection }))}><option value="desc">Decrescente</option><option value="asc">Crescente</option></select></label>
+          <label>Itens por página<select value={form.pageSize} onChange={(event) => setForm((current) => ({ ...current, pageSize: event.target.value }))}>{[10, 25, 50, 100].map((value) => <option key={value}>{value}</option>)}</select></label>
           <div className="filter-actions"><button className="button button-primary" type="submit">Aplicar filtros</button><button className="button button-secondary" type="button" onClick={clearFilters}>Limpar filtros</button></div>
+          {filterError ? <p className="form-message form-message-error review-filter-error" role="alert">{filterError}</p> : null}
         </form>
       </section>
 
       {loading && !result ? <LoadingState label="Carregando casos…" /> : null}
-      {error && !result ? <ErrorState message={error} retry={() => { setLoading(true); setError(null); setReload((value) => value + 1); }} /> : null}
+      {error && !result ? <ErrorState message={error} retry={retryList} /> : null}
       {result ? (
         <>
-          {error ? <div className="finding-inline-error" role="alert"><span>{error}</span><button className="button button-secondary" type="button" onClick={() => { setLoading(true); setError(null); setReload((value) => value + 1); }}>Tentar novamente</button></div> : null}
+          {error ? <div className="finding-inline-error" role="alert"><span>{error}</span><button className="button button-secondary" type="button" onClick={retryList}>Tentar novamente</button></div> : null}
           <div className="table-scroll review-cases-table-wrap">
             <table className="data-table review-cases-table">
-              <thead><tr><th>Caso</th><th>Tipo</th><th>Status</th><th>Atualidade</th><th>Ativos</th><th>Eventos</th><th>Atualizado em</th><th>Ação</th></tr></thead>
+              <thead><tr><th>Caso</th><th>Tipo</th><th>Status</th><th>Atualidade</th><th>Versão</th><th>Criado por</th><th>Ativos</th><th>Eventos</th><th>Criado em</th><th>Atualizado em</th><th>Ação</th></tr></thead>
               <tbody>{result.items.map((item) => (
                 <tr key={item.id}>
-                  <td><strong>{item.id.slice(0, 8)}</strong><small>{item.findingId}</small></td>
+                  <td><strong>{item.id.slice(0, 8)}</strong><small title={item.findingId}>{item.findingId}</small></td>
                   <td>{getConflictFindingTypeLabel(item.findingType)}</td>
                   <td><span className="status-badge">{getFindingReviewCaseStatusLabel(item.status)}</span></td>
-                  <td>{getFindingReviewStalenessLabel(item.staleness)}</td><td>{item.assetCount}</td><td>{item.eventCount}</td><td>{formatDateTime(item.updatedAt)}</td>
-                  <td><button className="table-link-button" type="button" aria-expanded={expandedId === item.id} onClick={() => openDetail(item.id)}>{expandedId === item.id ? 'Fechar' : 'Ver detalhe'}</button></td>
+                  <td>{getFindingReviewStalenessLabel(item.staleness)}</td>
+                  <td>{item.version}</td><td>{item.createdBy}</td><td>{item.assetCount}</td><td>{item.eventCount}</td><td>{formatDateTime(item.createdAt)}</td><td>{formatDateTime(item.updatedAt)}</td>
+                  <td><button className="table-link-button" type="button" aria-controls={DETAIL_PANEL_ID} aria-expanded={expandedId === item.id} onClick={(event: ReactMouseEvent<HTMLButtonElement>) => openDetail(item.id, event.currentTarget)}>{expandedId === item.id ? 'Fechar' : 'Ver detalhe'}</button></td>
                 </tr>
               ))}</tbody>
             </table>
           </div>
           {result.items.length === 0 ? <section className="empty-state"><h2>Nenhum caso encontrado.</h2><p>Revise os filtros ou crie um caso a partir de um achado.</p></section> : null}
-          {expandedId ? <ReviewCaseDetail detail={detail} loading={detailLoading} error={detailError} retry={() => { setDetail(null); setDetailError(null); setDetailLoading(true); const current = expandedId; setExpandedId(null); queueMicrotask(() => setExpandedId(current)); }} /> : null}
           <nav className="pagination" aria-label="Paginação dos casos"><div className="pagination-summary"><strong>Página {result.pagination.page} de {Math.max(result.pagination.totalPages, 1)}</strong><span>{result.pagination.totalItems} resultados</span></div><div className="pagination-actions"><button type="button" disabled={result.pagination.page <= 1 || loading} onClick={() => changePage(result.pagination.page - 1)}>Anterior</button><button type="button" disabled={result.pagination.page >= result.pagination.totalPages || loading} onClick={() => changePage(result.pagination.page + 1)}>Próxima</button></div></nav>
         </>
+      ) : null}
+
+      {expandedId ? (
+        <section id={DETAIL_PANEL_ID} ref={detailPanel} className="review-case-detail" aria-labelledby="review-case-detail-title" tabIndex={-1}>
+          <ReviewCaseDetail detail={detail} loading={detailLoading} error={detailError} retry={retryDetail} close={() => closeDetail(true)} />
+        </section>
       ) : null}
     </main>
   );
 }
 
-function ReviewCaseDetail({ detail, loading, error, retry }: { detail: FindingReviewCaseDetail | null; loading: boolean; error: string | null; retry: () => void }) {
-  if (loading) return <LoadingState label="Carregando detalhe do caso…" />;
-  if (error) return <ErrorState message={error} retry={retry} />;
+function ReviewCaseDetail({
+  detail,
+  loading,
+  error,
+  retry,
+  close,
+}: {
+  detail: FindingReviewCaseDetail | null;
+  loading: boolean;
+  error: string | null;
+  retry: () => void;
+  close: () => void;
+}) {
+  if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title">Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
+  if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title">Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
   if (!detail) return null;
   return (
-    <section className="review-case-detail" aria-labelledby="review-case-detail-title">
-      <div className="finding-section-heading"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title">Detalhe do caso</h2></div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span></div>
+    <>
+      <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title">Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
       <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Atualidade</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}</dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
       <div className="review-detail-grid">
-        <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${asset.currentAssetId}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>O ativo histórico não está disponível atualmente.</em>}</div>)}</article>
+        <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
         <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong><span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>
       <details className="review-snapshot"><summary>Visualizar snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
-    </section>
+    </>
   );
 }
