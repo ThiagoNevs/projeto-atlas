@@ -14,7 +14,10 @@ import {
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
-import type { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
+import {
+  parseFindingReviewTimestamp,
+  type QueryFindingReviewCasesDto,
+} from './dto/query-finding-review-cases.dto';
 import {
   buildFindingReviewSnapshot,
   creationRequestFingerprint,
@@ -121,7 +124,7 @@ export class FindingReviewCasesService {
   async findAll(query: QueryFindingReviewCasesDto) {
     this.feature.assertEnabled();
     const where = this.buildReadWhere(query);
-    const skip = (query.page - 1) * query.pageSize;
+    const skip = this.calculateSafeSkip(query.page, query.pageSize);
     const orderBy = this.buildReadOrderBy(query);
 
     const [totalItems, records] = await this.prisma.$transaction([
@@ -336,8 +339,10 @@ export class FindingReviewCasesService {
   }
 
   private buildReadWhere(query: QueryFindingReviewCasesDto): Prisma.FindingReviewCaseWhereInput {
-    const createdFrom = query.createdFrom ? new Date(query.createdFrom) : undefined;
-    const createdTo = query.createdTo ? new Date(query.createdTo) : undefined;
+    const createdFrom = query.createdFrom
+      ? parseFindingReviewTimestamp(query.createdFrom)
+      : undefined;
+    const createdTo = query.createdTo ? parseFindingReviewTimestamp(query.createdTo) : undefined;
     if (createdFrom && createdTo && createdFrom.getTime() > createdTo.getTime()) {
       throw new BadRequestException({
         statusCode: 400,
@@ -371,6 +376,18 @@ export class FindingReviewCasesService {
     query: QueryFindingReviewCasesDto,
   ): Prisma.FindingReviewCaseOrderByWithRelationInput[] {
     return [{ [query.sortBy]: query.sortDirection }, { id: query.sortDirection }];
+  }
+
+  private calculateSafeSkip(page: number, pageSize: number): number {
+    const skip = (BigInt(page) - 1n) * BigInt(pageSize);
+    if (skip > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_FINDING_REVIEW_CASE_PAGINATION',
+        message: 'A página solicitada excede o limite numérico seguro.',
+      });
+    }
+    return Number(skip);
   }
 
   private presentListItem(record: CaseListRecord) {

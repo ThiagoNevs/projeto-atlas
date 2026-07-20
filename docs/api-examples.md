@@ -731,11 +731,24 @@ curl.exe "http://localhost:3001/conflict-review-cases?assetId=ASSET_UUID&created
 ```
 
 Parâmetros aceitos: `status`, `staleness`, `findingType`, `createdBy`, `assetId`, `findingId`,
-`createdFrom`, `createdTo`, `page`, `pageSize`, `sortBy` e `sortDirection`. Datas seguem ISO 8601; os
-dois limites são inclusivos. O filtro `assetId` usa a identidade histórica `assetIdAtCreation`, de modo
-que um caso continua localizável quando o vínculo atual com o ativo deixa de existir. `pageSize` varia
-de 1 a 100. A ordenação aceita `createdAt`, `updatedAt`, `status` e `staleness`, sempre com `id` como
-desempate estável.
+`createdFrom`, `createdTo`, `page`, `pageSize`, `sortBy` e `sortDirection`. Os filtros temporais aceitam
+somente timestamps ISO 8601 completos com timezone explícito (`Z` ou offset); datas sem horário e
+horários sem timezone são rejeitados. Os dois limites são inclusivos e representam instantes UTC. Para
+um dia inteiro, envie, por exemplo, `createdFrom=2026-07-20T00:00:00.000Z` e
+`createdTo=2026-07-20T23:59:59.999Z`. Não existe expansão automática de date-only. Em uma query string,
+o sinal `+` de um offset positivo deve ser codificado como `%2B`, como em
+`2026-07-20T03:00:00%2B03:00`.
+
+O filtro `assetId` usa a identidade histórica `assetIdAtCreation`, de modo que um caso continua
+localizável quando o vínculo atual com o ativo deixa de existir. `findingId` usa comparação exata e o
+formato `finding_` seguido de 24 caracteres hexadecimais minúsculos. `page` e `pageSize` aceitam apenas
+decimais canônicos positivos, sem zeros à esquerda, whitespace ou notação científica; os valores e o
+`skip` precisam ser inteiros seguros, e `pageSize` varia de 1 a 100. A ordenação aceita `createdAt`,
+`updatedAt`, `status` e `staleness`, sempre com `id` como desempate estável.
+
+A API usa paginação por offset. A ordem é determinística enquanto o conjunto de dados permanece
+estável, mas inserções concorrentes entre chamadas podem deslocar itens entre páginas; a API não
+promete uma fotografia imutável entre requisições. Cursor pagination permanece como evolução futura.
 
 ```json
 {

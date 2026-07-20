@@ -123,6 +123,11 @@ lista. `GET /conflict-review-cases/:id` retorna o snapshot original persistido, 
 históricas dos ativos e eventos seguros. As leituras não recalculam findings, não criam auditoria e não
 alteram casos ou inventário. Ainda não há frontend, decisões, comentários, atribuição ou refresh.
 
+Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
+sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal
+canônica, sem whitespace ou notação científica, e o backend protege inteiros e offsets numericamente
+seguros. O filtro `findingId` exige `finding_` seguido de 24 caracteres hexadecimais minúsculos.
+
 ### 2. Iniciar o PostgreSQL
 
 ```powershell

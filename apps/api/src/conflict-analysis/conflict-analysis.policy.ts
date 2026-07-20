@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-
+import { createConflictFindingId } from './conflict-finding-id';
 import {
   AssetIdentitySnapshot,
   ConflictFinding,
@@ -177,7 +176,7 @@ export class ConflictAnalysisPolicy {
     });
 
     return {
-      findingId: `finding_${createHash('sha256').update(identity).digest('hex').slice(0, 24)}`,
+      findingId: createConflictFindingId(identity),
       type,
       mode: 'SHADOW',
       requiresHumanReview: true,

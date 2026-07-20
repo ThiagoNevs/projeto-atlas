@@ -139,9 +139,16 @@ persistidos, ativos históricos e atuais e eventos com metadata explicitamente f
 ativo usa `assetIdAtCreation`, preservando casos mesmo após a remoção do vínculo atual. Nenhuma leitura
 recalcula findings, atualiza `updatedAt`, cria evento ou `AuditLog`, ou altera o inventário.
 
+Os filtros temporais exigem timestamps completos com timezone explícito e aplicam limites inclusivos
+ao instante UTC. A paginação aceita somente decimais canônicos positivos e protege tanto os valores
+quanto o cálculo de offset contra perda de precisão. O filtro de finding usa o formato canônico
+`finding_` seguido de 24 caracteres hexadecimais minúsculos.
+
 Esta etapa reutiliza os índices existentes e não altera o schema. Em volumes produtivos maiores, os
 filtros por `findingType`, `createdBy` e `assetIdAtCreation` devem ser acompanhados por métricas e planos
 de execução; índices adicionais podem ser avaliados futuramente, por migration explicitamente autorizada.
+Como a paginação atual é baseada em offset, inserções concorrentes podem deslocar registros entre
+chamadas; cursor pagination permanece uma evolução futura e nenhuma fotografia imutável é prometida.
 
 Ainda não existem frontend, botão de criação, atribuição, comentários, decisões, refresh, mudança de
 status, reabertura, integração com `Conflict` ou Resolution Center. Nenhum caso é criado automaticamente
