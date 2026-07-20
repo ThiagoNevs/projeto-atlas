@@ -929,11 +929,11 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it.each([
-    ['get', '/conflict-review-cases'],
-    ['get', `/conflict-review-cases/${randomUUID()}`],
+    ['patch', '/conflict-review-cases'],
     ['patch', `/conflict-review-cases/${randomUUID()}`],
     ['put', `/conflict-review-cases/${randomUUID()}`],
     ['delete', `/conflict-review-cases/${randomUUID()}`],
+    ['post', `/conflict-review-cases/${randomUUID()}`],
   ] as const)('does not expose out-of-scope %s endpoint', async (method, path) => {
     await request(server)[method](path).expect(404);
   });

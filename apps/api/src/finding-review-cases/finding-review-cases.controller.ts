@@ -1,14 +1,46 @@
-import { Body, Controller, Headers, Post, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
+import { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
 import { FindingReviewCasesService } from './finding-review-cases.service';
 
 interface PassthroughResponse {
   status(code: number): PassthroughResponse;
 }
 
+const reviewCaseIdPipe = new ParseUUIDPipe({
+  version: '4',
+  exceptionFactory: () =>
+    new BadRequestException({
+      statusCode: 400,
+      code: 'INVALID_FINDING_REVIEW_CASE_ID',
+      message: 'O identificador do caso de revisão é inválido.',
+    }),
+});
+
 @Controller('conflict-review-cases')
 export class FindingReviewCasesController {
   constructor(private readonly cases: FindingReviewCasesService) {}
+
+  @Get()
+  findAll(@Query() query: QueryFindingReviewCasesDto) {
+    return this.cases.findAll(query);
+  }
+
+  @Get(':id')
+  findOne(@Param('id', reviewCaseIdPipe) id: string) {
+    return this.cases.findOne(id);
+  }
 
   @Post()
   async create(

@@ -115,8 +115,8 @@ proteção final contra dois casos ativos concorrentes para o mesmo assunto.
 
 A `Idempotency-Key` é opaca, case-sensitive, limitada a 128 caracteres ASCII seguros e não recebe
 normalização Unicode. O replay é resolvido pelo fingerprint persistido antes do recálculo do finding,
-continuando disponível quando o achado deixa de ser detectado. A feature flag controla o endpoint
-inteiro: quando desabilitada ou inválida, criação e replay retornam HTTP 503. A serialização canônica
+continuando disponível quando o achado deixa de ser detectado. A feature flag controla o módulo
+funcional inteiro: quando desabilitada ou inválida, criação, replay, listagem e detalhe retornam HTTP 503. A serialização canônica
 não depende de locale, e testes com PostgreSQL real comprovam rollback integral em falhas nas relações,
 no evento ou no `AuditLog`.
 
@@ -132,10 +132,20 @@ A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetA
 `atlas-mvp-user` é provisório e não fornece autenticação, isolamento entre usuários ou RBAC; por isso a
 feature deve permanecer desabilitada fora da validação local controlada.
 
-Ainda não existem `GET` de casos, listagem, detalhe, frontend, botão de criação, atribuição,
-comentários, decisões, refresh, mudança de status, reabertura, integração com `Conflict` ou Resolution
-Center. Nenhum caso é criado automaticamente a partir da análise e nenhum finding derivado passa a
-ser persistido como fonte de verdade.
+Agora existem consultas somente leitura em `GET /conflict-review-cases` e
+`GET /conflict-review-cases/:id`. A listagem é paginada, filtrável e usa ordenação estável com contagens
+relacionais sem N+1; ela não carrega snapshots. O detalhe apresenta exatamente o snapshot e o hash
+persistidos, ativos históricos e atuais e eventos com metadata explicitamente filtrada. O filtro por
+ativo usa `assetIdAtCreation`, preservando casos mesmo após a remoção do vínculo atual. Nenhuma leitura
+recalcula findings, atualiza `updatedAt`, cria evento ou `AuditLog`, ou altera o inventário.
+
+Esta etapa reutiliza os índices existentes e não altera o schema. Em volumes produtivos maiores, os
+filtros por `findingType`, `createdBy` e `assetIdAtCreation` devem ser acompanhados por métricas e planos
+de execução; índices adicionais podem ser avaliados futuramente, por migration explicitamente autorizada.
+
+Ainda não existem frontend, botão de criação, atribuição, comentários, decisões, refresh, mudança de
+status, reabertura, integração com `Conflict` ou Resolution Center. Nenhum caso é criado automaticamente
+a partir da análise e nenhum finding derivado passa a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 

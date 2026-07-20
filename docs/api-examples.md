@@ -713,15 +713,72 @@ achado aparece uma vez, ainda que envolva vários ativos. A consulta não cria c
 auditoria, evento ou decisão e não altera o inventário. O detalhe permanece em
 `GET /assets/:id/conflict-analysis`.
 
-## Criação experimental de caso de revisão
+## Casos de revisão experimentais
 
-A criação está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
+A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.
 
-A flag controla o endpoint inteiro: quando estiver ausente, desabilitada ou inválida, tanto uma
-criação nova quanto o replay de um caso existente retornam HTTP 503. Ao reabilitar a flag, o replay
-volta a retornar o caso original.
+A flag controla criação e leitura: quando estiver ausente, desabilitada ou inválida, POST, listagem,
+detalhe e replay retornam HTTP 503. Ao reabilitar a flag, os casos existentes voltam a ficar acessíveis.
+
+### Listar casos
+
+```powershell
+curl.exe "http://localhost:3001/conflict-review-cases?page=1&pageSize=25&sortBy=createdAt&sortDirection=desc"
+curl.exe "http://localhost:3001/conflict-review-cases?status=OPEN&staleness=CURRENT&findingType=DUPLICATE_HOSTNAME_ACROSS_ASSETS"
+curl.exe "http://localhost:3001/conflict-review-cases?assetId=ASSET_UUID&createdFrom=2026-07-01T00:00:00.000Z&createdTo=2026-07-31T23:59:59.999Z"
+```
+
+Parâmetros aceitos: `status`, `staleness`, `findingType`, `createdBy`, `assetId`, `findingId`,
+`createdFrom`, `createdTo`, `page`, `pageSize`, `sortBy` e `sortDirection`. Datas seguem ISO 8601; os
+dois limites são inclusivos. O filtro `assetId` usa a identidade histórica `assetIdAtCreation`, de modo
+que um caso continua localizável quando o vínculo atual com o ativo deixa de existir. `pageSize` varia
+de 1 a 100. A ordenação aceita `createdAt`, `updatedAt`, `status` e `staleness`, sempre com `id` como
+desempate estável.
+
+```json
+{
+  "items": [
+    {
+      "id": "CASE_UUID",
+      "findingId": "finding_0123456789abcdef01234567",
+      "findingType": "DUPLICATE_HOSTNAME_ACROSS_ASSETS",
+      "policyVersion": "2026-07-conflict-v1",
+      "status": "OPEN",
+      "staleness": "CURRENT",
+      "version": 1,
+      "createdBy": "atlas-mvp-user",
+      "createdAt": "2026-07-20T00:00:00.000Z",
+      "updatedAt": "2026-07-20T00:00:00.000Z",
+      "assetCount": 2,
+      "eventCount": 1
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "pageSize": 25,
+    "totalItems": 1,
+    "totalPages": 1
+  }
+}
+```
+
+A listagem é resumida: não retorna snapshot, hash, fingerprint, chave ativa ou eventos completos.
+
+### Consultar detalhe
+
+```powershell
+curl.exe http://localhost:3001/conflict-review-cases/CASE_UUID
+```
+
+O detalhe retorna o snapshot original e o hash exatamente como persistidos, relações com
+`assetIdAtCreation` e disponibilidade atual do ativo, além dos eventos ordenados por versão, criação e
+ID. A metadata é filtrada por whitelist e não inclui fingerprint, chave idempotente ou identificadores
+internos do assunto. A leitura não recalcula o finding, não compara o snapshot com o estado atual, não
+altera staleness, não cria `AuditLog` e não atualiza o inventário.
+
+### Criar caso
 
 Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:
 
