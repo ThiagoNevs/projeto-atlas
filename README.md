@@ -104,19 +104,29 @@ Em outro computador, ajuste apenas o caminho usado no `Set-Location`. O frontend
 `NEXT_PUBLIC_API_URL` para localizar a API. Variáveis `NEXT_PUBLIC_*` são públicas e nunca devem
 conter segredos.
 
-A criação experimental de casos de revisão permanece desabilitada por padrão. Para validá-la apenas
-em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. O fluxo
-ainda usa o ator provisório `atlas-mvp-user` e não representa autenticação, autorização ou RBAC reais.
-Com a flag desabilitada ou inválida, o endpoint inteiro retorna HTTP 503, inclusive em tentativas de
-replay. A `Idempotency-Key` é case-sensitive, aceita somente caracteres ASCII seguros e nunca é
-persistida em formato bruto. O nome HTTP do header não diferencia maiúsculas de minúsculas, mas o
-valor diferencia; headers duplicados são rejeitados.
+A funcionalidade experimental de casos de revisão permanece desabilitada por padrão. Para validá-la
+apenas em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. A
+flag controla criação, listagem e detalhe. O fluxo ainda usa o ator provisório `atlas-mvp-user` e não
+representa autenticação, autorização ou RBAC reais. Com a flag desabilitada ou inválida, todos esses
+endpoints retornam HTTP 503, inclusive em tentativas de replay. A `Idempotency-Key` é case-sensitive,
+aceita somente caracteres ASCII seguros e nunca é persistida em formato bruto. O nome HTTP do header
+não diferencia maiúsculas de minúsculas, mas o valor diferencia; headers duplicados são rejeitados.
 
 O fingerprint usa SHA-256 sobre uma estrutura canônica com operação, ator provisório e chave exata.
 O contrato `snapshotVersion: 1` usa comparação binária com `<` e `>`, independente de locale e ICU:
 conjuntos aprovados são normalizados explicitamente, listas semanticamente ordenadas são preservadas
 e o hash é SHA-256 hexadecimal. Vetores sintéticos fixos protegem esses contratos; refresh e
 revalidação de snapshots continuam fora do escopo.
+
+`GET /conflict-review-cases` oferece paginação, filtros e ordenação estável sem carregar snapshots na
+lista. `GET /conflict-review-cases/:id` retorna o snapshot original persistido, seu hash, identidades
+históricas dos ativos e eventos seguros. As leituras não recalculam findings, não criam auditoria e não
+alteram casos ou inventário. Ainda não há frontend, decisões, comentários, atribuição ou refresh.
+
+Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
+sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal
+canônica, sem whitespace ou notação científica, e o backend protege inteiros e offsets numericamente
+seguros. O filtro `findingId` exige `finding_` seguido de 24 caracteres hexadecimais minúsculos.
 
 ### 2. Iniciar o PostgreSQL
 

@@ -19,14 +19,14 @@ export class FindingReviewCasesFeature {
       throw new ServiceUnavailableException({
         statusCode: 503,
         code: 'FINDING_REVIEW_CASES_CONFIGURATION_INVALID',
-        message: 'A configuração da criação de casos de revisão é inválida.',
+        message: 'A configuração da funcionalidade de casos de revisão é inválida.',
       });
     }
 
     throw new ServiceUnavailableException({
       statusCode: 503,
       code: 'FINDING_REVIEW_CASES_DISABLED',
-      message: 'A criação de casos de revisão está desabilitada.',
+      message: 'A funcionalidade de casos de revisão está desabilitada.',
     });
   }
 }

@@ -7,9 +7,17 @@ import {
 } from '@nestjs/common';
 
 import { ConflictFindingsService } from '../conflict-analysis/conflict-findings.service';
-import { FindingReviewCaseStatus, FindingReviewStaleness, Prisma } from '../generated/prisma/client';
+import {
+  FindingReviewCaseStatus,
+  FindingReviewStaleness,
+  Prisma,
+} from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
+import {
+  parseFindingReviewTimestamp,
+  type QueryFindingReviewCasesDto,
+} from './dto/query-finding-review-cases.dto';
 import {
   buildFindingReviewSnapshot,
   creationRequestFingerprint,
@@ -48,6 +56,63 @@ type CaseResponseRecord = Prisma.FindingReviewCaseGetPayload<{
   select: typeof CASE_RESPONSE_SELECT;
 }>;
 
+const CASE_LIST_SELECT = {
+  id: true,
+  findingId: true,
+  findingType: true,
+  policyVersion: true,
+  status: true,
+  staleness: true,
+  version: true,
+  createdBy: true,
+  createdAt: true,
+  updatedAt: true,
+  _count: { select: { assets: true, events: true } },
+} satisfies Prisma.FindingReviewCaseSelect;
+
+const CASE_DETAIL_SELECT = {
+  id: true,
+  findingId: true,
+  findingType: true,
+  policyVersion: true,
+  status: true,
+  staleness: true,
+  version: true,
+  createdBy: true,
+  createdAt: true,
+  updatedAt: true,
+  originalSnapshot: true,
+  originalSnapshotHash: true,
+  assets: {
+    orderBy: [{ createdAt: 'asc' as const }, { assetIdAtCreation: 'asc' as const }],
+    select: {
+      assetIdAtCreation: true,
+      assetNameAtCreation: true,
+      role: true,
+      asset: { select: { id: true, name: true } },
+    },
+  },
+  events: {
+    orderBy: [
+      { versionAfter: 'asc' as const },
+      { createdAt: 'asc' as const },
+      { id: 'asc' as const },
+    ],
+    select: {
+      id: true,
+      eventType: true,
+      versionBefore: true,
+      versionAfter: true,
+      actorId: true,
+      metadata: true,
+      createdAt: true,
+    },
+  },
+} satisfies Prisma.FindingReviewCaseSelect;
+
+type CaseListRecord = Prisma.FindingReviewCaseGetPayload<{ select: typeof CASE_LIST_SELECT }>;
+type CaseDetailRecord = Prisma.FindingReviewCaseGetPayload<{ select: typeof CASE_DETAIL_SELECT }>;
+
 @Injectable()
 export class FindingReviewCasesService {
   constructor(
@@ -55,6 +120,52 @@ export class FindingReviewCasesService {
     private readonly findings: ConflictFindingsService,
     private readonly feature: FindingReviewCasesFeature,
   ) {}
+
+  async findAll(query: QueryFindingReviewCasesDto) {
+    this.feature.assertEnabled();
+    const where = this.buildReadWhere(query);
+    const skip = this.calculateSafeSkip(query.page, query.pageSize);
+    const orderBy = this.buildReadOrderBy(query);
+
+    const [totalItems, records] = await this.prisma.$transaction([
+      this.prisma.findingReviewCase.count({ where }),
+      this.prisma.findingReviewCase.findMany({
+        where,
+        select: CASE_LIST_SELECT,
+        orderBy,
+        skip,
+        take: query.pageSize,
+      }),
+    ]);
+
+    return {
+      items: records.map((record) => this.presentListItem(record)),
+      pagination: {
+        page: query.page,
+        pageSize: query.pageSize,
+        totalItems,
+        totalPages: totalItems === 0 ? 0 : Math.ceil(totalItems / query.pageSize),
+      },
+    };
+  }
+
+  async findOne(id: string) {
+    this.feature.assertEnabled();
+    const record = await this.prisma.findingReviewCase.findUnique({
+      where: { id },
+      select: CASE_DETAIL_SELECT,
+    });
+
+    if (!record) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'FINDING_REVIEW_CASE_NOT_FOUND',
+        message: 'O caso de revisão informado não foi encontrado.',
+      });
+    }
+
+    return this.presentDetail(record);
+  }
 
   async create(payload: CreateFindingReviewCaseDto, rawIdempotencyKey: unknown) {
     this.feature.assertEnabled();
@@ -227,6 +338,109 @@ export class FindingReviewCasesService {
     }
   }
 
+  private buildReadWhere(query: QueryFindingReviewCasesDto): Prisma.FindingReviewCaseWhereInput {
+    const createdFrom = query.createdFrom
+      ? parseFindingReviewTimestamp(query.createdFrom)
+      : undefined;
+    const createdTo = query.createdTo ? parseFindingReviewTimestamp(query.createdTo) : undefined;
+    if (createdFrom && createdTo && createdFrom.getTime() > createdTo.getTime()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_FINDING_REVIEW_CASE_DATE_RANGE',
+        message: 'A data inicial não pode ser posterior à data final.',
+      });
+    }
+
+    return {
+      status: query.status,
+      staleness: query.staleness,
+      findingType: query.findingType,
+      createdBy: query.createdBy,
+      findingId: query.findingId,
+      createdAt:
+        createdFrom || createdTo
+          ? {
+              gte: createdFrom,
+              lte: createdTo,
+            }
+          : undefined,
+      assets: query.assetId
+        ? {
+            some: { assetIdAtCreation: query.assetId },
+          }
+        : undefined,
+    };
+  }
+
+  private buildReadOrderBy(
+    query: QueryFindingReviewCasesDto,
+  ): Prisma.FindingReviewCaseOrderByWithRelationInput[] {
+    return [{ [query.sortBy]: query.sortDirection }, { id: query.sortDirection }];
+  }
+
+  private calculateSafeSkip(page: number, pageSize: number): number {
+    const skip = (BigInt(page) - 1n) * BigInt(pageSize);
+    if (skip > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_FINDING_REVIEW_CASE_PAGINATION',
+        message: 'A página solicitada excede o limite numérico seguro.',
+      });
+    }
+    return Number(skip);
+  }
+
+  private presentListItem(record: CaseListRecord) {
+    return {
+      id: record.id,
+      findingId: record.findingId,
+      findingType: record.findingType,
+      policyVersion: record.policyVersion,
+      status: record.status,
+      staleness: record.staleness,
+      version: record.version,
+      createdBy: record.createdBy,
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+      assetCount: record._count.assets,
+      eventCount: record._count.events,
+    };
+  }
+
+  private presentDetail(record: CaseDetailRecord) {
+    return {
+      id: record.id,
+      findingId: record.findingId,
+      findingType: record.findingType,
+      policyVersion: record.policyVersion,
+      status: record.status,
+      staleness: record.staleness,
+      version: record.version,
+      createdBy: record.createdBy,
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+      originalSnapshot: record.originalSnapshot,
+      originalSnapshotHash: record.originalSnapshotHash,
+      assets: record.assets.map((relation) => ({
+        assetIdAtCreation: relation.assetIdAtCreation,
+        assetNameAtCreation: relation.assetNameAtCreation,
+        role: relation.role,
+        currentAssetId: relation.asset?.id ?? null,
+        currentAssetName: relation.asset?.name ?? null,
+        currentAssetAvailable: relation.asset !== null,
+      })),
+      events: record.events.map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        versionBefore: event.versionBefore,
+        versionAfter: event.versionAfter,
+        actor: event.actorId,
+        metadata: presentSafeEventMetadata(event.metadata),
+        createdAt: event.createdAt.toISOString(),
+      })),
+    };
+  }
+
   private async findByFingerprint(fingerprint: string): Promise<CaseResponseRecord | null> {
     return this.prisma.findingReviewCase.findUnique({
       where: { creationRequestFingerprint: fingerprint },
@@ -283,6 +497,18 @@ export class FindingReviewCasesService {
       idempotentReplay,
     };
   }
+}
+
+function presentSafeEventMetadata(
+  metadata: Prisma.JsonValue | null,
+): Record<string, string> | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const safe: Record<string, string> = {};
+  for (const key of ['findingId', 'originalSnapshotHash']) {
+    const value = metadata[key];
+    if (typeof value === 'string') safe[key] = value;
+  }
+  return Object.keys(safe).length > 0 ? safe : null;
 }
 
 function isPrismaError(error: unknown, code: string): boolean {
