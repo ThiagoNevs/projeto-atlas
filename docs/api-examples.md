@@ -712,3 +712,75 @@ resumo do conjunto filtrado antes da paginação e itens compactos deduplicados 
 achado aparece uma vez, ainda que envolva vários ativos. A consulta não cria conflito formal, fila,
 auditoria, evento ou decisão e não altera o inventário. O detalhe permanece em
 `GET /assets/:id/conflict-analysis`.
+
+## Criação experimental de caso de revisão
+
+A criação está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
+desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
+`atlas-mvp-user` é somente uma identificação provisória do MVP.
+
+A flag controla o endpoint inteiro: quando estiver ausente, desabilitada ou inválida, tanto uma
+criação nova quanto o replay de um caso existente retornam HTTP 503. Ao reabilitar a flag, o replay
+volta a retornar o caso original.
+
+Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:
+
+```powershell
+curl.exe -X POST http://localhost:3001/conflict-review-cases `
+  -H "Content-Type: application/json" `
+  -H "Idempotency-Key: demonstracao-caso-001" `
+  -d '{"findingId":"finding_0123456789abcdef01234567"}'
+```
+
+Uma criação nova retorna HTTP 201 e uma representação resumida do caso:
+
+```json
+{
+  "id": "CASE_UUID",
+  "findingId": "finding_0123456789abcdef01234567",
+  "findingType": "DUPLICATE_HOSTNAME_ACROSS_ASSETS",
+  "policyVersion": "2026-07-conflict-v1",
+  "reviewSubjectKey": "HASH_SHA256",
+  "status": "OPEN",
+  "staleness": "CURRENT",
+  "version": 1,
+  "affectedAssets": [],
+  "createdBy": "atlas-mvp-user",
+  "idempotentReplay": false
+}
+```
+
+Repetir exatamente a mesma chave e o mesmo `findingId` retorna o mesmo caso com HTTP 200 e
+`idempotentReplay: true`, sem novo evento ou auditoria. Reutilizar a chave com outro `findingId`, ou
+tentar abrir outro caso ativo para o mesmo assunto com uma chave diferente, retorna HTTP 409.
+
+`Idempotency-Key` é case-sensitive, possui de 1 a 128 caracteres e aceita somente letras ASCII,
+números e os caracteres `._~:+/=-`. Espaços e Unicode são rejeitados; não ocorre trim, conversão de
+maiúsculas/minúsculas ou normalização Unicode. A chave é tratada como valor opaco: `ABC` e `abc` são
+chaves diferentes. O nome HTTP `Idempotency-Key` é case-insensitive, conforme o protocolo, mas seu
+valor não é. Headers duplicados são rejeitados com HTTP 400 depois que o transporte combina seus
+valores em uma única string separada por vírgula.
+
+O fingerprint é o SHA-256 hexadecimal da serialização canônica de uma estrutura que contém a operação
+`CREATE_FINDING_REVIEW_CASE`, o ator provisório `atlas-mvp-user` e o valor exato da chave. Um vetor
+sintético ASCII fixo protege a compatibilidade dessa fórmula sem publicar dados reais.
+
+O replay é procurado pelo fingerprint antes de o servidor recalcular o finding. Portanto, uma
+repetição legítima continua retornando o mesmo caso mesmo quando o finding original deixou de ser
+detectado. A serialização usada nos fingerprints e snapshots utiliza ordenação canônica independente
+da localidade do sistema.
+
+O contrato `snapshotVersion: 1` representa o algoritmo binário final deste PR: propriedades e
+conjuntos aprovados são ordenados por comparação explícita com `<` e `>`, sem `localeCompare`, ICU ou
+locale do sistema; listas cuja ordem possui significado são preservadas. O hash é SHA-256 hexadecimal
+sobre a serialização canônica. Vetores literais com Unicode e um snapshot realista fixam texto e hash.
+A implementação provisória anterior existiu somente no draft e não chegou à `main`; por isso não há
+`snapshotVersion: 2`. Refresh e revalidação de snapshots permanecem fora do escopo.
+
+O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body. Esses dados são
+recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem registrada em
+auditoria. Esta entrega não possui endpoints GET de casos, frontend, decisões ou integração com
+`Conflict`, e não altera o inventário.
+
+Caso a criação falhe ao relacionar os ativos, criar o evento ou registrar o `AuditLog`, a transação
+PostgreSQL é revertida integralmente. O fingerprint permanece disponível para uma nova tentativa.

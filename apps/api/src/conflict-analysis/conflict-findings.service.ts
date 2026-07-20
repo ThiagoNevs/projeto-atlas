@@ -7,6 +7,7 @@ import {
   buildAssetIdentitySnapshot,
 } from './conflict-snapshot';
 import { ConflictFindingsInventoryBuilder } from './conflict-findings-inventory.builder';
+import { IDENTITY_NETWORK_CONFLICT_POLICY_VERSION } from './conflict-analysis.policy';
 import type { QueryConflictFindingsDto } from './dto/query-conflict-findings.dto';
 
 @Injectable()
@@ -17,9 +18,7 @@ export class ConflictFindingsService {
   ) {}
 
   async findAll(query: QueryConflictFindingsDto) {
-    const assets = (await this.prisma.asset.findMany({
-      select: ASSET_IDENTITY_SELECT,
-    })) as AssetIdentityProjection[];
+    const assets = await this.loadAssets();
     const snapshots = assets.map((asset) => buildAssetIdentitySnapshot(asset));
 
     return this.inventory.build(
@@ -27,5 +26,29 @@ export class ConflictFindingsService {
       assets.map((asset) => ({ assetId: asset.id, persistedName: asset.name })),
       query,
     );
+  }
+
+  async findCurrentById(findingId: string) {
+    const assets = await this.loadAssets();
+    const snapshots = assets.map((asset) => buildAssetIdentitySnapshot(asset));
+    const finding = this.inventory.findById(snapshots, findingId);
+    if (!finding) return null;
+
+    const assetNames = new Map(assets.map((asset) => [asset.id, asset.name]));
+    return {
+      finding,
+      policyVersion: IDENTITY_NETWORK_CONFLICT_POLICY_VERSION,
+      generatedAt: this.inventory.generatedAtFor(snapshots),
+      affectedAssets: finding.affectedAssetIds.map((assetId) => ({
+        assetId,
+        name: assetNames.get(assetId) ?? null,
+      })),
+    };
+  }
+
+  private async loadAssets(): Promise<AssetIdentityProjection[]> {
+    return this.prisma.asset.findMany({
+      select: ASSET_IDENTITY_SELECT,
+    });
   }
 }
