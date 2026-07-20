@@ -715,6 +715,10 @@ auditoria, evento ou decisão e não altera o inventário. O detalhe permanece e
 
 ## Casos de revisão experimentais
 
+A interface web equivalente está disponível em `http://localhost:3000/conflict-review-cases`. A criação
+é iniciada explicitamente na tela `http://localhost:3000/conflict-findings`; o frontend gera uma
+`Idempotency-Key` ASCII opaca e preserva o contrato de replay do backend.
+
 A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.

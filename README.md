@@ -121,7 +121,9 @@ revalidação de snapshots continuam fora do escopo.
 `GET /conflict-review-cases` oferece paginação, filtros e ordenação estável sem carregar snapshots na
 lista. `GET /conflict-review-cases/:id` retorna o snapshot original persistido, seu hash, identidades
 históricas dos ativos e eventos seguros. As leituras não recalculam findings, não criam auditoria e não
-alteram casos ou inventário. Ainda não há frontend, decisões, comentários, atribuição ou refresh.
+alteram casos ou inventário. A interface em `/conflict-review-cases` lista, filtra e detalha casos e
+permite iniciar a criação a partir de um achado atual. Decisões, comentários, atribuição e refresh
+continuam fora do escopo.
 
 Os filtros temporais aceitam somente timestamps ISO 8601 completos com `Z` ou offset explícito; datas
 sem horário e horários sem timezone são rejeitados. `page` e `pageSize` usam representação decimal

@@ -11,6 +11,13 @@ import {
   parseEvidenceAnalysisResponse,
   type AssetEvidenceAnalysisResponse,
 } from './evidence-provenance.ts';
+import type {
+  CreateFindingReviewCaseResponse,
+  FindingReviewCaseDetail,
+  FindingReviewCaseListResponse,
+  FindingReviewCaseQuery,
+} from './finding-review-cases.ts';
+import { serializeFindingReviewCaseQuery } from './finding-review-cases.ts';
 
 export { API_CONNECTION_ERROR_MESSAGE, ApiError, normalizeApiError } from './api-error.ts';
 export type {
@@ -47,6 +54,19 @@ export type {
   ConflictTemporalRelationship,
   IdentityNetworkAnalysisResponse,
 } from './conflict-findings';
+export type {
+  CreateFindingReviewCaseResponse,
+  FindingReviewCaseAsset,
+  FindingReviewCaseDetail,
+  FindingReviewCaseEvent,
+  FindingReviewCaseListItem,
+  FindingReviewCaseListResponse,
+  FindingReviewCaseQuery,
+  FindingReviewCaseSortField,
+  FindingReviewCaseStatus,
+  FindingReviewSortDirection,
+  FindingReviewStaleness,
+} from './finding-review-cases';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -785,6 +805,28 @@ async function readErrorMessage(response: Response): Promise<string> {
   return message;
 }
 
+async function readApiError(response: Response): Promise<ApiError> {
+  let message = response.status === 404
+    ? 'O recurso solicitado não foi encontrado.'
+    : 'Não foi possível concluir a solicitação.';
+  let code: string | undefined;
+  let existingCaseId: string | undefined;
+  try {
+    const body = (await response.json()) as {
+      message?: string | string[];
+      code?: unknown;
+      existingCaseId?: unknown;
+    };
+    if (Array.isArray(body.message)) message = body.message.join(' ');
+    else if (body.message) message = body.message;
+    if (typeof body.code === 'string') code = body.code;
+    if (typeof body.existingCaseId === 'string') existingCaseId = body.existingCaseId;
+  } catch {
+    // Preserve the controlled fallback for non-JSON errors.
+  }
+  return new ApiError(message, response.status, code, existingCaseId);
+}
+
 async function fetchJson<T>(
   path: string,
   init: RequestInit = {},
@@ -847,6 +889,35 @@ export function getConflictFindings(
     'Não foi possível carregar os achados de identidade e rede. Tente novamente.',
     options,
   );
+}
+
+export function getFindingReviewCases(
+  params: FindingReviewCaseQuery = {},
+): Promise<FindingReviewCaseListResponse> {
+  const query = serializeFindingReviewCaseQuery(params);
+  return fetchJson(`/conflict-review-cases${query ? `?${query}` : ''}`);
+}
+
+export function getFindingReviewCase(id: string): Promise<FindingReviewCaseDetail> {
+  return fetchJson(`/conflict-review-cases/${encodeURIComponent(id)}`);
+}
+
+export async function createFindingReviewCase(
+  findingId: string,
+  idempotencyKey: string,
+): Promise<CreateFindingReviewCaseResponse> {
+  const response = await fetchWithNetworkHandling(`${API_URL}/conflict-review-cases`, {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify({ findingId }),
+  });
+  if (!response.ok) throw await readApiError(response);
+  return (await response.json()) as CreateFindingReviewCaseResponse;
 }
 
 export function getAssetConflictAnalysis(

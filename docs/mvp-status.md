@@ -150,9 +150,14 @@ de execução; índices adicionais podem ser avaliados futuramente, por migratio
 Como a paginação atual é baseada em offset, inserções concorrentes podem deslocar registros entre
 chamadas; cursor pagination permanece uma evolução futura e nenhuma fotografia imutável é prometida.
 
-Ainda não existem frontend, botão de criação, atribuição, comentários, decisões, refresh, mudança de
-status, reabertura, integração com `Conflict` ou Resolution Center. Nenhum caso é criado automaticamente
-a partir da análise e nenhum finding derivado passa a ser persistido como fonte de verdade.
+O frontend agora disponibiliza `/conflict-review-cases` com listagem, filtros, paginação e detalhe sob
+demanda. O detalhe apresenta snapshot histórico, hash, ativos na criação, vínculos atuais disponíveis e
+eventos. Em `/conflict-findings`, o usuário pode iniciar explicitamente a criação de um caso. A interface
+trata criação, replay idempotente, caso ativo existente, indisponibilidade da feature e achado que deixou
+de existir. Nenhum caso é criado automaticamente e nenhuma dessas ações altera o inventário.
+
+Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
+com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 
