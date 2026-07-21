@@ -14,6 +14,7 @@ import {
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
+import type { UpdateFindingReviewCaseStatusDto } from './dto/update-finding-review-case-status.dto';
 import {
   parseFindingReviewTimestamp,
   type QueryFindingReviewCasesDto,
@@ -28,6 +29,10 @@ import {
   snapshotHash,
 } from './finding-review-case-creation';
 import { FindingReviewCasesFeature } from './finding-review-cases.feature';
+import {
+  FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+  isAllowedFindingReviewCaseStatusTransition,
+} from './finding-review-case-status-transition';
 
 const CASE_RESPONSE_SELECT = {
   id: true,
@@ -326,6 +331,108 @@ export class FindingReviewCasesService {
     }
   }
 
+  async updateStatus(id: string, payload: UpdateFindingReviewCaseStatusDto) {
+    this.feature.assertEnabled();
+    const occurredAt = new Date();
+
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.findingReviewCase.findUnique({
+        where: { id },
+        select: { id: true, status: true, version: true },
+      });
+
+      if (!current) {
+        throw new NotFoundException({
+          statusCode: 404,
+          code: 'FINDING_REVIEW_CASE_NOT_FOUND',
+          message: 'O caso de revisão informado não foi encontrado.',
+        });
+      }
+
+      if (current.version !== payload.expectedVersion) {
+        throw this.versionConflict();
+      }
+
+      if (!isAllowedFindingReviewCaseStatusTransition(current.status, payload.status)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'INVALID_FINDING_REVIEW_CASE_STATUS_TRANSITION',
+          message: 'A transição de status solicitada não é permitida para este caso.',
+        });
+      }
+
+      const versionAfter = payload.expectedVersion + 1;
+      const updated = await transaction.findingReviewCase.updateMany({
+        where: {
+          id,
+          version: payload.expectedVersion,
+          status: current.status,
+        },
+        data: {
+          status: payload.status,
+          version: { increment: 1 },
+          updatedAt: occurredAt,
+        },
+      });
+
+      if (updated.count !== 1) throw this.versionConflict();
+
+      const event = await transaction.findingReviewEvent.create({
+        data: {
+          caseId: id,
+          eventType: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+          versionBefore: payload.expectedVersion,
+          versionAfter,
+          actorId: FINDING_REVIEW_ACTOR_ID,
+          previousStatus: current.status,
+          nextStatus: payload.status,
+          before: { status: current.status, version: payload.expectedVersion },
+          after: { status: payload.status, version: versionAfter },
+          metadata: {
+            statusBefore: current.status,
+            statusAfter: payload.status,
+          },
+          occurredAt,
+        },
+        select: { id: true },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          actorType: 'USER',
+          actorId: FINDING_REVIEW_ACTOR_ID,
+          action: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+          entityType: 'FindingReviewCase',
+          entityId: id,
+          before: { status: current.status, version: payload.expectedVersion },
+          after: { status: payload.status, version: versionAfter },
+          metadata: {
+            caseId: id,
+            eventId: event.id,
+            eventType: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+            statusBefore: current.status,
+            statusAfter: payload.status,
+            versionBefore: payload.expectedVersion,
+            versionAfter,
+          },
+          occurredAt,
+        },
+      });
+
+      const result = await transaction.findingReviewCase.findUniqueOrThrow({
+        where: { id },
+        select: { id: true, status: true, version: true, updatedAt: true },
+      });
+
+      return {
+        id: result.id,
+        status: result.status,
+        version: result.version,
+        updatedAt: result.updatedAt.toISOString(),
+      };
+    });
+  }
+
   private validateIdempotencyKey(value: unknown): string {
     try {
       return normalizeIdempotencyKey(value);
@@ -476,6 +583,14 @@ export class FindingReviewCasesService {
     });
   }
 
+  private versionConflict(): ConflictException {
+    return new ConflictException({
+      statusCode: 409,
+      code: 'FINDING_REVIEW_CASE_VERSION_CONFLICT',
+      message: 'O caso foi alterado por outra operação. Recarregue os dados antes de tentar novamente.',
+    });
+  }
+
   private present(record: CaseResponseRecord, idempotentReplay: boolean) {
     return {
       id: record.id,
@@ -504,7 +619,7 @@ function presentSafeEventMetadata(
 ): Record<string, string> | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const safe: Record<string, string> = {};
-  for (const key of ['findingId', 'originalSnapshotHash']) {
+  for (const key of ['findingId', 'originalSnapshotHash', 'statusBefore', 'statusAfter']) {
     const value = metadata[key];
     if (typeof value === 'string') safe[key] = value;
   }

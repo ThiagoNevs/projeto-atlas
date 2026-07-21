@@ -6,12 +6,14 @@ import {
   Headers,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Res,
 } from '@nestjs/common';
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
 import { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
+import { UpdateFindingReviewCaseStatusDto } from './dto/update-finding-review-case-status.dto';
 import { FindingReviewCasesService } from './finding-review-cases.service';
 
 interface PassthroughResponse {
@@ -40,6 +42,14 @@ export class FindingReviewCasesController {
   @Get(':id')
   findOne(@Param('id', reviewCaseIdPipe) id: string) {
     return this.cases.findOne(id);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id', reviewCaseIdPipe) id: string,
+    @Body() payload: UpdateFindingReviewCaseStatusDto,
+  ) {
+    return this.cases.updateStatus(id, payload);
   }
 
   @Post()

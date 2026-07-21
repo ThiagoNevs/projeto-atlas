@@ -17,11 +17,14 @@ import {
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
+  updateFindingReviewCaseStatus,
+  type ActiveFindingReviewCaseStatus,
   type CreateFindingReviewCaseResponse,
   type FindingReviewCaseDetail,
   type FindingReviewCaseListResponse,
   type FindingReviewCaseQuery,
   type FindingReviewCasesRequestOptions,
+  type UpdateFindingReviewCaseStatusResponse,
 } from '../lib/api';
 import { CONFLICT_FINDING_TYPES, getConflictFindingTypeLabel } from '../lib/conflict-findings';
 import {
@@ -30,6 +33,7 @@ import {
   FINDING_REVIEW_SORT_FIELDS,
   FINDING_REVIEW_STALENESSES,
   createFindingReviewIdempotencyKey,
+  getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewCaseStatusLabel,
   getFindingReviewEventLabel,
   getFindingReviewStalenessLabel,
@@ -57,12 +61,19 @@ export type ReviewCaseCreator = (
   key: string,
   options?: FindingReviewCasesRequestOptions,
 ) => Promise<CreateFindingReviewCaseResponse>;
+export type ReviewCaseStatusUpdater = (
+  id: string,
+  status: ActiveFindingReviewCaseStatus,
+  expectedVersion: number,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<UpdateFindingReviewCaseStatusResponse>;
 
 interface Props {
   initialSearchParams?: Record<string, string | string[] | undefined>;
   loadCases?: ReviewCasesLoader;
   loadDetail?: ReviewCaseDetailLoader;
   createCase?: ReviewCaseCreator;
+  updateStatus?: ReviewCaseStatusUpdater;
 }
 
 export interface FindingReviewCaseFilterForm {
@@ -444,6 +455,7 @@ export function FindingReviewCasesPage({
   loadCases = getFindingReviewCases,
   loadDetail = getFindingReviewCase,
   createCase = createFindingReviewCase,
+  updateStatus = updateFindingReviewCaseStatus,
 }: Props) {
   const firstLocation = useMemo(() => locationFromParams(initialSearchParams), [initialSearchParams]);
   const [query, setQuery] = useState<FindingReviewCaseQuery>(firstLocation.query);
@@ -474,6 +486,14 @@ export function FindingReviewCasesPage({
   const detailFocusFrame = useRef<number | null>(null);
   const restoreFocusFrame = useRef<number | null>(null);
 
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusSuccess, setStatusSuccess] = useState<string | null>(null);
+  const [statusConflict, setStatusConflict] = useState(false);
+  const statusInFlight = useRef(false);
+  const statusController = useRef<AbortController | null>(null);
+  const statusSequence = useRef(0);
+
   const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
     firstLocation.requestedFindingId,
   );
@@ -496,6 +516,8 @@ export function FindingReviewCasesPage({
       listController.current?.abort();
       detailController.current?.abort();
       creationController.current?.abort();
+      statusSequence.current += 1;
+      statusController.current?.abort();
       if (detailFocusFrame.current !== null) {
         window.cancelAnimationFrame(detailFocusFrame.current);
         detailFocusFrame.current = null;
@@ -590,6 +612,7 @@ export function FindingReviewCasesPage({
       setExistingCaseId(null);
       setRequestedFindingId(restored.requestedFindingId);
       if (restored.caseId !== expandedIdRef.current) {
+        invalidateStatusRequest();
         invalidateDetailRequest();
         detailTrigger.current = null;
         expandedIdRef.current = restored.caseId;
@@ -672,6 +695,17 @@ export function FindingReviewCasesPage({
     }
   }
 
+  function invalidateStatusRequest(): void {
+    statusSequence.current += 1;
+    statusController.current?.abort();
+    statusController.current = null;
+    statusInFlight.current = false;
+    setStatusLoading(false);
+    setStatusError(null);
+    setStatusSuccess(null);
+    setStatusConflict(false);
+  }
+
   function updateQuery(next: FindingReviewCaseQuery, nextRequestedFindingId = requestedFindingId): void {
     invalidateListRequest();
     queryRef.current = next;
@@ -732,6 +766,7 @@ export function FindingReviewCasesPage({
       closeDetail(true);
       return;
     }
+    invalidateStatusRequest();
     invalidateDetailRequest();
     if (trigger) detailTrigger.current = trigger;
     else detailTrigger.current = null;
@@ -744,6 +779,7 @@ export function FindingReviewCasesPage({
   }
 
   function closeDetail(updateHistory: boolean): void {
+    invalidateStatusRequest();
     invalidateDetailRequest();
     expandedIdRef.current = null;
     setExpandedId(null);
@@ -770,6 +806,89 @@ export function FindingReviewCasesPage({
     setDetailError(null);
     setDetailLoading(true);
     setDetailReload((value) => value + 1);
+  }
+
+  async function submitStatusTransition(target: ActiveFindingReviewCaseStatus): Promise<void> {
+    const current = detail;
+    if (
+      !current
+      || expandedIdRef.current !== current.id
+      || statusInFlight.current
+      || !getAllowedFindingReviewCaseStatusDestinations(current.status).includes(target)
+    ) return;
+
+    invalidateDetailRequest();
+    const controller = new AbortController();
+    const sequence = ++statusSequence.current;
+    const expectedId = current.id;
+    const expectedVersion = current.version;
+    statusController.current = controller;
+    statusInFlight.current = true;
+    setStatusLoading(true);
+    setStatusError(null);
+    setStatusSuccess(null);
+    setStatusConflict(false);
+
+    try {
+      const updated = await updateStatus(expectedId, target, expectedVersion, {
+        signal: controller.signal,
+      });
+      if (
+        updated.id !== expectedId
+        || updated.status !== target
+        || updated.version !== expectedVersion + 1
+      ) {
+        throw new ApiError('A API retornou uma transição incompatível com a solicitação.', 502);
+      }
+      if (!canCommitStatus(sequence, controller, expectedId)) return;
+      setDetail((value) => value?.id === expectedId ? {
+        ...value,
+        status: updated.status,
+        version: updated.version,
+        updatedAt: updated.updatedAt,
+      } : value);
+      setStatusSuccess(`Status alterado para ${getFindingReviewCaseStatusLabel(updated.status)}.`);
+      setListReload((value) => value + 1);
+      setDetailReload((value) => value + 1);
+    } catch (cause) {
+      if (!canCommitStatus(sequence, controller, expectedId) || isAbort(cause)) return;
+      if (cause instanceof ApiError && cause.status === 409) {
+        setStatusConflict(true);
+        setStatusError('Este caso foi alterado por outra operação. Recarregue os dados antes de tentar novamente.');
+      } else if (cause instanceof ApiError && cause.status === 400) {
+        setStatusError('A transição solicitada não é permitida para o estado atual do caso.');
+      } else if (cause instanceof ApiError && cause.status === 404) {
+        setStatusError('O caso não foi encontrado. Recarregue a lista para confirmar sua situação.');
+      } else if (cause instanceof ApiError && cause.status === 503) {
+        setStatusError('As transições de casos estão indisponíveis neste ambiente. Nenhum dado foi alterado.');
+      } else {
+        setStatusConflict(true);
+        setStatusError('Não foi possível confirmar o resultado. Recarregue o caso para verificar o estado atual.');
+      }
+    } finally {
+      if (sequence === statusSequence.current) statusInFlight.current = false;
+      if (statusController.current === controller) statusController.current = null;
+      if (mounted.current && sequence === statusSequence.current) setStatusLoading(false);
+    }
+  }
+
+  function canCommitStatus(
+    sequence: number,
+    controller: AbortController,
+    expectedId: string,
+  ): boolean {
+    return mounted.current
+      && sequence === statusSequence.current
+      && !controller.signal.aborted
+      && expandedIdRef.current === expectedId;
+  }
+
+  function reloadAfterStatusConflict(): void {
+    setStatusError(null);
+    setStatusConflict(false);
+    setStatusSuccess(null);
+    retryDetail();
+    retryList();
   }
 
   async function submitCreation(): Promise<void> {
@@ -928,7 +1047,20 @@ export function FindingReviewCasesPage({
 
       {expandedId ? (
         <section id={DETAIL_PANEL_ID} className="review-case-detail" aria-labelledby="review-case-detail-title">
-          <ReviewCaseDetail detail={detail} loading={detailLoading} error={detailError} retry={retryDetail} close={() => closeDetail(true)} headingRef={detailHeading} />
+          <ReviewCaseDetail
+            detail={detail}
+            loading={detailLoading}
+            error={detailError}
+            retry={retryDetail}
+            close={() => closeDetail(true)}
+            headingRef={detailHeading}
+            statusLoading={statusLoading}
+            statusError={statusError}
+            statusSuccess={statusSuccess}
+            statusConflict={statusConflict}
+            submitStatus={submitStatusTransition}
+            reloadStatus={reloadAfterStatusConflict}
+          />
         </section>
       ) : null}
     </main>
@@ -942,6 +1074,12 @@ function ReviewCaseDetail({
   retry,
   close,
   headingRef,
+  statusLoading,
+  statusError,
+  statusSuccess,
+  statusConflict,
+  submitStatus,
+  reloadStatus,
 }: {
   detail: FindingReviewCaseDetail | null;
   loading: boolean;
@@ -949,6 +1087,12 @@ function ReviewCaseDetail({
   retry: () => void;
   close: () => void;
   headingRef: RefObject<HTMLHeadingElement | null>;
+  statusLoading: boolean;
+  statusError: string | null;
+  statusSuccess: string | null;
+  statusConflict: boolean;
+  submitStatus: (status: ActiveFindingReviewCaseStatus) => Promise<void>;
+  reloadStatus: () => void;
 }) {
   if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
   if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
@@ -957,11 +1101,79 @@ function ReviewCaseDetail({
     <>
       <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
       <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Atualidade</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}</dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
+      <StatusTransitionControl
+        key={`${detail.id}:${detail.status}:${detail.version}`}
+        detail={detail}
+        loading={statusLoading}
+        error={statusError}
+        success={statusSuccess}
+        conflict={statusConflict}
+        submit={submitStatus}
+        reload={reloadStatus}
+      />
       <div className="review-detail-grid">
         <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
-        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong><span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
+        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>
       <details className="review-snapshot"><summary>Visualizar snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
     </>
   );
+}
+
+function StatusTransitionControl({
+  detail,
+  loading,
+  error,
+  success,
+  conflict,
+  submit,
+  reload,
+}: {
+  detail: FindingReviewCaseDetail;
+  loading: boolean;
+  error: string | null;
+  success: string | null;
+  conflict: boolean;
+  submit: (status: ActiveFindingReviewCaseStatus) => Promise<void>;
+  reload: () => void;
+}) {
+  const destinations = getAllowedFindingReviewCaseStatusDestinations(detail.status);
+  const [target, setTarget] = useState<ActiveFindingReviewCaseStatus | ''>('');
+  const conflictAlert = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (conflict) conflictAlert.current?.focus();
+  }, [conflict]);
+
+  if (destinations.length === 0) {
+    return <section className="review-status-control" aria-labelledby="review-status-title"><h3 id="review-status-title">Estado operacional</h3><p>Este caso está em um estado terminal. Transições operacionais não estão disponíveis.</p></section>;
+  }
+
+  return (
+    <section className="review-status-control" aria-labelledby="review-status-title">
+      <div><h3 id="review-status-title">Alterar estado operacional</h3><p>Estado atual: <strong>{getFindingReviewCaseStatusLabel(detail.status)}</strong> · versão {detail.version}. A alteração não modifica o inventário.</p></div>
+      <form onSubmit={(event) => { event.preventDefault(); if (target) void submit(target); }}>
+        <label htmlFor="review-case-next-status">Novo estado</label>
+        <select id="review-case-next-status" value={target} disabled={loading || conflict} onChange={(event) => setTarget(event.target.value as ActiveFindingReviewCaseStatus | '')}>
+          <option value="">Selecione…</option>
+          {destinations.map((status) => <option key={status} value={status}>{getFindingReviewCaseStatusLabel(status)}</option>)}
+        </select>
+        <button className="button button-primary" type="submit" disabled={loading || conflict || !target}>{loading ? 'Alterando…' : 'Confirmar alteração'}</button>
+      </form>
+      {loading ? <p className="form-message" role="status" aria-live="polite">Alterando o estado do caso…</p> : null}
+      {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
+      {error ? <div ref={conflictAlert} className="form-message form-message-error" role="alert" tabIndex={conflict ? -1 : undefined}>{error}{conflict ? <button className="table-link-button" type="button" onClick={reload}> Recarregar caso</button> : null}</div> : null}
+    </section>
+  );
+}
+
+function formatStatusTransition(metadata: Record<string, string> | null) {
+  if (!metadata) return null;
+  const before = metadata.statusBefore;
+  const after = metadata.statusAfter;
+  if (
+    !FINDING_REVIEW_CASE_STATUSES.includes(before as FindingReviewCaseStatus)
+    || !FINDING_REVIEW_CASE_STATUSES.includes(after as FindingReviewCaseStatus)
+  ) return null;
+  return <span>{getFindingReviewCaseStatusLabel(before as FindingReviewCaseStatus)} → {getFindingReviewCaseStatusLabel(after as FindingReviewCaseStatus)}</span>;
 }

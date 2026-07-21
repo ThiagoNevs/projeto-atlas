@@ -171,8 +171,16 @@ Respostas conclusivas removem somente o registro correspondente mesmo quando o c
 desmontado ou a interface mudou de finding. O detalhe direciona o foco ao heading após sucesso ou erro e
 cancela frames pendentes em fechamento, troca de caso e unmount.
 
-Ainda não existem atribuição, comentários, decisões, refresh, mudança de status, reabertura, integração
-com `Conflict` ou Resolution Center. O finding derivado não passa a ser persistido como fonte de verdade.
+O detalhe agora permite as seis transições operacionais distintas entre `OPEN`, `IN_REVIEW` e
+`WAITING_FOR_EVIDENCE`. O backend usa `expectedVersion`, update condicional e incremento atômico;
+concorrência obsoleta retorna HTTP 409. Caso, evento append-only `CASE_STATUS_CHANGED` e `AuditLog`
+participam da mesma transação PostgreSQL, sem alterar o inventário. A interface oferece somente destinos
+válidos, bloqueia envio duplo, valida a resposta em runtime e exige recarregamento em conflito ou
+resultado de rede incerto. O endpoint não usa `Idempotency-Key`.
+
+Ainda não existem atribuição, comentários, decisões, refresh, estados terminais operacionais,
+reabertura, integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não
+representa autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 

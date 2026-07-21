@@ -4460,6 +4460,50 @@ input {
   color: var(--text);
 }
 
+.review-status-control {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(7, 16, 29, 0.42);
+}
+
+.review-status-control h3,
+.review-status-control p {
+  margin: 0;
+}
+
+.review-status-control > div > p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+}
+
+.review-status-control form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.review-status-control form label {
+  grid-column: 1;
+  color: var(--faint);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-status-control form select {
+  grid-column: 1;
+}
+
+.review-status-control form .button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
 .review-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4561,6 +4605,16 @@ input {
   .review-detail-toolbar > div:last-child {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .review-status-control form {
+    grid-template-columns: 1fr;
+  }
+
+  .review-status-control form .button {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
   }
 }
 

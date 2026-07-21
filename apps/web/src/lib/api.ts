@@ -12,15 +12,18 @@ import {
   type AssetEvidenceAnalysisResponse,
 } from './evidence-provenance.ts';
 import type {
+  ActiveFindingReviewCaseStatus,
   CreateFindingReviewCaseResponse,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
   FindingReviewCaseQuery,
+  UpdateFindingReviewCaseStatusResponse,
 } from './finding-review-cases.ts';
 import {
   parseCreateFindingReviewCaseResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
+  parseUpdateFindingReviewCaseStatusResponse,
   isFindingReviewCaseId,
   serializeFindingReviewCaseQuery,
 } from './finding-review-cases.ts';
@@ -61,6 +64,7 @@ export type {
   IdentityNetworkAnalysisResponse,
 } from './conflict-findings';
 export type {
+  ActiveFindingReviewCaseStatus,
   CreateFindingReviewCaseResponse,
   FindingReviewCaseAsset,
   FindingReviewCaseDetail,
@@ -72,6 +76,7 @@ export type {
   FindingReviewCaseStatus,
   FindingReviewSortDirection,
   FindingReviewStaleness,
+  UpdateFindingReviewCaseStatusResponse,
 } from './finding-review-cases';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -950,6 +955,25 @@ export async function createFindingReviewCase(
     },
     parseCreateFindingReviewCaseResponse,
     'A API retornou uma criação de caso de revisão inválida.',
+    options,
+  );
+}
+
+export async function updateFindingReviewCaseStatus(
+  id: string,
+  status: ActiveFindingReviewCaseStatus,
+  expectedVersion: number,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<UpdateFindingReviewCaseStatusResponse> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(id)}/status`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, expectedVersion }),
+    },
+    parseUpdateFindingReviewCaseStatusResponse,
+    'A API retornou uma transição de status inválida.',
     options,
   );
 }

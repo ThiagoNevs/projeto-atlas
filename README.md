@@ -122,8 +122,12 @@ revalidação de snapshots continuam fora do escopo.
 lista. `GET /conflict-review-cases/:id` retorna o snapshot original persistido, seu hash, identidades
 históricas dos ativos e eventos seguros. As leituras não recalculam findings, não criam auditoria e não
 alteram casos ou inventário. A interface em `/conflict-review-cases` lista, filtra e detalha casos e
-permite iniciar a criação a partir de um achado atual. Decisões, comentários, atribuição e refresh
-continuam fora do escopo.
+permite iniciar a criação a partir de um achado atual. No detalhe, estados operacionais ativos podem ser
+alterados entre Aberto, Em análise e Aguardando evidências. O PATCH usa `expectedVersion`, retorna 409
+quando outra operação vence a concorrência e registra evento e `AuditLog` na mesma transação. Essa
+operação não usa `Idempotency-Key`; em resultado de rede incerto, a interface exige recarregar o caso.
+Decisões, estados terminais, comentários, atribuição e refresh continuam fora do escopo. O ator
+`atlas-mvp-user` permanece provisório, sem autenticação ou RBAC.
 
 Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
 navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e trata como incerto um
