@@ -31,6 +31,7 @@ import {
 import { FindingReviewCasesFeature } from './finding-review-cases.feature';
 import {
   FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+  isUpdatableFindingReviewCaseVersion,
   isAllowedFindingReviewCaseStatusTransition,
 } from './finding-review-case-status-transition';
 
@@ -333,6 +334,13 @@ export class FindingReviewCasesService {
 
   async updateStatus(id: string, payload: UpdateFindingReviewCaseStatusDto) {
     this.feature.assertEnabled();
+    if (!isUpdatableFindingReviewCaseVersion(payload.expectedVersion)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_FINDING_REVIEW_CASE_EXPECTED_VERSION',
+        message: 'A versão esperada excede o limite persistível para uma transição.',
+      });
+    }
     const occurredAt = new Date();
 
     return this.prisma.$transaction(async (transaction) => {

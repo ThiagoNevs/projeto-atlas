@@ -845,6 +845,11 @@ vez e retorna HTTP 409 quando outra operação atualizou o caso primeiro. Em suc
 `CASE_STATUS_CHANGED` e `AuditLog` na mesma transação PostgreSQL; nenhuma tabela do inventário é
 alterada.
 
+`FindingReviewCase.version` é persistida como PostgreSQL `INT4`. Como a operação grava
+`expectedVersion + 1`, o maior valor aceito no request é `2147483646`. `2147483647` e valores
+superiores retornam HTTP 400 durante a validação, antes de qualquer transação, evento ou `AuditLog`;
+detalhes Prisma como `P2020` nunca fazem parte da resposta.
+
 Esse PATCH não usa `Idempotency-Key` e não deve receber retry automático. Se a conexão falhar ou
 expirar, o resultado pode ser incerto: consulte novamente o detalhe antes de oferecer outra alteração.
 Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quanto essa verificação explícita.

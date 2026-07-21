@@ -126,6 +126,9 @@ permite iniciar a criação a partir de um achado atual. No detalhe, estados ope
 alterados entre Aberto, Em análise e Aguardando evidências. O PATCH usa `expectedVersion`, retorna 409
 quando outra operação vence a concorrência e registra evento e `AuditLog` na mesma transação. Essa
 operação não usa `Idempotency-Key`; em resultado de rede incerto, a interface exige recarregar o caso.
+Como a versão é um PostgreSQL `INT4` e a transição sempre incrementa o valor, o maior
+`expectedVersion` aceito é `2147483646`. Valores superiores retornam HTTP 400 antes da transação,
+sem escrita e sem exposição de erro Prisma.
 Decisões, estados terminais, comentários, atribuição e refresh continuam fora do escopo. O ator
 `atlas-mvp-user` permanece provisório, sem autenticação ou RBAC.
 

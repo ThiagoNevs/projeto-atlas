@@ -177,6 +177,9 @@ concorrência obsoleta retorna HTTP 409. Caso, evento append-only `CASE_STATUS_C
 participam da mesma transação PostgreSQL, sem alterar o inventário. A interface oferece somente destinos
 válidos, bloqueia envio duplo, valida a resposta em runtime e exige recarregamento em conflito ou
 resultado de rede incerto. O endpoint não usa `Idempotency-Key`.
+O `expectedVersion` é limitado a `2147483646`: a coluna é PostgreSQL `INT4` e o próximo valor precisa
+continuar persistível após o incremento. Valores fora desse intervalo retornam HTTP 400 antes da
+transação e não alteram caso, evento ou auditoria.
 
 Ainda não existem atribuição, comentários, decisões, refresh, estados terminais operacionais,
 reabertura, integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não

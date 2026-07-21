@@ -15,10 +15,12 @@ import { UpdateFindingReviewCaseStatusDto } from '../src/finding-review-cases/dt
 import {
   ACTIVE_FINDING_REVIEW_CASE_STATUSES,
   FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
+  MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION,
   isAllowedFindingReviewCaseStatusTransition,
   type ActiveFindingReviewCaseStatus,
 } from '../src/finding-review-cases/finding-review-case-status-transition';
 import { FINDING_REVIEW_CASES_FEATURE_FLAG } from '../src/finding-review-cases/finding-review-cases.feature';
+import { FindingReviewCasesService } from '../src/finding-review-cases/finding-review-cases.service';
 import {
   FindingReviewCaseStatus,
   FindingReviewStaleness,
@@ -31,11 +33,13 @@ type UnknownFunction = (...args: unknown[]) => unknown;
 
 class StatusFaultInjectingPrismaService extends PrismaService {
   private failureStep: FailureStep | null = null;
+  private transactionCalls = 0;
 
   constructor() {
     super();
     const realTransaction = this.$transaction.bind(this) as unknown as UnknownFunction;
     this.$transaction = ((input: unknown, ...options: unknown[]) => {
+      this.transactionCalls += 1;
       if (typeof input !== 'function') {
         return Reflect.apply(realTransaction, this, [input, ...options]);
       }
@@ -53,6 +57,10 @@ class StatusFaultInjectingPrismaService extends PrismaService {
 
   clearFailure(): void {
     this.failureStep = null;
+  }
+
+  getTransactionCalls(): number {
+    return this.transactionCalls;
   }
 
   private wrapTransaction(client: Prisma.TransactionClient): Prisma.TransactionClient {
@@ -110,12 +118,25 @@ describe('Finding review case status transition contract', () => {
     [{ status: 'OPEN', expectedVersion: 1.5 }, ['expectedVersion']],
     [{ status: 'OPEN', expectedVersion: '1' }, ['expectedVersion']],
     [{ status: 'OPEN', expectedVersion: null }, ['expectedVersion']],
-    [{ status: 'OPEN', expectedVersion: Number.MAX_SAFE_INTEGER + 1 }, ['expectedVersion']],
+    [{ status: 'OPEN', expectedVersion: Number.NaN }, ['expectedVersion']],
+    [{ status: 'OPEN', expectedVersion: Number.POSITIVE_INFINITY }, ['expectedVersion']],
+    [{ status: 'OPEN', expectedVersion: 2_147_483_647 }, ['expectedVersion']],
+    [{ status: 'OPEN', expectedVersion: 2_147_483_648 }, ['expectedVersion']],
+    [{ status: 'OPEN', expectedVersion: Number.MAX_SAFE_INTEGER }, ['expectedVersion']],
   ])('rejects invalid body %p', async (input, properties) => {
     const errors = await validate(plainToInstance(UpdateFindingReviewCaseStatusDto, input));
     for (const property of properties) {
       expect(errors.some((error) => error.property === property)).toBe(true);
     }
+  });
+
+  it('accepts the largest expectedVersion whose increment remains persistible as INT4', async () => {
+    const dto = plainToInstance(UpdateFindingReviewCaseStatusDto, {
+      status: 'IN_REVIEW',
+      expectedVersion: MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION,
+    });
+    expect(await validate(dto)).toEqual([]);
+    expect(MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION).toBe(2_147_483_646);
   });
 
   it('allows exactly the six transitions between distinct active states', () => {
@@ -139,6 +160,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
   let app: INestApplication;
   let server: Server;
   let prisma: StatusFaultInjectingPrismaService;
+  let cases: FindingReviewCasesService;
   const testRunId = randomUUID();
   const caseIds = new Set<string>();
   const previousFlag = process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
@@ -158,6 +180,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     await app.init();
     server = app.getHttpServer() as Server;
     prisma = app.get<StatusFaultInjectingPrismaService>(PrismaService);
+    cases = app.get(FindingReviewCasesService);
   });
 
   afterAll(async () => {
@@ -329,7 +352,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     expect(await persistenceCounts(id)).toEqual({ events: 1, audits: 0 });
   });
 
-  it.each([0, -1, 1.5, '1', null, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([0, -1, 1.5, '1', null])(
     'rejects invalid expectedVersion %p through HTTP',
     async (expectedVersion) => {
       const id = await createCase();
@@ -338,6 +361,63 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
       expect(await persistenceCounts(id)).toEqual({ events: 1, audits: 0 });
     },
   );
+
+  it.each([2_147_483_647, 2_147_483_648, Number.MAX_SAFE_INTEGER])(
+    'rejects non-persistible expectedVersion %p before starting a transaction',
+    async (expectedVersion) => {
+      const id = await createCase();
+      const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
+      const persistenceBefore = await persistenceCounts(id);
+      const transactionCallsBefore = prisma.getTransactionCalls();
+
+      const response = await patchStatus(
+        id,
+        FindingReviewCaseStatus.IN_REVIEW,
+        expectedVersion,
+      );
+
+      expect(response.status).toBe(400);
+      expect(JSON.stringify(response.body)).not.toMatch(/P2020|Prisma|out of range/i);
+      expect(prisma.getTransactionCalls()).toBe(transactionCallsBefore);
+      expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } })).toEqual(caseBefore);
+      expect(await persistenceCounts(id)).toEqual(persistenceBefore);
+    },
+  );
+
+  it('increments the largest accepted expectedVersion to the INT4 maximum', async () => {
+    const id = await createCase(
+      FindingReviewCaseStatus.OPEN,
+      MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION,
+    );
+
+    const response = await patchStatus(
+      id,
+      FindingReviewCaseStatus.IN_REVIEW,
+      MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION,
+    );
+
+    expect(response.status).toBe(200);
+    expect(responseBody<{ version: number }>(response).version).toBe(2_147_483_647);
+    const persisted = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
+    expect(persisted.version).toBe(2_147_483_647);
+    expect(await persistenceCounts(id)).toEqual({ events: 2, audits: 1 });
+  });
+
+  it('defensively rejects a non-persistible version when the service is called directly', async () => {
+    const id = await createCase();
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
+    const persistenceBefore = await persistenceCounts(id);
+    const transactionCallsBefore = prisma.getTransactionCalls();
+
+    await expect(cases.updateStatus(id, {
+      status: FindingReviewCaseStatus.IN_REVIEW,
+      expectedVersion: 2_147_483_647,
+    })).rejects.toMatchObject({ status: 400 });
+
+    expect(prisma.getTransactionCalls()).toBe(transactionCallsBefore);
+    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } })).toEqual(caseBefore);
+    expect(await persistenceCounts(id)).toEqual(persistenceBefore);
+  });
 
   it('returns 503 while the feature is disabled without writes', async () => {
     const id = await createCase();

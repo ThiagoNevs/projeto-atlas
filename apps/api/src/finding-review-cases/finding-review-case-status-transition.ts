@@ -11,6 +11,19 @@ export type ActiveFindingReviewCaseStatus =
 
 export const FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT = 'CASE_STATUS_CHANGED';
 
+export const POSTGRES_INT4_MAX = 2_147_483_647;
+
+// A transição sempre incrementa a versão em um. O valor recebido precisa
+// reservar espaço para que versionAfter continue persistível como PostgreSQL INT4.
+export const MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION = POSTGRES_INT4_MAX - 1;
+
+export function isUpdatableFindingReviewCaseVersion(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= 1
+    && value <= MAX_UPDATABLE_FINDING_REVIEW_CASE_VERSION;
+}
+
 export function isAllowedFindingReviewCaseStatusTransition(
   current: FindingReviewCaseStatus,
   next: ActiveFindingReviewCaseStatus,

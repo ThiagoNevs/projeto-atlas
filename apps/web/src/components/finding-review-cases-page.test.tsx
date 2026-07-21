@@ -1604,6 +1604,58 @@ test('clique duplo mantém uma única transição em voo', async () => {
   }
 });
 
+test('Enter e clique quase simultâneos enviam uma única transição', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  const updates: Array<{ id: string; status: string; version: number }> = [];
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async (id, status, version) => {
+      updates.push({ id, status, version });
+      return pending.promise;
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>(
+      '#review-case-next-status',
+    );
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    const button = findButton(harness.environment.container, 'Confirmar alteração');
+    const form = button.closest('form');
+    assert.ok(form);
+
+    await act(async () => {
+      form.dispatchEvent(new harness.environment.window.Event('submit', {
+        bubbles: true,
+        cancelable: true,
+      }));
+      button.click();
+      await flush();
+    });
+
+    assert.deepEqual(updates, [{ id: CASE_ID, status: 'IN_REVIEW', version: 1 }]);
+    await act(async () => {
+      pending.resolve({
+        id: CASE_ID,
+        status: 'IN_REVIEW',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+      });
+      await flush();
+    });
+    assert.equal(
+      (harness.environment.container.textContent ?? '').match(/Status alterado para Em análise/g)
+        ?.length,
+      1,
+    );
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
 test('resultado incerto não repete PATCH e orienta recarregar antes de nova tentativa', async () => {
   let updates = 0;
   const harness = await renderPage({
