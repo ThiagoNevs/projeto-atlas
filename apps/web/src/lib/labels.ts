@@ -106,6 +106,8 @@ const evidenceTypeLabels: Record<string, string> = {
 };
 
 const auditActionLabels: Record<string, string> = {
+  CASE_CREATED: 'Caso de revisão criado',
+  CASE_STATUS_CHANGED: 'Status do caso de revisão alterado',
   ADMIN_STATUS_CHANGED: 'Status administrativo alterado',
   CONFLICT_STATUS_CHANGED: 'Status do conflito alterado',
   NETWORK_DISCOVERY_RUN_EXECUTED: 'Descoberta de rede executada',
@@ -131,6 +133,7 @@ const auditActorTypeLabels: Record<string, string> = {
 };
 
 const auditEntityTypeLabels: Record<string, string> = {
+  FINDINGREVIEWCASE: 'Caso de revisão',
   ASSET: 'Ativo',
   CONFLICT: 'Conflito',
   NETWORKDISCOVERYRUN: 'Execução de descoberta',
@@ -148,7 +151,9 @@ const auditValueLabels: Record<string, string> = {
   ARCHIVED: 'Arquivado',
   OPEN: 'Aberto',
   IN_REVIEW: 'Em análise',
+  WAITING_FOR_EVIDENCE: 'Aguardando evidências',
   RESOLVED: 'Resolvido',
+  DISMISSED: 'Descartado',
   IGNORED: 'Ignorado',
   EXCEPTION: 'Exceção',
   RUNNING: 'Em execução',
