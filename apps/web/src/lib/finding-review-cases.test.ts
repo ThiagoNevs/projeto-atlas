@@ -5,17 +5,20 @@ import {
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
+  updateFindingReviewCaseStatus,
 } from './api.ts';
 import { ApiError } from './api-error.ts';
 import {
   createFindingReviewIdempotencyKey,
   getFindingReviewCaseStatusLabel,
+  getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewEventLabel,
   getFindingReviewStalenessLabel,
   isFindingReviewTimestamp,
   parseCreateFindingReviewCaseResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
+  parseUpdateFindingReviewCaseStatusResponse,
   serializeFindingReviewCaseQuery,
 } from './finding-review-cases.ts';
 
@@ -90,6 +93,20 @@ test('traduz status, atualidade e eventos sem exibir enums técnicos', () => {
   assert.equal(getFindingReviewCaseStatusLabel('IN_REVIEW'), 'Em análise');
   assert.equal(getFindingReviewStalenessLabel('NO_LONGER_DETECTED'), 'Não detectado atualmente');
   assert.equal(getFindingReviewEventLabel('CASE_CREATED'), 'Caso criado');
+  assert.equal(getFindingReviewEventLabel('CASE_STATUS_CHANGED'), 'Status do caso alterado');
+  assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('OPEN'), [
+    'IN_REVIEW',
+    'WAITING_FOR_EVIDENCE',
+  ]);
+  assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('RESOLVED'), []);
+});
+
+test('parser da transição aceita apenas resposta mínima estruturalmente válida', () => {
+  const response = { id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: NOW };
+  assert.deepEqual(parseUpdateFindingReviewCaseStatusResponse(response), response);
+  assert.equal(parseUpdateFindingReviewCaseStatusResponse({ ...response, status: 'RESOLVED' }), null);
+  assert.equal(parseUpdateFindingReviewCaseStatusResponse({ ...response, version: 0 }), null);
+  assert.equal(parseUpdateFindingReviewCaseStatusResponse({ ...response, updatedAt: '2026-02-30T12:00:00Z' }), null);
 });
 
 test('serializa filtros e paginação com os nomes do contrato da API', () => {
@@ -247,4 +264,39 @@ test('criação diferencia 201 e replay 200 sem alterar o contrato enviado', asy
   assert.equal(replayed.idempotentReplay, true);
   assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-key');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { findingId: FINDING_ID });
+});
+
+test('transição usa PATCH, expectedVersion e não envia Idempotency-Key', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: NOW });
+  };
+  const updated = await updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+    fetchImplementation,
+  });
+  assert.equal(updated.version, 2);
+  assert.equal(calls[0]?.init.method, 'PATCH');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    status: 'IN_REVIEW',
+    expectedVersion: 1,
+  });
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers['Idempotency-Key'], undefined);
+  assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/status$`));
+});
+
+test('transição rejeita resposta runtime inválida e preserva erros HTTP controlados', async () => {
+  await assert.rejects(
+    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+      fetchImplementation: async () => Response.json({ id: CASE_ID, status: 'IN_REVIEW', version: 1 }),
+    }),
+    (error: unknown) => error instanceof ApiError && error.status === 502,
+  );
+  await assert.rejects(
+    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+      fetchImplementation: async () => Response.json({ message: 'Versão obsoleta.' }, { status: 409 }),
+    }),
+    (error: unknown) => error instanceof ApiError && error.status === 409,
+  );
 });

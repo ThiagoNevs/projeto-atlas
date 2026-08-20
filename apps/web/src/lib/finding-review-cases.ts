@@ -9,6 +9,12 @@ export const FINDING_REVIEW_CASE_STATUSES = [
   'CANCELLED',
 ] as const;
 
+export const ACTIVE_FINDING_REVIEW_CASE_STATUSES = [
+  'OPEN',
+  'IN_REVIEW',
+  'WAITING_FOR_EVIDENCE',
+] as const;
+
 export const FINDING_REVIEW_STALENESSES = [
   'CURRENT',
   'CHANGED',
@@ -21,6 +27,7 @@ export const FINDING_REVIEW_STALENESSES = [
 export const FINDING_REVIEW_SORT_FIELDS = ['createdAt', 'updatedAt', 'status', 'staleness'] as const;
 
 export type FindingReviewCaseStatus = (typeof FINDING_REVIEW_CASE_STATUSES)[number];
+export type ActiveFindingReviewCaseStatus = (typeof ACTIVE_FINDING_REVIEW_CASE_STATUSES)[number];
 export type FindingReviewStaleness = (typeof FINDING_REVIEW_STALENESSES)[number];
 export type FindingReviewCaseSortField = (typeof FINDING_REVIEW_SORT_FIELDS)[number];
 export type FindingReviewSortDirection = 'asc' | 'desc';
@@ -102,6 +109,13 @@ export interface CreateFindingReviewCaseResponse {
   idempotentReplay: boolean;
 }
 
+export interface UpdateFindingReviewCaseStatusResponse {
+  id: string;
+  status: ActiveFindingReviewCaseStatus;
+  version: number;
+  updatedAt: string;
+}
+
 export const DEFAULT_FINDING_REVIEW_CASE_QUERY: Required<
   Pick<FindingReviewCaseQuery, 'page' | 'pageSize' | 'sortBy' | 'sortDirection'>
 > = { page: 1, pageSize: 25, sortBy: 'createdAt', sortDirection: 'desc' };
@@ -139,7 +153,18 @@ export function getFindingReviewStalenessLabel(value: FindingReviewStaleness): s
 }
 
 export function getFindingReviewEventLabel(value: string): string {
-  return value === 'CASE_CREATED' ? 'Caso criado' : 'Evento do caso';
+  if (value === 'CASE_CREATED') return 'Caso criado';
+  if (value === 'CASE_STATUS_CHANGED') return 'Status do caso alterado';
+  return 'Evento do caso';
+}
+
+export function getAllowedFindingReviewCaseStatusDestinations(
+  current: FindingReviewCaseStatus,
+): ActiveFindingReviewCaseStatus[] {
+  if (!ACTIVE_FINDING_REVIEW_CASE_STATUSES.includes(current as ActiveFindingReviewCaseStatus)) {
+    return [];
+  }
+  return ACTIVE_FINDING_REVIEW_CASE_STATUSES.filter((status) => status !== current);
 }
 
 export function serializeFindingReviewCaseQuery(query: FindingReviewCaseQuery): string {
@@ -270,6 +295,28 @@ export function parseCreateFindingReviewCaseResponse(
     findingGeneratedAt: value.findingGeneratedAt,
     createdAt: value.createdAt,
     idempotentReplay: value.idempotentReplay,
+  };
+}
+
+export function parseUpdateFindingReviewCaseStatusResponse(
+  value: unknown,
+): UpdateFindingReviewCaseStatusResponse | null {
+  if (
+    !isRecord(value)
+    || !isFindingReviewCaseId(value.id)
+    || !ACTIVE_FINDING_REVIEW_CASE_STATUSES.includes(
+      value.status as ActiveFindingReviewCaseStatus,
+    )
+    || !isPositiveInteger(value.version)
+    || !isFindingReviewTimestamp(value.updatedAt)
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    status: value.status as ActiveFindingReviewCaseStatus,
+    version: value.version,
+    updatedAt: value.updatedAt,
   };
 }
 

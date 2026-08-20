@@ -816,6 +816,46 @@ ID. A metadata é filtrada por whitelist e não inclui fingerprint, chave idempo
 internos do assunto. A leitura não recalcula o finding, não compara o snapshot com o estado atual, não
 altera staleness, não cria `AuditLog` e não atualiza o inventário.
 
+### Alterar estado operacional do caso
+
+O endpoint aceita somente estados operacionais ativos e exige a versão atualmente apresentada ao
+usuário:
+
+```powershell
+curl.exe -X PATCH http://localhost:3001/conflict-review-cases/CASE_UUID/status `
+  -H "Content-Type: application/json" `
+  -d '{"status":"IN_REVIEW","expectedVersion":1}'
+```
+
+Resposta mínima em sucesso:
+
+```json
+{
+  "id": "CASE_UUID",
+  "status": "IN_REVIEW",
+  "version": 2,
+  "updatedAt": "2026-07-20T12:05:00.000Z"
+}
+```
+
+São permitidas somente as seis transições distintas entre `OPEN`, `IN_REVIEW` e
+`WAITING_FOR_EVIDENCE`. O mesmo estado e os destinos `RESOLVED`, `DISMISSED` e `CANCELLED` são
+rejeitados nesta etapa. A atualização é condicionada por `expectedVersion`, incrementa a versão uma
+vez e retorna HTTP 409 quando outra operação atualizou o caso primeiro. Em sucesso, o backend cria
+`CASE_STATUS_CHANGED` e `AuditLog` na mesma transação PostgreSQL; nenhuma tabela do inventário é
+alterada.
+
+`FindingReviewCase.version` é persistida como PostgreSQL `INT4`. Como a operação grava
+`expectedVersion + 1`, o maior valor aceito no request é `2147483646`. `2147483647` e valores
+superiores retornam HTTP 400 durante a validação, antes de qualquer transação, evento ou `AuditLog`;
+detalhes Prisma como `P2020` nunca fazem parte da resposta.
+
+Esse PATCH não usa `Idempotency-Key` e não deve receber retry automático. Se a conexão falhar ou
+expirar, o resultado pode ser incerto: consulte novamente o detalhe antes de oferecer outra alteração.
+Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quanto essa verificação explícita.
+O ator `atlas-mvp-user` continua provisório; autenticação, RBAC e transições terminais permanecem
+futuros.
+
 ### Criar caso
 
 Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:

@@ -1503,3 +1503,253 @@ test('erros 400 e 404 são conclusivos e recebem mensagens controladas', async (
     }
   }
 });
+
+test('altera o estado com a versão atual, confirma o sucesso e recarrega caso e lista', async () => {
+  const updates: Array<{ id: string; status: string; version: number }> = [];
+  let detailLoads = 0;
+  let listLoads = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => { listLoads += 1; return listResponse; },
+    loadDetail: async () => {
+      detailLoads += 1;
+      return detailLoads === 1 ? detailResponse : {
+        ...detailResponse,
+        status: 'IN_REVIEW',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+        events: [...detailResponse.events, {
+          id: SECOND_CASE_ID,
+          eventType: 'CASE_STATUS_CHANGED',
+          versionBefore: 1,
+          versionAfter: 2,
+          actor: 'atlas-mvp-user',
+          metadata: { statusBefore: 'OPEN', statusAfter: 'IN_REVIEW' },
+          createdAt: '2026-07-20T12:05:00.000Z',
+        }],
+      };
+    },
+    updateStatus: async (id, status, version) => {
+      updates.push({ id, status, version });
+      return { id, status, version: version + 1, updatedAt: '2026-07-20T12:05:00.000Z' };
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+    assert.deepEqual(updates, [{ id: CASE_ID, status: 'IN_REVIEW', version: 1 }]);
+    assert.match(harness.environment.container.textContent ?? '', /Status alterado para Em análise/);
+    assert.match(harness.environment.container.textContent ?? '', /Status do caso alterado/);
+    assert.ok(detailLoads >= 2);
+    assert.ok(listLoads >= 2);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('conflito 409 não faz retry automático e exige recarregamento explícito', async () => {
+  let updates = 0;
+  let detailLoads = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => { detailLoads += 1; return detailResponse; },
+    updateStatus: async () => { updates += 1; throw new ApiError('stale internals', 409); },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+    assert.equal(updates, 1);
+    assert.equal(detailLoads, 1);
+    assert.match(harness.environment.container.textContent ?? '', /alterado por outra operação/);
+    assert.doesNotMatch(harness.environment.container.textContent ?? '', /stale internals/);
+    const alert = harness.environment.container.querySelector('[role="alert"]');
+    assert.ok(alert);
+    assert.equal(harness.environment.window.document.activeElement, alert);
+    await act(async () => { findButton(harness.environment.container, 'Recarregar caso').click(); await flush(); });
+    assert.equal(updates, 1);
+    assert.ok(detailLoads >= 2);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('clique duplo mantém uma única transição em voo', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  let updates = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => { updates += 1; return pending.promise; },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    const button = findButton(harness.environment.container, 'Confirmar alteração');
+    await act(async () => { button.click(); button.click(); await flush(); });
+    assert.equal(updates, 1);
+    assert.equal(button.disabled, true);
+    await act(async () => { pending.resolve({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: '2026-07-20T12:05:00.000Z' }); await flush(); });
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('Enter e clique quase simultâneos enviam uma única transição', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  const updates: Array<{ id: string; status: string; version: number }> = [];
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async (id, status, version) => {
+      updates.push({ id, status, version });
+      return pending.promise;
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>(
+      '#review-case-next-status',
+    );
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    const button = findButton(harness.environment.container, 'Confirmar alteração');
+    const form = button.closest('form');
+    assert.ok(form);
+
+    await act(async () => {
+      form.dispatchEvent(new harness.environment.window.Event('submit', {
+        bubbles: true,
+        cancelable: true,
+      }));
+      button.click();
+      await flush();
+    });
+
+    assert.deepEqual(updates, [{ id: CASE_ID, status: 'IN_REVIEW', version: 1 }]);
+    await act(async () => {
+      pending.resolve({
+        id: CASE_ID,
+        status: 'IN_REVIEW',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+      });
+      await flush();
+    });
+    assert.equal(
+      (harness.environment.container.textContent ?? '').match(/Status alterado para Em análise/g)
+        ?.length,
+      1,
+    );
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resultado incerto não repete PATCH e orienta recarregar antes de nova tentativa', async () => {
+  let updates = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => { updates += 1; throw new ApiError('timeout detail', 408); },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+    assert.equal(updates, 1);
+    assert.match(harness.environment.container.textContent ?? '', /Não foi possível confirmar o resultado/);
+    assert.doesNotMatch(harness.environment.container.textContent ?? '', /timeout detail/);
+    assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+    assert.equal(findButton(harness.environment.container, 'Confirmar alteração').disabled, true);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resposta tardia da transição é ignorada depois de fechar o caso', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => pending.promise,
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Fechar detalhe').click(); await flush(); });
+    await act(async () => { pending.resolve({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: '2026-07-20T12:05:00.000Z' }); await flush(); });
+    assert.equal(harness.environment.container.querySelector('#review-case-detail-title'), null);
+    assert.doesNotMatch(harness.environment.container.textContent ?? '', /Status alterado para/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resposta tardia da transição não atualiza outro caso após navegação', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  const secondDetail: FindingReviewCaseDetail = {
+    ...detailResponse,
+    id: SECOND_CASE_ID,
+    findingId: SECOND_FINDING_ID,
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async (id) => id === SECOND_CASE_ID ? secondDetail : detailResponse,
+    updateStatus: async () => pending.promise,
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+    harness.environment.window.history.pushState(null, '', `/conflict-review-cases?caseId=${SECOND_CASE_ID}`);
+    await act(async () => {
+      harness.environment.window.dispatchEvent(new harness.environment.window.PopStateEvent('popstate'));
+      await flush();
+    });
+    await act(async () => { pending.resolve({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: '2026-07-20T12:05:00.000Z' }); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', new RegExp(SECOND_CASE_ID));
+    assert.doesNotMatch(harness.environment.container.textContent ?? '', /Status alterado para/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resposta da transição após unmount não atualiza React', async () => {
+  const pending = deferred<{ id: string; status: 'IN_REVIEW'; version: number; updatedAt: string }>();
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => pending.promise,
+  });
+  await act(async () => { await flush(); });
+  const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+  assert.ok(select);
+  await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+  await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
+  await act(async () => harness.root.unmount());
+  await act(async () => { pending.resolve({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: '2026-07-20T12:05:00.000Z' }); await flush(); });
+  assert.equal(harness.environment.container.textContent, '');
+  harness.environment.cleanup();
+});

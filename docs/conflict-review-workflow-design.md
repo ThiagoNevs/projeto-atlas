@@ -551,9 +551,9 @@ ser aceito como identidade produtiva.
 
 ## 14. Contratos de API
 
-Os contratos mínimos de criação e leitura foram implementados sob o prefixo
-`/conflict-review-cases`. Os contratos de decisão, comentários, atribuição e refresh abaixo permanecem
-propostos e fora do MVP atual.
+Os contratos mínimos de criação, leitura e transição operacional ativa foram implementados sob o
+prefixo `/conflict-review-cases`. Os contratos de decisão, comentários, atribuição e refresh abaixo
+permanecem propostos e fora do MVP atual.
 
 ### 14.1 `POST /conflict-review-cases` — implementado
 
@@ -580,13 +580,18 @@ propostos e fora do MVP atual.
 - **Erros:** `400`, `404` e `503` controlados.
 - **Efeitos:** nenhum; não recalcula implicitamente se isso alterar histórico.
 
-### 14.4 `PATCH /conflict-review-cases/:id/status` — proposto
+### 14.4 `PATCH /conflict-review-cases/:id/status` — implementado para estados ativos
 
-- **Request:** `status`, `reason`, `comment`, `expectedVersion`.
-- **Validações:** máquina de estados, campos obrigatórios e permissão.
-- **Idempotência:** chave obrigatória.
-- **Concorrência:** `409` em versão divergente.
-- **Efeitos:** atualiza caso e cria eventos/auditoria na mesma transação.
+- **Request:** somente `status` e `expectedVersion`.
+- **Matriz atual:** as seis transições distintas entre `OPEN`, `IN_REVIEW` e
+  `WAITING_FOR_EVIDENCE`; o mesmo estado e os estados terminais são rejeitados.
+- **Idempotência:** não utiliza `Idempotency-Key`; uma resposta de rede incerta exige leitura do caso
+  antes de nova tentativa.
+- **Concorrência:** update condicional por ID, versão e estado atual; versão divergente retorna `409`.
+- **Efeitos:** incrementa a versão e atualiza o estado e `updatedAt`, cria `CASE_STATUS_CHANGED` e
+  `AuditLog` na mesma transação PostgreSQL. Não altera inventário.
+- **Limitações:** ator `atlas-mvp-user` provisório; autenticação e RBAC ainda não existem. Transições
+  para `RESOLVED`, `DISMISSED` e `CANCELLED` dependem do fluxo futuro de decisão.
 
 ### 14.5 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
@@ -629,7 +634,7 @@ propostos e fora do MVP atual.
 | --- | --- | --- | --- | --- |
 | criar caso | `case:create` | header obrigatório | constraint por assunto ativo | caso criado |
 | listar/detalhar | `case:read` | não aplicável | ETag no detalhe | leitura não auditada por padrão |
-| mudar status | `case:transition` | header obrigatório | versão/`If-Match` | estado anterior e novo |
+| mudar status ativo | futura `case:transition` | não usa chave idempotente | `expectedVersion` no body | estado e versão anteriores e novos |
 | atribuir | `case:assign` | header obrigatório | versão/`If-Match` | responsável anterior e novo |
 | comentar | `case:comment` | request ID único | append + versão esperada | metadata, sem copiar corpo em log técnico |
 | decidir | `case:decide` | header obrigatório | versão/`If-Match` | decisão anterior e nova |
