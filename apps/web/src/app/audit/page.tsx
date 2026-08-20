@@ -1,11 +1,17 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import Link from 'next/link.js';
 
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
 import { AuditLogQueryParams, AuditLogRecord, AuditLogResponse, getAuditLogs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import {
+  getFindingReviewCaseStatusLabel,
+  isFindingReviewCaseId,
+  isFindingReviewCaseStatus,
+} from '@/lib/finding-review-cases';
 import {
   getAttributeLabel,
   getAuditActionLabel,
@@ -15,13 +21,21 @@ import {
 } from '@/lib/labels';
 
 const actions = [
+  'CASE_CREATED',
+  'CASE_STATUS_CHANGED',
   'ADMIN_STATUS_CHANGED',
   'CONFLICT_STATUS_CHANGED',
   'NETWORK_DISCOVERY_RUN_EXECUTED',
   'NETWORK_DISCOVERY_RUN_REJECTED',
   'NETWORK_DISCOVERY_RUN_FAILED',
 ];
-const entityTypes = ['Asset', 'Conflict', 'NetworkDiscoveryRun', 'NetworkDiscoveryProfile'];
+const entityTypes = [
+  'FindingReviewCase',
+  'Asset',
+  'Conflict',
+  'NetworkDiscoveryRun',
+  'NetworkDiscoveryProfile',
+];
 const actorTypes = ['USER', 'SYSTEM', 'SERVICE'];
 
 type FilterForm = {
@@ -70,7 +84,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function compactValue(value: unknown): string {
+export function getAuditPresentedValueLabel(entityType: string, value: string): string {
+  if (entityType === 'FindingReviewCase' && isFindingReviewCaseStatus(value)) {
+    return getFindingReviewCaseStatusLabel(value);
+  }
+  return getAuditValueLabel(value);
+}
+
+function compactValue(value: unknown, entityType: string): string {
   if (!isRecord(value)) return 'Não informado';
   const entries = Object.entries(value);
   if (entries.length === 0) return 'Não informado';
@@ -78,7 +99,9 @@ function compactValue(value: unknown): string {
   return entries
     .slice(0, 2)
     .map(([key, entry]) => {
-      const shownValue = typeof entry === 'string' ? getAuditValueLabel(entry) : String(entry);
+      const shownValue = typeof entry === 'string'
+        ? getAuditPresentedValueLabel(entityType, entry)
+        : String(entry);
       return `${getAttributeLabel(key)}: ${shownValue}`;
     })
     .join(' · ');
@@ -91,16 +114,45 @@ function metadataText(metadata: unknown): string {
   return [reason, comment].filter(Boolean).join(' · ') || 'Não informado';
 }
 
-function JsonDetails({ label, value }: { label: string; value: unknown }) {
+export function getAuditEntityHref(entityType: string, entityId: unknown): string | null {
+  if (entityType !== 'FindingReviewCase' || !isFindingReviewCaseId(entityId)) return null;
+  return `/conflict-review-cases?caseId=${encodeURIComponent(entityId)}`;
+}
+
+function presentFindingReviewCaseStatuses(value: unknown): unknown {
+  if (isFindingReviewCaseStatus(value)) return getFindingReviewCaseStatusLabel(value);
+  if (Array.isArray(value)) return value.map(presentFindingReviewCaseStatuses);
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, presentFindingReviewCaseStatuses(entry)]),
+    );
+  }
+  return value;
+}
+
+function JsonDetails({
+  entityType,
+  label,
+  value,
+}: {
+  entityType?: string;
+  label: string;
+  value: unknown;
+}) {
+  const presentedValue = entityType === 'FindingReviewCase'
+    ? presentFindingReviewCaseStatuses(value)
+    : value;
   return (
     <div>
       <strong>{label}</strong>
-      <pre>{value === null ? 'Não informado' : JSON.stringify(value, null, 2)}</pre>
+      <pre>{presentedValue === null ? 'Não informado' : JSON.stringify(presentedValue, null, 2)}</pre>
     </div>
   );
 }
 
-export default function AuditPage() {
+export type AuditLogsLoader = (params?: AuditLogQueryParams) => Promise<AuditLogResponse>;
+
+export function AuditPage({ loadAuditLogs = getAuditLogs }: { loadAuditLogs?: AuditLogsLoader }) {
   const [form, setForm] = useState<FilterForm>(initialForm);
   const [query, setQuery] = useState<AuditLogQueryParams>(initialQuery);
   const [result, setResult] = useState<AuditLogResponse>(initialResult);
@@ -143,7 +195,7 @@ export default function AuditPage() {
 
   useEffect(() => {
     let active = true;
-    getAuditLogs(query)
+    loadAuditLogs(query)
       .then((loadedResult) => {
         if (active) setResult(loadedResult);
       })
@@ -160,7 +212,7 @@ export default function AuditPage() {
     return () => {
       active = false;
     };
-  }, [query, requestVersion]);
+  }, [loadAuditLogs, query, requestVersion]);
 
   const cards = [
     ['Total de eventos', result.summary.total],
@@ -334,7 +386,9 @@ export default function AuditPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {result.items.map((log: AuditLogRecord) => (
+                  {result.items.map((log: AuditLogRecord) => {
+                    const entityHref = getAuditEntityHref(log.entityType, log.entityId);
+                    return (
                     <tr key={log.id}>
                       <td>
                         <time dateTime={log.occurredAt}>{formatDateTime(log.occurredAt)}</time>
@@ -351,9 +405,14 @@ export default function AuditPage() {
                       <td>
                         {getAuditEntityTypeLabel(log.entityType)}
                         <span className="cell-subtitle audit-entity-id">{log.entityId}</span>
+                        {entityHref ? (
+                          <Link className="table-link-button" href={entityHref}>
+                            Abrir caso de revisão
+                          </Link>
+                        ) : null}
                       </td>
-                      <td className="audit-value-cell">{compactValue(log.before)}</td>
-                      <td className="audit-value-cell">{compactValue(log.after)}</td>
+                      <td className="audit-value-cell">{compactValue(log.before, log.entityType)}</td>
+                      <td className="audit-value-cell">{compactValue(log.after, log.entityType)}</td>
                       <td className="audit-metadata-cell">{metadataText(log.metadata)}</td>
                       <td>
                         <details className="audit-details">
@@ -366,15 +425,24 @@ export default function AuditPage() {
                               <strong>Data:</strong> {formatDateTime(log.occurredAt)}
                             </p>
                             <div className="audit-json-grid">
-                              <JsonDetails label="Valor anterior" value={log.before} />
-                              <JsonDetails label="Valor novo" value={log.after} />
+                              <JsonDetails
+                                entityType={log.entityType}
+                                label="Valor anterior"
+                                value={log.before}
+                              />
+                              <JsonDetails
+                                entityType={log.entityType}
+                                label="Valor novo"
+                                value={log.after}
+                              />
                               <JsonDetails label="Metadados" value={log.metadata} />
                             </div>
                           </div>
                         </details>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -389,4 +457,8 @@ export default function AuditPage() {
       ) : null}
     </main>
   );
+}
+
+export default function AuditRoute() {
+  return <AuditPage />;
 }

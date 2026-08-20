@@ -59,7 +59,9 @@ aprovação, atribuição de responsável, SLA, comentários encadeados ou resol
 
 Eventos críticos geram `AuditLog` e podem ser consultados na tela dedicada. Exportação e
 política de retenção ainda não fazem parte do MVP. O ator continua simulado porque não há
-autenticação.
+autenticação. A tela reconhece a criação e as mudanças operacionais dos casos de revisão,
+apresenta seus estados em português e oferece acesso ao caso relacionado quando o identificador
+persistido é válido.
 
 ### Qualidade e confiança
 

@@ -148,6 +148,11 @@ export function getFindingReviewCaseStatusLabel(value: FindingReviewCaseStatus):
   return statusLabels[value] ?? 'Status indisponível';
 }
 
+export function isFindingReviewCaseStatus(value: unknown): value is FindingReviewCaseStatus {
+  return typeof value === 'string'
+    && FINDING_REVIEW_CASE_STATUSES.some((status) => status === value);
+}
+
 export function getFindingReviewStalenessLabel(value: FindingReviewStaleness): string {
   return stalenessLabels[value] ?? 'Atualidade indisponível';
 }
