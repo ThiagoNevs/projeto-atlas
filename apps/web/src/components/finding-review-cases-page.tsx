@@ -32,6 +32,7 @@ import {
   FINDING_REVIEW_CASE_STATUSES,
   FINDING_REVIEW_SORT_FIELDS,
   FINDING_REVIEW_STALENESSES,
+  MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH,
   createFindingReviewIdempotencyKey,
   getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewCaseStatusLabel,
@@ -40,6 +41,7 @@ import {
   isFindingReviewCaseId,
   isFindingReviewFindingId,
   isFindingReviewTimestamp,
+  requiresFindingReviewCaseWaitingJustification,
   serializeFindingReviewCaseQuery,
   type FindingReviewCaseSortField,
   type FindingReviewCaseStatus,
@@ -65,6 +67,7 @@ export type ReviewCaseStatusUpdater = (
   id: string,
   status: ActiveFindingReviewCaseStatus,
   expectedVersion: number,
+  justification?: string,
   options?: FindingReviewCasesRequestOptions,
 ) => Promise<UpdateFindingReviewCaseStatusResponse>;
 
@@ -808,7 +811,10 @@ export function FindingReviewCasesPage({
     setDetailReload((value) => value + 1);
   }
 
-  async function submitStatusTransition(target: ActiveFindingReviewCaseStatus): Promise<void> {
+  async function submitStatusTransition(
+    target: ActiveFindingReviewCaseStatus,
+    justification?: string,
+  ): Promise<void> {
     const current = detail;
     if (
       !current
@@ -830,7 +836,7 @@ export function FindingReviewCasesPage({
     setStatusConflict(false);
 
     try {
-      const updated = await updateStatus(expectedId, target, expectedVersion, {
+      const updated = await updateStatus(expectedId, target, expectedVersion, justification, {
         signal: controller.signal,
       });
       if (
@@ -1091,7 +1097,10 @@ function ReviewCaseDetail({
   statusError: string | null;
   statusSuccess: string | null;
   statusConflict: boolean;
-  submitStatus: (status: ActiveFindingReviewCaseStatus) => Promise<void>;
+  submitStatus: (
+    status: ActiveFindingReviewCaseStatus,
+    justification?: string,
+  ) => Promise<void>;
   reloadStatus: () => void;
 }) {
   if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
@@ -1113,7 +1122,7 @@ function ReviewCaseDetail({
       />
       <div className="review-detail-grid">
         <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
-        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
+        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}{formatTransitionJustification(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>
       <details className="review-snapshot"><summary>Visualizar snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
     </>
@@ -1134,12 +1143,18 @@ function StatusTransitionControl({
   error: string | null;
   success: string | null;
   conflict: boolean;
-  submit: (status: ActiveFindingReviewCaseStatus) => Promise<void>;
+  submit: (status: ActiveFindingReviewCaseStatus, justification?: string) => Promise<void>;
   reload: () => void;
 }) {
   const destinations = getAllowedFindingReviewCaseStatusDestinations(detail.status);
   const [target, setTarget] = useState<ActiveFindingReviewCaseStatus | ''>('');
+  const [justification, setJustification] = useState('');
+  const [validationError, setValidationError] = useState<string | null>(null);
   const conflictAlert = useRef<HTMLDivElement | null>(null);
+  const justificationField = useRef<HTMLTextAreaElement | null>(null);
+
+  const justificationRequired = target !== ''
+    && requiresFindingReviewCaseWaitingJustification(detail.status, target);
 
   useEffect(() => {
     if (conflict) conflictAlert.current?.focus();
@@ -1152,14 +1167,66 @@ function StatusTransitionControl({
   return (
     <section className="review-status-control" aria-labelledby="review-status-title">
       <div><h3 id="review-status-title">Alterar estado operacional</h3><p>Estado atual: <strong>{getFindingReviewCaseStatusLabel(detail.status)}</strong> · versão {detail.version}. A alteração não modifica o inventário.</p></div>
-      <form onSubmit={(event) => { event.preventDefault(); if (target) void submit(target); }}>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (!target) return;
+        if (justificationRequired) {
+          const normalized = justification.trim();
+          if (normalized.length === 0) {
+            setValidationError('Informe uma justificativa para esta transição.');
+            justificationField.current?.focus();
+            return;
+          }
+          if (normalized.length > MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH) {
+            setValidationError('A justificativa deve ter no máximo 500 caracteres.');
+            justificationField.current?.focus();
+            return;
+          }
+          setValidationError(null);
+          void submit(target, normalized);
+          return;
+        }
+        setValidationError(null);
+        void submit(target);
+      }}>
         <label htmlFor="review-case-next-status">Novo estado</label>
-        <select id="review-case-next-status" value={target} disabled={loading || conflict} onChange={(event) => setTarget(event.target.value as ActiveFindingReviewCaseStatus | '')}>
+        <select id="review-case-next-status" value={target} disabled={loading || conflict} onChange={(event) => {
+          const next = event.target.value as ActiveFindingReviewCaseStatus | '';
+          setTarget(next);
+          setValidationError(null);
+          if (
+            next === ''
+            || !requiresFindingReviewCaseWaitingJustification(detail.status, next)
+          ) {
+            setJustification('');
+          }
+        }}>
           <option value="">Selecione…</option>
           {destinations.map((status) => <option key={status} value={status}>{getFindingReviewCaseStatusLabel(status)}</option>)}
         </select>
+        {justificationRequired ? (
+          <div className="review-status-justification">
+            <label htmlFor="review-case-status-justification">Justificativa</label>
+            <textarea
+              id="review-case-status-justification"
+              ref={justificationField}
+              value={justification}
+              required
+              maxLength={MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH}
+              disabled={loading || conflict}
+              aria-describedby="review-case-status-justification-help"
+              aria-invalid={validationError !== null}
+              onInput={(event) => {
+                setJustification(event.currentTarget.value);
+                if (validationError) setValidationError(null);
+              }}
+            />
+            <small id="review-case-status-justification-help">Explique o contexto operacional. Não inclua credenciais, tokens ou dados sensíveis.</small>
+          </div>
+        ) : null}
         <button className="button button-primary" type="submit" disabled={loading || conflict || !target}>{loading ? 'Alterando…' : 'Confirmar alteração'}</button>
       </form>
+      {validationError ? <p className="form-message form-message-error" role="alert">{validationError}</p> : null}
       {loading ? <p className="form-message" role="status" aria-live="polite">Alterando o estado do caso…</p> : null}
       {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
       {error ? <div ref={conflictAlert} className="form-message form-message-error" role="alert" tabIndex={conflict ? -1 : undefined}>{error}{conflict ? <button className="table-link-button" type="button" onClick={reload}> Recarregar caso</button> : null}</div> : null}
@@ -1176,4 +1243,10 @@ function formatStatusTransition(metadata: Record<string, string> | null) {
     || !FINDING_REVIEW_CASE_STATUSES.includes(after as FindingReviewCaseStatus)
   ) return null;
   return <span>{getFindingReviewCaseStatusLabel(before as FindingReviewCaseStatus)} → {getFindingReviewCaseStatusLabel(after as FindingReviewCaseStatus)}</span>;
+}
+
+function formatTransitionJustification(metadata: Record<string, string> | null) {
+  const justification = metadata?.justification;
+  if (!justification || justification.trim().length === 0) return null;
+  return <span className="review-event-justification"><b>Justificativa:</b> {justification}</span>;
 }

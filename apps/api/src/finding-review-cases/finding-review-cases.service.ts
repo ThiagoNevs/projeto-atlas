@@ -33,6 +33,9 @@ import {
   FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
   isUpdatableFindingReviewCaseVersion,
   isAllowedFindingReviewCaseStatusTransition,
+  MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH,
+  requiresFindingReviewCaseWaitingJustification,
+  type ActiveFindingReviewCaseStatus,
 } from './finding-review-case-status-transition';
 
 const CASE_RESPONSE_SELECT = {
@@ -369,6 +372,12 @@ export class FindingReviewCasesService {
         });
       }
 
+      const justification = this.validateStatusTransitionJustification(
+        current.status,
+        payload.status,
+        payload.justification,
+      );
+
       const versionAfter = payload.expectedVersion + 1;
       const updated = await transaction.findingReviewCase.updateMany({
         where: {
@@ -399,6 +408,7 @@ export class FindingReviewCasesService {
           metadata: {
             statusBefore: current.status,
             statusAfter: payload.status,
+            ...(justification === null ? {} : { justification }),
           },
           occurredAt,
         },
@@ -422,6 +432,7 @@ export class FindingReviewCasesService {
             statusAfter: payload.status,
             versionBefore: payload.expectedVersion,
             versionAfter,
+            ...(justification === null ? {} : { justification }),
           },
           occurredAt,
         },
@@ -439,6 +450,42 @@ export class FindingReviewCasesService {
         updatedAt: result.updatedAt.toISOString(),
       };
     });
+  }
+
+  private validateStatusTransitionJustification(
+    current: FindingReviewCaseStatus,
+    next: ActiveFindingReviewCaseStatus,
+    value: unknown,
+  ): string | null {
+    const required = requiresFindingReviewCaseWaitingJustification(current, next);
+    if (!required) {
+      if (value !== undefined) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'FINDING_REVIEW_CASE_JUSTIFICATION_NOT_ALLOWED',
+          message: 'A justificativa só é permitida em transições que entram ou saem da espera por evidências.',
+        });
+      }
+      return null;
+    }
+
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'FINDING_REVIEW_CASE_JUSTIFICATION_REQUIRED',
+        message: 'Informe uma justificativa para entrar ou sair da espera por evidências.',
+      });
+    }
+
+    const normalized = value.trim();
+    if (normalized.length > MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_FINDING_REVIEW_CASE_JUSTIFICATION',
+        message: 'A justificativa deve ter no máximo 500 caracteres.',
+      });
+    }
+    return normalized;
   }
 
   private validateIdempotencyKey(value: unknown): string {
@@ -627,7 +674,13 @@ function presentSafeEventMetadata(
 ): Record<string, string> | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const safe: Record<string, string> = {};
-  for (const key of ['findingId', 'originalSnapshotHash', 'statusBefore', 'statusAfter']) {
+  for (const key of [
+    'findingId',
+    'originalSnapshotHash',
+    'statusBefore',
+    'statusAfter',
+    'justification',
+  ]) {
     const value = metadata[key];
     if (typeof value === 'string') safe[key] = value;
   }

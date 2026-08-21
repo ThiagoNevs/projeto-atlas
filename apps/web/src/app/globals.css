@@ -4499,6 +4499,21 @@ input {
   grid-column: 1;
 }
 
+.review-status-justification {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 0.35rem;
+}
+
+.review-status-justification textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.review-status-justification small {
+  color: var(--muted);
+}
+
 .review-status-control form .button {
   grid-column: 2;
   grid-row: 1 / span 2;
@@ -4552,6 +4567,10 @@ input {
 .review-event-list span,
 .review-event-list small {
   display: block;
+}
+
+.review-event-justification {
+  white-space: pre-wrap;
 }
 
 .review-snapshot {

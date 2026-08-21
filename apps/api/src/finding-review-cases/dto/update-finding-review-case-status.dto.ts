@@ -1,4 +1,4 @@
-import { IsIn, IsInt, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsString, Max, Min, ValidateIf } from 'class-validator';
 
 import type { ActiveFindingReviewCaseStatus } from '../finding-review-case-status-transition';
 import {
@@ -18,4 +18,8 @@ export class UpdateFindingReviewCaseStatusDto {
     message: 'expectedVersion excede o limite persistível para uma transição.',
   })
   expectedVersion!: number;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsString({ message: 'justification deve ser uma string.' })
+  justification?: string;
 }

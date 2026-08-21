@@ -111,7 +111,11 @@ function metadataText(metadata: unknown): string {
   if (!isRecord(metadata)) return 'Não informado';
   const reason = typeof metadata.reason === 'string' ? metadata.reason : null;
   const comment = typeof metadata.comment === 'string' ? metadata.comment : null;
-  return [reason, comment].filter(Boolean).join(' · ') || 'Não informado';
+  const justification = typeof metadata.justification === 'string'
+    && metadata.justification.trim().length > 0
+    ? `Justificativa: ${metadata.justification}`
+    : null;
+  return [reason, comment, justification].filter(Boolean).join(' · ') || 'Não informado';
 }
 
 export function getAuditEntityHref(entityType: string, entityId: unknown): string | null {

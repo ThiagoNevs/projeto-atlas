@@ -14,6 +14,7 @@ export const ACTIVE_FINDING_REVIEW_CASE_STATUSES = [
   'IN_REVIEW',
   'WAITING_FOR_EVIDENCE',
 ] as const;
+export const MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH = 500;
 
 export const FINDING_REVIEW_STALENESSES = [
   'CURRENT',
@@ -170,6 +171,13 @@ export function getAllowedFindingReviewCaseStatusDestinations(
     return [];
   }
   return ACTIVE_FINDING_REVIEW_CASE_STATUSES.filter((status) => status !== current);
+}
+
+export function requiresFindingReviewCaseWaitingJustification(
+  current: FindingReviewCaseStatus,
+  next: ActiveFindingReviewCaseStatus,
+): boolean {
+  return current === 'WAITING_FOR_EVIDENCE' || next === 'WAITING_FOR_EVIDENCE';
 }
 
 export function serializeFindingReviewCaseQuery(query: FindingReviewCaseQuery): string {
