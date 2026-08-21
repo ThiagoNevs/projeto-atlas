@@ -67,6 +67,11 @@ enum FindingReviewStaleness {
   REQUIRES_REFRESH
 }
 
+enum FindingReviewIdentityConclusion {
+  SAME_ASSET
+  DIFFERENT_ASSETS
+}
+
 enum NetworkDiscoveryMode {
   PASSIVE
   LIGHT
@@ -318,8 +323,9 @@ model FindingReviewCase {
   createdAt                  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                  DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  assets FindingReviewCaseAsset[]
-  events FindingReviewEvent[]
+  assets    FindingReviewCaseAsset[]
+  decisions FindingReviewDecision[]
+  events    FindingReviewEvent[]
 
   @@index([status, updatedAt(sort: Desc)])
   @@index([staleness, updatedAt(sort: Desc)])
@@ -343,6 +349,23 @@ model FindingReviewCaseAsset {
   @@id([caseId, assetIdAtCreation])
   @@index([assetId])
   @@map("finding_review_case_assets")
+}
+
+model FindingReviewDecision {
+  id                 String                          @id @default(uuid()) @db.Uuid
+  caseId             String                          @map("case_id") @db.Uuid
+  identityConclusion FindingReviewIdentityConclusion @map("identity_conclusion")
+  justification      String
+  caseVersion        Int                             @map("case_version")
+  createdBy          String                          @map("created_by")
+  requestFingerprint String                          @unique @map("request_fingerprint")
+  createdAt          DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reviewCase FindingReviewCase @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  @@unique([caseId, caseVersion])
+  @@index([caseId, createdAt(sort: Desc)])
+  @@map("finding_review_decisions")
 }
 
 model FindingReviewEvent {
