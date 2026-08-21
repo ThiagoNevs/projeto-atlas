@@ -394,7 +394,11 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
           versionBefore: 2,
           versionAfter: 3,
           actorId: createdBy,
-          metadata: { findingId: eventCase.findingId, private: 'must-not-leak' },
+          metadata: {
+            findingId: eventCase.findingId,
+            justification: 'Aguardando confirmação técnica.',
+            private: 'must-not-leak',
+          },
           occurredAt: new Date(baseTime + 1_000),
           createdAt: new Date(baseTime + 1_000),
         },
@@ -760,6 +764,10 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
       'TEST_TIED_SECOND',
     ]);
     expect(body.events.slice(-2).map((event) => event.metadata)).toEqual([null, null]);
+    expect(body.events.find((event) => event.eventType === 'TEST_VERSION_3')?.metadata).toEqual({
+      findingId: fixture.findingId,
+      justification: 'Aguardando confirmação técnica.',
+    });
     expect(JSON.stringify(body.events)).not.toMatch(
       /must-not-leak|requestFingerprint|reviewSubjectKey/,
     );

@@ -100,12 +100,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function setControlValue(control: HTMLInputElement | HTMLSelectElement, value: string): void {
+function setControlValue(
+  control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+  value: string,
+): void {
+  if (control.tagName === 'TEXTAREA') {
+    const legacyControl = control as HTMLTextAreaElement & {
+      attachEvent?: () => void;
+      detachEvent?: () => void;
+    };
+    legacyControl.attachEvent ??= () => undefined;
+    legacyControl.detachEvent ??= () => undefined;
+    control.focus();
+  }
   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), 'value')?.set;
   setter?.call(control, value);
-  control.dispatchEvent(new Event(control.tagName === 'INPUT' ? 'input' : 'change', {
+  control.dispatchEvent(new Event(control.tagName === 'SELECT' ? 'change' : 'input', {
     bubbles: true,
   }));
+  if (control.tagName === 'TEXTAREA') {
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 }
 
 function findButton(container: HTMLElement, text: string): HTMLButtonElement {
@@ -1538,6 +1553,7 @@ test('altera o estado com a versão atual, confirma o sucesso e recarrega caso e
     await act(async () => { await flush(); });
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
+    assert.equal(harness.environment.container.querySelector('textarea'), null);
     await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
     await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
     assert.deepEqual(updates, [{ id: CASE_ID, status: 'IN_REVIEW', version: 1 }]);
@@ -1545,6 +1561,163 @@ test('altera o estado com a versão atual, confirma o sucesso e recarrega caso e
     assert.match(harness.environment.container.textContent ?? '', /Status do caso alterado/);
     assert.ok(detailLoads >= 2);
     assert.ok(listLoads >= 2);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('exige justificativa ao entrar em espera, normaliza o payload e a mostra no histórico', async () => {
+  const updates: Array<{ id: string; status: string; version: number; justification?: string }> = [];
+  let detailLoads = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      return detailLoads === 1 ? detailResponse : {
+        ...detailResponse,
+        status: 'WAITING_FOR_EVIDENCE',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+        events: [...detailResponse.events, {
+          id: SECOND_CASE_ID,
+          eventType: 'CASE_STATUS_CHANGED',
+          versionBefore: 1,
+          versionAfter: 2,
+          actor: 'atlas-mvp-user',
+          metadata: {
+            statusBefore: 'OPEN',
+            statusAfter: 'WAITING_FOR_EVIDENCE',
+            justification: 'Falta  confirmação\ntécnica.',
+          },
+          createdAt: '2026-07-20T12:05:00.000Z',
+        }],
+      };
+    },
+    updateStatus: async (id, status, version, justification) => {
+      updates.push({ id, status, version, justification });
+      return { id, status, version: version + 1, updatedAt: '2026-07-20T12:05:00.000Z' };
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-case-status-justification',
+    );
+    assert.ok(textarea);
+    assert.equal(textarea.required, true);
+    assert.equal(textarea.maxLength, 500);
+    assert.equal(textarea.labels?.item(0)?.textContent, 'Justificativa');
+    assert.match(
+      harness.environment.container.textContent ?? '',
+      /Não inclua credenciais, tokens ou dados sensíveis/,
+    );
+    await act(async () => {
+      setControlValue(textarea, '  Falta  confirmação\ntécnica.  ');
+      await flush();
+    });
+    await act(async () => {
+      findButton(harness.environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+    assert.deepEqual(updates, [{
+      id: CASE_ID,
+      status: 'WAITING_FOR_EVIDENCE',
+      version: 1,
+      justification: 'Falta  confirmação\ntécnica.',
+    }]);
+    assert.match(harness.environment.container.textContent ?? '', /Justificativa:/);
+    assert.match(harness.environment.container.textContent ?? '', /Falta  confirmação/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('exige justificativa ao sair da espera e impede whitespace com foco acessível', async () => {
+  let updates = 0;
+  const waitingDetail: FindingReviewCaseDetail = {
+    ...detailResponse,
+    status: 'WAITING_FOR_EVIDENCE',
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => waitingDetail,
+    updateStatus: async (id, status, version) => {
+      updates += 1;
+      return { id, status, version: version + 1, updatedAt: '2026-07-20T12:05:00.000Z' };
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-case-status-justification',
+    );
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, '   \n  '); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+    assert.equal(updates, 0);
+    assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
+    assert.equal(harness.environment.window.document.activeElement, textarea);
+    assert.equal(textarea.getAttribute('aria-invalid'), 'true');
+    await act(async () => { setControlValue(textarea, 'a'.repeat(501)); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+    assert.equal(updates, 0);
+    assert.match(harness.environment.container.textContent ?? '', /no máximo 500 caracteres/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('loading desabilita select, textarea e botão da transição de espera', async () => {
+  const pending = deferred<{
+    id: string;
+    status: 'WAITING_FOR_EVIDENCE';
+    version: number;
+    updatedAt: string;
+  }>();
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => pending.promise,
+  });
+  try {
+    await act(async () => { await flush(); });
+    const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-case-status-justification',
+    );
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, 'Aguardando evidência.'); await flush(); });
+    const button = findButton(harness.environment.container, 'Confirmar alteração');
+    await act(async () => { button.click(); await flush(); });
+    assert.equal(select.disabled, true);
+    assert.equal(textarea.disabled, true);
+    assert.equal(button.disabled, true);
+    await act(async () => {
+      pending.resolve({
+        id: CASE_ID,
+        status: 'WAITING_FOR_EVIDENCE',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+      });
+      await flush();
+    });
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -1564,11 +1737,17 @@ test('conflito 409 não faz retry automático e exige recarregamento explícito'
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
     await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-case-status-justification',
+    );
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, 'Aguardando evidência.'); await flush(); });
     await act(async () => { findButton(harness.environment.container, 'Confirmar alteração').click(); await flush(); });
     assert.equal(updates, 1);
     assert.equal(detailLoads, 1);
     assert.match(harness.environment.container.textContent ?? '', /alterado por outra operação/);
     assert.doesNotMatch(harness.environment.container.textContent ?? '', /stale internals/);
+    assert.equal(textarea.value, 'Aguardando evidência.');
     const alert = harness.environment.container.querySelector('[role="alert"]');
     assert.ok(alert);
     assert.equal(harness.environment.window.document.activeElement, alert);

@@ -183,6 +183,13 @@ O `expectedVersion` é limitado a `2147483646`: a coluna é PostgreSQL `INT4` e 
 continuar persistível após o incremento. Valores fora desse intervalo retornam HTTP 400 antes da
 transação e não alteram caso, evento ou auditoria.
 
+As quatro transições que entram ou saem de `WAITING_FOR_EVIDENCE` exigem uma `justification` de 1 a
+500 caracteres após trim das extremidades. Espaços internos e quebras de linha são preservados.
+`OPEN ↔ IN_REVIEW` continua sem justificativa e rejeita o campo quando enviado. A mesma string
+normalizada é persistida atomicamente na metadata do `FindingReviewEvent` e do `AuditLog`, exposta
+pela whitelist segura do histórico e apresentada como “Justificativa” na Auditoria global. A solução
+reutiliza os campos JSONB existentes: não cria comentário, tabela, coluna ou migration.
+
 Ainda não existem atribuição, comentários, decisões, refresh, estados terminais operacionais,
 reabertura, integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não
 representa autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.

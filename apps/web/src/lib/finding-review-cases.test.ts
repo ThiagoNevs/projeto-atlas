@@ -19,6 +19,7 @@ import {
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
   parseUpdateFindingReviewCaseStatusResponse,
+  requiresFindingReviewCaseWaitingJustification,
   serializeFindingReviewCaseQuery,
 } from './finding-review-cases.ts';
 
@@ -272,7 +273,7 @@ test('transição usa PATCH, expectedVersion e não envia Idempotency-Key', asyn
     calls.push({ input, init });
     return Response.json({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: NOW });
   };
-  const updated = await updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+  const updated = await updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, undefined, {
     fetchImplementation,
   });
   assert.equal(updated.version, 2);
@@ -286,15 +287,49 @@ test('transição usa PATCH, expectedVersion e não envia Idempotency-Key', asyn
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/status$`));
 });
 
+test('identifica somente transições que entram ou saem da espera por evidências', () => {
+  assert.equal(requiresFindingReviewCaseWaitingJustification('OPEN', 'WAITING_FOR_EVIDENCE'), true);
+  assert.equal(requiresFindingReviewCaseWaitingJustification('IN_REVIEW', 'WAITING_FOR_EVIDENCE'), true);
+  assert.equal(requiresFindingReviewCaseWaitingJustification('WAITING_FOR_EVIDENCE', 'OPEN'), true);
+  assert.equal(requiresFindingReviewCaseWaitingJustification('WAITING_FOR_EVIDENCE', 'IN_REVIEW'), true);
+  assert.equal(requiresFindingReviewCaseWaitingJustification('OPEN', 'IN_REVIEW'), false);
+  assert.equal(requiresFindingReviewCaseWaitingJustification('IN_REVIEW', 'OPEN'), false);
+});
+
+test('transição de espera envia justification normalizada no payload técnico', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({
+      id: CASE_ID,
+      status: 'WAITING_FOR_EVIDENCE',
+      version: 2,
+      updatedAt: NOW,
+    });
+  };
+  await updateFindingReviewCaseStatus(
+    CASE_ID,
+    'WAITING_FOR_EVIDENCE',
+    1,
+    '  Falta  confirmação\ntécnica.  ',
+    { fetchImplementation },
+  );
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    status: 'WAITING_FOR_EVIDENCE',
+    expectedVersion: 1,
+    justification: 'Falta  confirmação\ntécnica.',
+  });
+});
+
 test('transição rejeita resposta runtime inválida e preserva erros HTTP controlados', async () => {
   await assert.rejects(
-    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, undefined, {
       fetchImplementation: async () => Response.json({ id: CASE_ID, status: 'IN_REVIEW', version: 1 }),
     }),
     (error: unknown) => error instanceof ApiError && error.status === 502,
   );
   await assert.rejects(
-    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, {
+    updateFindingReviewCaseStatus(CASE_ID, 'IN_REVIEW', 1, undefined, {
       fetchImplementation: async () => Response.json({ message: 'Versão obsoleta.' }, { status: 409 }),
     }),
     (error: unknown) => error instanceof ApiError && error.status === 409,

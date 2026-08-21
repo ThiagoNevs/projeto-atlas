@@ -827,6 +827,20 @@ curl.exe -X PATCH http://localhost:3001/conflict-review-cases/CASE_UUID/status `
   -d '{"status":"IN_REVIEW","expectedVersion":1}'
 ```
 
+Quando a transição entra ou sai de `WAITING_FOR_EVIDENCE`, `justification` é obrigatória:
+
+```powershell
+curl.exe -X PATCH http://localhost:3001/conflict-review-cases/CASE_UUID/status `
+  -H "Content-Type: application/json" `
+  -d '{"status":"WAITING_FOR_EVIDENCE","expectedVersion":1,"justification":"Aguardando confirmação da fonte técnica."}'
+```
+
+O campo aceita de 1 a 500 caracteres depois do trim das extremidades. Espaços internos e quebras de
+linha são preservados. As quatro transições que exigem justificativa são
+`OPEN → WAITING_FOR_EVIDENCE`, `IN_REVIEW → WAITING_FOR_EVIDENCE`,
+`WAITING_FOR_EVIDENCE → OPEN` e `WAITING_FOR_EVIDENCE → IN_REVIEW`. Enviar `justification` em
+`OPEN ↔ IN_REVIEW` retorna HTTP 400, em vez de descartar o conteúdo silenciosamente.
+
 Resposta mínima em sucesso:
 
 ```json
@@ -843,7 +857,10 @@ São permitidas somente as seis transições distintas entre `OPEN`, `IN_REVIEW`
 rejeitados nesta etapa. A atualização é condicionada por `expectedVersion`, incrementa a versão uma
 vez e retorna HTTP 409 quando outra operação atualizou o caso primeiro. Em sucesso, o backend cria
 `CASE_STATUS_CHANGED` e `AuditLog` na mesma transação PostgreSQL; nenhuma tabela do inventário é
-alterada.
+alterada. Nas transições que entram ou saem da espera, a mesma justificativa normalizada é preservada
+em `FindingReviewEvent.metadata.justification` e `AuditLog.metadata.justification`, e aparece no
+histórico do caso e na Auditoria global. Essa informação pertence somente à transição e não representa
+comentário ou colaboração. O recurso utiliza os campos JSONB existentes e não exige migration.
 
 `FindingReviewCase.version` é persistida como PostgreSQL `INT4`. Como a operação grava
 `expectedVersion + 1`, o maior valor aceito no request é `2147483646`. `2147483647` e valores

@@ -10,6 +10,7 @@ export type ActiveFindingReviewCaseStatus =
   (typeof ACTIVE_FINDING_REVIEW_CASE_STATUSES)[number];
 
 export const FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT = 'CASE_STATUS_CHANGED';
+export const MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH = 500;
 
 export const POSTGRES_INT4_MAX = 2_147_483_647;
 
@@ -31,4 +32,12 @@ export function isAllowedFindingReviewCaseStatusTransition(
   return ACTIVE_FINDING_REVIEW_CASE_STATUSES.includes(
     current as ActiveFindingReviewCaseStatus,
   ) && current !== next;
+}
+
+export function requiresFindingReviewCaseWaitingJustification(
+  current: FindingReviewCaseStatus,
+  next: ActiveFindingReviewCaseStatus,
+): boolean {
+  return current === FindingReviewCaseStatus.WAITING_FOR_EVIDENCE
+    || next === FindingReviewCaseStatus.WAITING_FOR_EVIDENCE;
 }

@@ -963,6 +963,7 @@ export async function updateFindingReviewCaseStatus(
   id: string,
   status: ActiveFindingReviewCaseStatus,
   expectedVersion: number,
+  justification: string | undefined,
   options: FindingReviewCasesRequestOptions = {},
 ): Promise<UpdateFindingReviewCaseStatusResponse> {
   return fetchParsedFindingReviewCase(
@@ -970,7 +971,11 @@ export async function updateFindingReviewCaseStatus(
     {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, expectedVersion }),
+      body: JSON.stringify({
+        status,
+        expectedVersion,
+        ...(justification === undefined ? {} : { justification: justification.trim() }),
+      }),
     },
     parseUpdateFindingReviewCaseStatusResponse,
     'A API retornou uma transição de status inválida.',

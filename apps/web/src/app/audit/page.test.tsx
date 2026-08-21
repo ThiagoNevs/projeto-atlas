@@ -156,6 +156,19 @@ test('exibe eventos de caso em português, deep link válido e preserva evento e
   }
 });
 
+test('apresenta metadata.justification explicitamente como Justificativa', async () => {
+  const harness = await renderPage(async () => response([auditLog({
+    metadata: { justification: 'Aguardando confirmação da fonte técnica.' },
+  })]));
+  try {
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Justificativa: Aguardando confirmação da fonte técnica\./);
+    assert.doesNotMatch(text, /Comentário: Aguardando confirmação/);
+  } finally {
+    await close(harness.root, harness.environment);
+  }
+});
+
 test('filtros apresentam labels e enviam valores técnicos inalterados', async () => {
   const queries: Parameters<AuditLogsLoader>[0][] = [];
   const harness = await renderPage(async (query) => {
