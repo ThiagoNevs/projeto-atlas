@@ -368,8 +368,10 @@ Portanto, JSON poderá existir apenas como metadata complementar, não como repr
 componentes.
 
 Decisões anteriores não serão atualizadas nem apagadas. Uma mudança após reabertura criará nova
-decisão e evento, mantendo a decisão anterior no histórico. O caso poderá apontar para a decisão
-corrente sem perder a coleção histórica.
+decisão e evento, mantendo a decisão anterior no histórico. Na fundação persistente inicial, a decisão
+corrente é derivada deterministicamente pela maior `caseVersion`; não existe `currentDecisionId` no
+caso. Um ponteiro explícito poderá ser introduzido futuramente se houver necessidade concreta, sem
+substituir a coleção histórica.
 
 ### 9.4 Necessidade de mais evidências
 
@@ -756,7 +758,9 @@ por links e referência auditável, preserva retrocompatibilidade.
 
 ## 20. Proposta conceitual de schema
 
-O pseudocódigo abaixo é apenas desenho; não deverá ser aplicado sem autorização explícita:
+O pseudocódigo abaixo representa o agregado futuro. A fundação relacional mínima de
+`FindingReviewDecision` foi autorizada e implementada separadamente; componentes, comentários,
+ponteiro de decisão corrente e os demais campos continuam apenas conceituais:
 
 ```prisma
 enum FindingReviewCaseStatus {
@@ -797,7 +801,6 @@ model FindingReviewCase {
   activeReviewSubjectKey String? @unique
   status                FindingReviewCaseStatus
   staleness             FindingReviewStaleness
-  currentDecisionId     String?
   originalSnapshot      Json
   originalSnapshotHash String
   latestSnapshot        Json?
@@ -846,6 +849,7 @@ model FindingReviewDecision {
   justification       String
   caseVersion         Int
   createdBy           String
+  requestFingerprint  String
   createdAt           DateTime
   components          FindingReviewDecisionComponent[]
 }

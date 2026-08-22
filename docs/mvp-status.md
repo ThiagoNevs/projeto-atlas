@@ -190,9 +190,15 @@ normalizada é persistida atomicamente na metadata do `FindingReviewEvent` e do 
 pela whitelist segura do histórico e apresentada como “Justificativa” na Auditoria global. A solução
 reutiliza os campos JSONB existentes: não cria comentário, tabela, coluna ou migration.
 
-Ainda não existem atribuição, comentários, decisões, refresh, estados terminais operacionais,
-reabertura, integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não
-representa autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
+A fundação relacional de decisões humanas agora existe em `FindingReviewDecision`, com conclusão de
+identidade tipada, justificativa canônica, autoria, versão do caso e fingerprint de requisição. As
+decisões são append-only por invariante de domínio, e a decisão corrente será inicialmente derivada
+pela maior `caseVersion`. Ainda não existe API, comando ou interface para registrar ou consultar essas
+decisões; a fundação não resolve casos, não cria eventos ou auditoria e não altera o inventário.
+
+Ainda não existem atribuição, comentários, refresh, estados terminais operacionais, reabertura,
+integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
+autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 
