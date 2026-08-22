@@ -873,6 +873,57 @@ Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quan
 O ator `atlas-mvp-user` continua provisório; autenticação, RBAC e transições terminais permanecem
 futuros.
 
+### Registrar a primeira decisão de identidade
+
+Somente um caso em `IN_REVIEW`, sem decisão anterior, pode receber a primeira conclusão:
+
+```powershell
+curl.exe -X POST http://localhost:3001/conflict-review-cases/CASE_UUID/decisions `
+  -H "Content-Type: application/json" `
+  -H "Idempotency-Key: decisao-identidade-001" `
+  -d '{
+    "identityConclusion":"SAME_ASSET",
+    "justification":"As evidências indicam que os registros representam o mesmo equipamento.",
+    "expectedVersion":4
+  }'
+```
+
+`identityConclusion` aceita `SAME_ASSET` ou `DIFFERENT_ASSETS`, desde que a opção esteja presente no
+snapshot original e o caso possua ao menos dois ativos históricos. A justificativa é obrigatória,
+recebe trim somente nas extremidades, preserva espaços e quebras de linha internos e aceita de 1 a
+1.000 caracteres. Não use esse campo para credenciais, tokens, secrets ou dados sensíveis
+desnecessários.
+
+Uma criação nova retorna HTTP `201`:
+
+```json
+{
+  "decision": {
+    "id": "DECISION_UUID",
+    "caseId": "CASE_UUID",
+    "identityConclusion": "SAME_ASSET",
+    "justification": "As evidências indicam que os registros representam o mesmo equipamento.",
+    "caseVersion": 5,
+    "createdBy": "atlas-mvp-user",
+    "createdAt": "2026-08-22T12:00:00.000Z"
+  },
+  "idempotentReplay": false
+}
+```
+
+Repetir a mesma chave com o mesmo request semântico retorna HTTP `200`, a mesma decisão e
+`idempotentReplay: true`, inclusive se a versão do caso avançou posteriormente. Reutilizar a chave
+com outro caso, conclusão, justificativa ou `expectedVersion` retorna HTTP `409`. Uma chave nova para
+um caso que já possui decisão também retorna `409`; correção e superseding ainda não existem.
+
+A operação incrementa `FindingReviewCase.version`, grava `decision.caseVersion` com a versão
+resultante e cria `CASE_DECISION_RECORDED` e `AuditLog` na mesma transação. O status permanece
+`IN_REVIEW`. Nenhum ativo, evidência, interface, conflito ou evento de ativo é alterado.
+
+O detalhe `GET /conflict-review-cases/:id` inclui de forma aditiva `currentDecision` e
+`decisionHistory`. A decisão corrente é derivada pela maior `caseVersion`; casos sem decisão retornam
+`currentDecision: null` e `decisionHistory: []`. O fingerprint e a chave idempotente não são expostos.
+
 ### Criar caso
 
 Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:

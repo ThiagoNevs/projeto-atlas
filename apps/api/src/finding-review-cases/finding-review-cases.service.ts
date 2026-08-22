@@ -117,6 +117,22 @@ const CASE_DETAIL_SELECT = {
       createdAt: true,
     },
   },
+  decisions: {
+    orderBy: [
+      { caseVersion: 'asc' as const },
+      { createdAt: 'asc' as const },
+      { id: 'asc' as const },
+    ],
+    select: {
+      id: true,
+      caseId: true,
+      identityConclusion: true,
+      justification: true,
+      caseVersion: true,
+      createdBy: true,
+      createdAt: true,
+    },
+  },
 } satisfies Prisma.FindingReviewCaseSelect;
 
 type CaseListRecord = Prisma.FindingReviewCaseGetPayload<{ select: typeof CASE_LIST_SELECT }>;
@@ -570,6 +586,16 @@ export class FindingReviewCasesService {
   }
 
   private presentDetail(record: CaseDetailRecord) {
+    const decisionHistory = record.decisions.map((decision) => ({
+      id: decision.id,
+      caseId: decision.caseId,
+      identityConclusion: decision.identityConclusion,
+      justification: decision.justification,
+      caseVersion: decision.caseVersion,
+      createdBy: decision.createdBy,
+      createdAt: decision.createdAt.toISOString(),
+    }));
+
     return {
       id: record.id,
       findingId: record.findingId,
@@ -583,6 +609,8 @@ export class FindingReviewCasesService {
       updatedAt: record.updatedAt.toISOString(),
       originalSnapshot: record.originalSnapshot,
       originalSnapshotHash: record.originalSnapshotHash,
+      currentDecision: decisionHistory.at(-1) ?? null,
+      decisionHistory,
       assets: record.assets.map((relation) => ({
         assetIdAtCreation: relation.assetIdAtCreation,
         assetNameAtCreation: relation.assetNameAtCreation,
@@ -680,6 +708,8 @@ function presentSafeEventMetadata(
     'statusBefore',
     'statusAfter',
     'justification',
+    'decisionId',
+    'identityConclusion',
   ]) {
     const value = metadata[key];
     if (typeof value === 'string') safe[key] = value;
