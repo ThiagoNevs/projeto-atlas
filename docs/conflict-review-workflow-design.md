@@ -613,15 +613,24 @@ permanecem propostos e fora do MVP atual.
 - **Validações:** texto não vazio, limites, referência autorizada e conteúdo seguro.
 - **Efeitos:** comentário append-only e auditoria; não cria `AssetEvidence`.
 
-### 14.7 `POST /conflict-review-cases/:id/decision` — proposto
+### 14.7 `POST /conflict-review-cases/:id/decisions` — implementado para a primeira decisão
 
-- **Request:** `identityConclusion`, componentes estruturados, justificativa, `expectedVersion` e
-  idempotency key.
-- **Validações:** conclusão e componentes compatíveis, referências autorizadas, caso `IN_REVIEW`,
-  finding/staleness apresentados ao usuário e permissão. `NEEDS_MORE_EVIDENCE` usa transição de
-  estado e não este contrato de decisão terminal.
-- **Response:** decisão imutável registrada, componentes e nova versão.
-- **Efeitos:** decisão e auditoria; não altera inventário nem cria `Conflict`.
+- **Request:** `identityConclusion`, justificativa e `expectedVersion`, com `Idempotency-Key`
+  obrigatória. A rota plural representa a criação de um recurso append-only, não um upsert.
+- **Validações atuais:** caso `IN_REVIEW`, ausência de decisão anterior, conclusão presente em
+  `originalSnapshot.reviewOptions`, ao menos dois ativos históricos e justificativa de 1 a 1.000
+  caracteres após trim externo. `NEEDS_MORE_EVIDENCE` continua sendo transição de estado.
+- **Idempotência:** o fingerprint usa operação, ator e chave opaca. Replay é resolvido antes do estado
+  atual e retorna a decisão original mesmo se a versão avançou; reutilização com outro conteúdo
+  retorna `409`.
+- **Concorrência:** `expectedVersion`, update condicional e as constraints existentes garantem uma
+  única decisão original. `caseVersion` representa a versão resultante.
+- **Response:** decisão imutável registrada e indicador de replay. O detalhe expõe
+  `currentDecision` e `decisionHistory`, sem fingerprint.
+- **Efeitos:** incrementa somente versão/`updatedAt`, cria `CASE_DECISION_RECORDED` e `AuditLog` na
+  mesma transação; não muda status, inventário ou `Conflict`.
+- **Limites atuais:** não existem componentes, interface, resolução, correção ou superseding. Embora
+  o schema seja 1:N, uma segunda decisão nova é rejeitada até existir fluxo explícito futuro.
 
 ### 14.8 `POST /conflict-review-cases/:id/refresh` — proposto
 

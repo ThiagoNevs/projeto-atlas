@@ -190,11 +190,18 @@ normalizada é persistida atomicamente na metadata do `FindingReviewEvent` e do 
 pela whitelist segura do histórico e apresentada como “Justificativa” na Auditoria global. A solução
 reutiliza os campos JSONB existentes: não cria comentário, tabela, coluna ou migration.
 
-A fundação relacional de decisões humanas agora existe em `FindingReviewDecision`, com conclusão de
-identidade tipada, justificativa canônica, autoria, versão do caso e fingerprint de requisição. As
-decisões são append-only por invariante de domínio, e a decisão corrente será inicialmente derivada
-pela maior `caseVersion`. Ainda não existe API, comando ou interface para registrar ou consultar essas
-decisões; a fundação não resolve casos, não cria eventos ou auditoria e não altera o inventário.
+A fundação relacional de decisões humanas existe em `FindingReviewDecision`, com conclusão de
+identidade tipada, justificativa canônica, autoria, versão do caso e fingerprint de requisição. O
+backend permite registrar a primeira decisão por `POST /conflict-review-cases/:id/decisions`, somente
+para casos `IN_REVIEW`, com `expectedVersion`, `Idempotency-Key`, evento `CASE_DECISION_RECORDED` e
+`AuditLog` na mesma transação. A decisão corrente e o histórico são expostos de forma aditiva no
+detalhe do caso; o fingerprint não é retornado.
+
+As decisões permanecem append-only por invariante de domínio, e a decisão corrente é derivada pela
+maior `caseVersion`. O schema continua 1:N para um fluxo futuro explícito de correção ou superseding,
+mas esta etapa rejeita uma segunda decisão nova no mesmo caso. A decisão não resolve o caso, não
+altera seu status, não cria `Conflict` e não altera o inventário. Ainda não existe interface para
+registrar decisões.
 
 Ainda não existem atribuição, comentários, refresh, estados terminais operacionais, reabertura,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa

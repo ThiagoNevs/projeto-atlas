@@ -12,9 +12,11 @@ import {
   Res,
 } from '@nestjs/common';
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
+import { CreateFindingReviewDecisionDto } from './dto/create-finding-review-decision.dto';
 import { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
 import { UpdateFindingReviewCaseStatusDto } from './dto/update-finding-review-case-status.dto';
 import { FindingReviewCasesService } from './finding-review-cases.service';
+import { FindingReviewDecisionsService } from './finding-review-decisions.service';
 
 interface PassthroughResponse {
   status(code: number): PassthroughResponse;
@@ -32,7 +34,10 @@ const reviewCaseIdPipe = new ParseUUIDPipe({
 
 @Controller('conflict-review-cases')
 export class FindingReviewCasesController {
-  constructor(private readonly cases: FindingReviewCasesService) {}
+  constructor(
+    private readonly cases: FindingReviewCasesService,
+    private readonly decisions: FindingReviewDecisionsService,
+  ) {}
 
   @Get()
   findAll(@Query() query: QueryFindingReviewCasesDto) {
@@ -50,6 +55,18 @@ export class FindingReviewCasesController {
     @Body() payload: UpdateFindingReviewCaseStatusDto,
   ) {
     return this.cases.updateStatus(id, payload);
+  }
+
+  @Post(':id/decisions')
+  async createDecision(
+    @Param('id', reviewCaseIdPipe) id: string,
+    @Body() payload: CreateFindingReviewDecisionDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: PassthroughResponse,
+  ) {
+    const result = await this.decisions.create(id, payload, idempotencyKey);
+    response.status(result.idempotentReplay ? 200 : 201);
+    return result;
   }
 
   @Post()
