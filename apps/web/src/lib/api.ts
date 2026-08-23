@@ -13,6 +13,7 @@ import {
 } from './evidence-provenance.ts';
 import type {
   ActiveFindingReviewCaseStatus,
+  CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
   CreateFindingReviewCaseResponse,
   FindingReviewIdentityConclusion,
@@ -23,6 +24,7 @@ import type {
 } from './finding-review-cases.ts';
 import {
   parseCreateFindingReviewCaseResponse,
+  parseCreateFindingReviewCaseResolutionResponse,
   parseCreateFindingReviewDecisionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
@@ -68,6 +70,7 @@ export type {
 } from './conflict-findings';
 export type {
   ActiveFindingReviewCaseStatus,
+  CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
   CreateFindingReviewCaseResponse,
   FindingReviewCaseAsset,
@@ -1013,6 +1016,32 @@ export async function createFindingReviewDecision(
     },
     parseCreateFindingReviewDecisionResponse,
     'A API retornou uma decisão de identidade inválida.',
+    options,
+  );
+}
+
+export async function createFindingReviewCaseResolution(
+  id: string,
+  expectedVersion: number,
+  justification: string,
+  idempotencyKey: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<CreateFindingReviewCaseResolutionResponse> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(id)}/resolutions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        expectedVersion,
+        justification: justification.trim(),
+      }),
+    },
+    parseCreateFindingReviewCaseResolutionResponse,
+    'A API retornou uma resolução de caso inválida.',
     options,
   );
 }

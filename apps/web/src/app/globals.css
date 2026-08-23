@@ -4478,19 +4478,33 @@ input {
   background: rgba(78, 199, 239, 0.055);
 }
 
+.review-resolution-control {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(60, 205, 152, 0.32);
+  border-radius: 12px;
+  background: rgba(60, 205, 152, 0.055);
+}
+
 .review-decision-control h3,
 .review-decision-control h4,
-.review-decision-control p {
+.review-decision-control p,
+.review-resolution-control h3,
+.review-resolution-control h4,
+.review-resolution-control p {
   margin: 0;
 }
 
 .review-decision-control > div > p:last-child,
+.review-resolution-control > div > p:last-child,
 .review-decision-guidance {
   margin-top: 0.35rem;
   color: var(--muted);
 }
 
 .review-decision-form,
+.review-resolution-form,
 .review-decision-form fieldset {
   display: grid;
   gap: 0.75rem;
@@ -4503,7 +4517,8 @@ input {
 }
 
 .review-decision-form legend,
-.review-decision-form > label {
+.review-decision-form > label,
+.review-resolution-form > label {
   color: var(--text);
   font-weight: 800;
 }
@@ -4530,12 +4545,15 @@ input {
 
 .review-decision-option small,
 .review-decision-form > small,
+.review-resolution-form > small,
 .review-decision-card small,
-.review-decision-history small {
+.review-decision-history small,
+.review-resolution-card small {
   color: var(--muted);
 }
 
-.review-decision-form textarea {
+.review-decision-form textarea,
+.review-resolution-form textarea {
   min-height: 8rem;
   resize: vertical;
 }
@@ -4548,7 +4566,10 @@ input {
 
 .review-decision-card,
 .review-decision-confirmation,
-.review-decision-uncertain {
+.review-decision-uncertain,
+.review-resolution-card,
+.review-resolution-confirmation,
+.review-resolution-context {
   display: grid;
   gap: 0.75rem;
   padding: 1rem;
@@ -4562,20 +4583,26 @@ input {
   overflow-wrap: anywhere;
 }
 
-.review-decision-confirmation dl {
+.review-decision-confirmation dl,
+.review-resolution-confirmation dl,
+.review-resolution-card dl {
   display: grid;
   gap: 0.75rem;
   margin: 0;
 }
 
-.review-decision-confirmation dt {
+.review-decision-confirmation dt,
+.review-resolution-confirmation dt,
+.review-resolution-card dt {
   color: var(--faint);
   font-size: 0.68rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.review-decision-confirmation dd {
+.review-decision-confirmation dd,
+.review-resolution-confirmation dd,
+.review-resolution-card dd {
   margin: 0.25rem 0 0;
 }
 
@@ -4769,6 +4796,7 @@ input {
 
   .review-decision-actions .button,
   .review-decision-form > .button,
+  .review-resolution-form > .button,
   .review-decision-uncertain .button {
     width: 100%;
   }
