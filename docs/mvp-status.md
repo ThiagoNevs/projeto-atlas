@@ -208,7 +208,16 @@ mesma `Idempotency-Key` para retry explícito; resultados conclusivos removem es
 justificativa temporária não deve conter senhas, tokens ou dados sensíveis. Correção, edição,
 exclusão e superseding de decisões continuam indisponíveis.
 
-Ainda não existem atribuição, comentários, refresh, estados terminais operacionais, reabertura,
+O backend também permite encerrar logicamente uma investigação por
+`POST /conflict-review-cases/:id/resolutions`. O comando exige caso `IN_REVIEW`, decisão corrente,
+`expectedVersion`, justificativa de 1 a 1.000 caracteres e `Idempotency-Key`. Uma operação nova retorna
+HTTP 201; replay semântico retorna HTTP 200 mesmo depois que o caso já está `RESOLVED`. O fingerprint é
+escopado por caso, o update é otimista e `CASE_RESOLVED`, mudança do caso e `AuditLog` pertencem à mesma
+transação. A resolução libera `activeReviewSubjectKey`, mas não recalcula nem corrige o finding, não
+mescla ativos, não altera `Conflict` e não cria suppression ou remediation. Ainda não existe interface
+para esse comando.
+
+Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`, reabertura,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
 autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
 
