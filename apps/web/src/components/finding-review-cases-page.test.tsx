@@ -2721,6 +2721,7 @@ test('valida justificativa da resolução e não envia POST na etapa de revisão
   });
   try {
     await openFirstCaseDetail(harness.environment.container);
+    await settleScheduledFocus(harness.environment);
     const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-resolution-justification');
     assert.ok(textarea);
     await act(async () => {
@@ -2729,7 +2730,7 @@ test('valida justificativa da resolução e não envia POST na etapa de revisão
       await flush();
     });
     assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
-    assert.equal(harness.environment.window.document.activeElement, textarea);
+    assert.equal(harness.environment.window.document.activeElement === textarea, true);
     assert.equal(calls, 0);
 
     await act(async () => {
