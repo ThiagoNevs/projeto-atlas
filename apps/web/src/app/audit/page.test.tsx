@@ -94,12 +94,44 @@ async function close(root: Root, environment: JsdomTestEnvironment): Promise<voi
 test('traduz ações, entidade e todos os estados dos casos de revisão', () => {
   assert.equal(getAuditActionLabel('CASE_CREATED'), 'Caso de revisão criado');
   assert.equal(getAuditActionLabel('CASE_STATUS_CHANGED'), 'Status do caso de revisão alterado');
+  assert.equal(getAuditActionLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'SAME_ASSET'), 'Mesmo ativo');
+  assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.equal(getAuditEntityTypeLabel('FindingReviewCase'), 'Caso de revisão');
   assert.deepEqual(
     ['OPEN', 'IN_REVIEW', 'WAITING_FOR_EVIDENCE', 'RESOLVED', 'DISMISSED', 'CANCELLED']
       .map((status) => getAuditPresentedValueLabel('FindingReviewCase', status)),
     ['Aberto', 'Em análise', 'Aguardando evidências', 'Resolvido', 'Descartado', 'Cancelado'],
   );
+});
+
+test('apresenta decisão de identidade sem UUID na linha principal e mantém deep link seguro', async () => {
+  const decisionId = '66666666-6666-4666-8666-666666666666';
+  const harness = await renderPage(async () => response([auditLog({
+    action: 'CASE_DECISION_RECORDED',
+    before: { version: 4, currentDecision: null },
+    after: { version: 5, decisionId, identityConclusion: 'SAME_ASSET' },
+    metadata: { decisionId, identityConclusion: 'SAME_ASSET' },
+  })]));
+  try {
+    const row = harness.environment.container.querySelector('tbody tr');
+    assert.ok(row);
+    const text = [...row.querySelectorAll('td')]
+      .slice(0, 7)
+      .map((cell) => cell.textContent)
+      .join(' ');
+    assert.match(text, /Decisão de identidade registrada/);
+    assert.match(text, /Versão 4 · decisão anterior não registrada/);
+    assert.match(text, /Versão 5 · conclusão: Mesmo ativo/);
+    assert.doesNotMatch(text, new RegExp(decisionId));
+    assert.doesNotMatch(text, /SAME_ASSET/);
+    assert.equal(
+      row.querySelector('a')?.getAttribute('href'),
+      `/conflict-review-cases?caseId=${CASE_ID}`,
+    );
+  } finally {
+    await close(harness.root, harness.environment);
+  }
 });
 
 test('gera deep link somente para caso de revisão com identificador válido', () => {
@@ -184,6 +216,7 @@ test('filtros apresentam labels e enviam valores técnicos inalterados', async (
 
     assert.match(action.textContent ?? '', /Caso de revisão criado/);
     assert.match(action.textContent ?? '', /Status do caso de revisão alterado/);
+    assert.match(action.textContent ?? '', /Decisão de identidade registrada/);
     assert.match(entityType.textContent ?? '', /Caso de revisão/);
 
     await act(async () => {
