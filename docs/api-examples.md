@@ -924,6 +924,51 @@ O detalhe `GET /conflict-review-cases/:id` inclui de forma aditiva `currentDecis
 `decisionHistory`. A decisão corrente é derivada pela maior `caseVersion`; casos sem decisão retornam
 `currentDecision: null` e `decisionHistory: []`. O fingerprint e a chave idempotente não são expostos.
 
+### Resolver logicamente um caso de revisão
+
+Somente um caso `IN_REVIEW` com decisão corrente pode encerrar a investigação:
+
+```powershell
+curl.exe -X POST http://localhost:3001/conflict-review-cases/CASE_UUID/resolutions `
+  -H "Content-Type: application/json" `
+  -H "Idempotency-Key: resolucao-caso-001" `
+  -d '{
+    "expectedVersion":5,
+    "justification":"Investigação concluída com base nas evidências."
+  }'
+```
+
+Uma resolução nova retorna HTTP `201`; repetir a mesma chave, caso, versão original e justificativa
+normalizada retorna HTTP `200` com `idempotentReplay: true`. A justificativa recebe trim somente nas
+extremidades, preserva whitespace interno e aceita de 1 a 1.000 caracteres. O fingerprint é composto
+por operação, ator provisório, `caseId` e chave opaca. Por isso, a idempotência é escopada por caso e a
+mesma chave pode ser usada de forma independente em outro caso.
+
+```json
+{
+  "idempotentReplay": false,
+  "resolution": {
+    "eventId": "EVENT_UUID",
+    "caseId": "CASE_UUID",
+    "decisionId": "DECISION_UUID",
+    "identityConclusion": "SAME_ASSET",
+    "justification": "Investigação concluída com base nas evidências.",
+    "versionBefore": 5,
+    "versionAfter": 6,
+    "previousStatus": "IN_REVIEW",
+    "status": "RESOLVED",
+    "resolvedBy": "atlas-mvp-user",
+    "resolvedAt": "2026-08-23T12:00:00.000Z"
+  }
+}
+```
+
+O comando usa controle otimista por `expectedVersion`, altera o caso para `RESOLVED`, incrementa a
+versão, libera `activeReviewSubjectKey` e cria `CASE_RESOLVED` e `AuditLog` atomicamente. `RESOLVED`
+significa apenas que a investigação foi encerrada: o Atlas não recalcula ou corrige o finding, não
+mescla ativos, não altera o inventário ou `Conflict`, não cria suppression e não executa remediation.
+Reabertura, correção, superseding e interface para resolução continuam fora desta entrega.
+
 ### Criar caso
 
 Primeiro consulte o inventário agregado e copie um `findingId` atual. Depois envie:

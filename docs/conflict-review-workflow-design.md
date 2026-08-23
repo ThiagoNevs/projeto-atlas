@@ -592,8 +592,8 @@ permanecem propostos e fora do MVP atual.
 - **Concorrência:** update condicional por ID, versão e estado atual; versão divergente retorna `409`.
 - **Efeitos:** incrementa a versão e atualiza o estado e `updatedAt`, cria `CASE_STATUS_CHANGED` e
   `AuditLog` na mesma transação PostgreSQL. Não altera inventário.
-- **Limitações:** ator `atlas-mvp-user` provisório; autenticação e RBAC ainda não existem. Transições
-  para `RESOLVED`, `DISMISSED` e `CANCELLED` dependem do fluxo futuro de decisão.
+- **Limitações:** ator `atlas-mvp-user` provisório; autenticação e RBAC ainda não existem. `RESOLVED`
+  possui comando de domínio próprio; `DISMISSED` e `CANCELLED` continuam futuros.
 
 ### 14.5 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
@@ -636,14 +636,31 @@ permanecem propostos e fora do MVP atual.
 - **Limites atuais:** não existem componentes de decisão, resolução terminal, correção ou superseding. Embora
   o schema seja 1:N, uma segunda decisão nova é rejeitada até existir fluxo explícito futuro.
 
-### 14.8 `POST /conflict-review-cases/:id/refresh` — proposto
+### 14.8 `POST /conflict-review-cases/:id/resolutions` — implementado para resolução lógica
+
+- **Request:** `expectedVersion` e justificativa obrigatória de 1 a 1.000 caracteres, com
+  `Idempotency-Key` obrigatória.
+- **Elegibilidade:** somente caso `IN_REVIEW` com decisão corrente; a decisão é derivada pela maior
+  `caseVersion`. A operação não exige staleness atual e não recalcula o finding.
+- **Idempotência:** fingerprint SHA-256 de operação, ator, `caseId` e chave opaca. O escopo é por caso:
+  a mesma chave pode ser reutilizada em outro caso. Replay semântico precede estado e versão atuais,
+  retorna HTTP `200` e representa a resolução original; uma resolução nova retorna HTTP `201`.
+- **Concorrência:** update condicional por `expectedVersion`. A mesma chave converge para replay;
+  chaves diferentes disputando a mesma versão produzem um vencedor e conflito de versão no perdedor.
+- **Efeitos:** altera somente status para `RESOLVED`, versão, `updatedAt` e libera
+  `activeReviewSubjectKey`; cria `CASE_RESOLVED` e `AuditLog` na mesma transação PostgreSQL.
+- **Semântica:** `RESOLVED` encerra a investigação. Não corrige o finding derivado, não mescla ativos,
+  não cria suppression, não altera `Conflict` e não executa remediation. Reabertura, correção e
+  superseding continuam fora do escopo.
+
+### 14.9 `POST /conflict-review-cases/:id/refresh` — proposto
 
 - **Objetivo:** recalcular e comparar o finding.
 - **Request:** `expectedVersion`.
 - **Response:** staleness, snapshot atual e diff estruturado.
 - **Efeitos:** preserva original, salva comparação, evento e auditoria; não muda decisão/status.
 
-### 14.9 Regras transversais dos contratos
+### 14.10 Regras transversais dos contratos
 
 | Endpoint | Autorização | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- | --- |
