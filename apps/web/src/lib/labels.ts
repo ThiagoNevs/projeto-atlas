@@ -108,6 +108,7 @@ const evidenceTypeLabels: Record<string, string> = {
 const auditActionLabels: Record<string, string> = {
   CASE_CREATED: 'Caso de revisão criado',
   CASE_STATUS_CHANGED: 'Status do caso de revisão alterado',
+  CASE_DECISION_RECORDED: 'Decisão de identidade registrada',
   ADMIN_STATUS_CHANGED: 'Status administrativo alterado',
   CONFLICT_STATUS_CHANGED: 'Status do conflito alterado',
   NETWORK_DISCOVERY_RUN_EXECUTED: 'Descoberta de rede executada',
@@ -160,6 +161,8 @@ const auditValueLabels: Record<string, string> = {
   COMPLETED: 'Concluída',
   FAILED: 'Falhou',
   CANCELLED: 'Cancelada',
+  SAME_ASSET: 'Mesmo ativo',
+  DIFFERENT_ASSETS: 'Ativos diferentes',
 };
 
 const dataQualityIssueLabels: Record<string, string> = {

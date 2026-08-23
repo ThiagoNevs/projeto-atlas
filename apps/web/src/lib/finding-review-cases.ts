@@ -32,6 +32,9 @@ export type ActiveFindingReviewCaseStatus = (typeof ACTIVE_FINDING_REVIEW_CASE_S
 export type FindingReviewStaleness = (typeof FINDING_REVIEW_STALENESSES)[number];
 export type FindingReviewCaseSortField = (typeof FINDING_REVIEW_SORT_FIELDS)[number];
 export type FindingReviewSortDirection = 'asc' | 'desc';
+export const FINDING_REVIEW_IDENTITY_CONCLUSIONS = ['SAME_ASSET', 'DIFFERENT_ASSETS'] as const;
+export type FindingReviewIdentityConclusion =
+  (typeof FINDING_REVIEW_IDENTITY_CONCLUSIONS)[number];
 
 export interface FindingReviewCaseQuery {
   status?: FindingReviewCaseStatus;
@@ -87,9 +90,21 @@ export interface FindingReviewCaseEvent {
   createdAt: string;
 }
 
+export interface FindingReviewDecision {
+  id: string;
+  caseId: string;
+  identityConclusion: FindingReviewIdentityConclusion;
+  justification: string;
+  caseVersion: number;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface FindingReviewCaseDetail extends Omit<FindingReviewCaseListItem, 'assetCount' | 'eventCount'> {
   originalSnapshot: unknown;
   originalSnapshotHash: string;
+  currentDecision: FindingReviewDecision | null;
+  decisionHistory: FindingReviewDecision[];
   assets: FindingReviewCaseAsset[];
   events: FindingReviewCaseEvent[];
 }
@@ -115,6 +130,11 @@ export interface UpdateFindingReviewCaseStatusResponse {
   status: ActiveFindingReviewCaseStatus;
   version: number;
   updatedAt: string;
+}
+
+export interface CreateFindingReviewDecisionResponse {
+  decision: FindingReviewDecision;
+  idempotentReplay: boolean;
 }
 
 export const DEFAULT_FINDING_REVIEW_CASE_QUERY: Required<
@@ -161,7 +181,14 @@ export function getFindingReviewStalenessLabel(value: FindingReviewStaleness): s
 export function getFindingReviewEventLabel(value: string): string {
   if (value === 'CASE_CREATED') return 'Caso criado';
   if (value === 'CASE_STATUS_CHANGED') return 'Status do caso alterado';
+  if (value === 'CASE_DECISION_RECORDED') return 'Decisão de identidade registrada';
   return 'Evento do caso';
+}
+
+export function getFindingReviewIdentityConclusionLabel(
+  value: FindingReviewIdentityConclusion,
+): string {
+  return value === 'SAME_ASSET' ? 'Mesmo ativo' : 'Ativos diferentes';
 }
 
 export function getAllowedFindingReviewCaseStatusDestinations(
@@ -252,6 +279,8 @@ export function parseFindingReviewCaseDetail(value: unknown): FindingReviewCaseD
   if (
     !Object.prototype.hasOwnProperty.call(value, 'originalSnapshot') ||
     !isSha256(value.originalSnapshotHash) ||
+    !Object.prototype.hasOwnProperty.call(value, 'currentDecision') ||
+    !Array.isArray(value.decisionHistory) ||
     !Array.isArray(value.assets) ||
     !Array.isArray(value.events)
   ) {
@@ -259,14 +288,41 @@ export function parseFindingReviewCaseDetail(value: unknown): FindingReviewCaseD
   }
   const assets = value.assets.map(parseAsset);
   const events = value.events.map(parseEvent);
-  if (assets.some((asset) => asset === null) || events.some((event) => event === null)) return null;
+  const decisionHistory = value.decisionHistory.map(parseDecision);
+  const currentDecision = value.currentDecision === null ? null : parseDecision(value.currentDecision);
+  if (
+    assets.some((asset) => asset === null)
+    || events.some((event) => event === null)
+    || decisionHistory.some((decision) => decision === null)
+    || (value.currentDecision !== null && currentDecision === null)
+  ) return null;
+  const safeHistory = decisionHistory as FindingReviewDecision[];
+  if (
+    safeHistory.some((decision) => decision.caseId !== base.id)
+    || (currentDecision !== null && currentDecision.caseId !== base.id)
+  ) return null;
+  const expectedCurrent = safeHistory.reduce<FindingReviewDecision | null>((latest, decision) => (
+    latest === null || compareDecisions(latest, decision) < 0 ? decision : latest
+  ), null);
+  if ((currentDecision === null) !== (expectedCurrent === null)) return null;
+  if (currentDecision && expectedCurrent && !sameDecision(currentDecision, expectedCurrent)) return null;
   return {
     ...base,
     originalSnapshot: cloneJsonValue(value.originalSnapshot),
     originalSnapshotHash: value.originalSnapshotHash,
+    currentDecision,
+    decisionHistory: safeHistory,
     assets: assets as FindingReviewCaseAsset[],
     events: events as FindingReviewCaseEvent[],
   };
+}
+
+export function parseCreateFindingReviewDecisionResponse(
+  value: unknown,
+): CreateFindingReviewDecisionResponse | null {
+  if (!isRecord(value) || typeof value.idempotentReplay !== 'boolean') return null;
+  const decision = parseDecision(value.decision);
+  return decision ? { decision, idempotentReplay: value.idempotentReplay } : null;
 }
 
 export function parseCreateFindingReviewCaseResponse(
@@ -431,6 +487,50 @@ function parseEvent(value: unknown): FindingReviewCaseEvent | null {
     metadata,
     createdAt: value.createdAt,
   };
+}
+
+function parseDecision(value: unknown): FindingReviewDecision | null {
+  if (!isRecord(value)) return null;
+  if (
+    !isFindingReviewCaseId(value.id)
+    || !isFindingReviewCaseId(value.caseId)
+    || !FINDING_REVIEW_IDENTITY_CONCLUSIONS.includes(
+      value.identityConclusion as FindingReviewIdentityConclusion,
+    )
+    || typeof value.justification !== 'string'
+    || !isPositiveInteger(value.caseVersion)
+    || typeof value.createdBy !== 'string'
+    || value.createdBy.length === 0
+    || !isFindingReviewTimestamp(value.createdAt)
+  ) return null;
+  return {
+    id: value.id,
+    caseId: value.caseId,
+    identityConclusion: value.identityConclusion as FindingReviewIdentityConclusion,
+    justification: value.justification,
+    caseVersion: value.caseVersion,
+    createdBy: value.createdBy,
+    createdAt: value.createdAt,
+  };
+}
+
+function compareDecisions(left: FindingReviewDecision, right: FindingReviewDecision): number {
+  if (left.caseVersion !== right.caseVersion) return left.caseVersion - right.caseVersion;
+  if (left.createdAt < right.createdAt) return -1;
+  if (left.createdAt > right.createdAt) return 1;
+  if (left.id < right.id) return -1;
+  if (left.id > right.id) return 1;
+  return 0;
+}
+
+function sameDecision(left: FindingReviewDecision, right: FindingReviewDecision): boolean {
+  return left.id === right.id
+    && left.caseId === right.caseId
+    && left.identityConclusion === right.identityConclusion
+    && left.justification === right.justification
+    && left.caseVersion === right.caseVersion
+    && left.createdBy === right.createdBy
+    && left.createdAt === right.createdAt;
 }
 
 function parseMetadata(value: unknown): Record<string, string> | null {

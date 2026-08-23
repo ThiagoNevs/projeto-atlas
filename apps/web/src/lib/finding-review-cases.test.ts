@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createFindingReviewDecision,
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
@@ -13,9 +14,11 @@ import {
   getFindingReviewCaseStatusLabel,
   getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewEventLabel,
+  getFindingReviewIdentityConclusionLabel,
   getFindingReviewStalenessLabel,
   isFindingReviewTimestamp,
   parseCreateFindingReviewCaseResponse,
+  parseCreateFindingReviewDecisionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
   parseUpdateFindingReviewCaseStatusResponse,
@@ -24,8 +27,10 @@ import {
 } from './finding-review-cases.ts';
 
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
+const SECOND_CASE_ID = '55555555-5555-4555-8555-555555555555';
 const ASSET_ID = '22222222-2222-4222-8222-222222222222';
 const EVENT_ID = '33333333-3333-4333-8333-333333333333';
+const DECISION_ID = '44444444-4444-4444-8444-444444444444';
 const FINDING_ID = 'finding_0123456789abcdef01234567';
 const NOW = '2026-07-20T12:00:00.000Z';
 
@@ -55,6 +60,8 @@ const detailResponse = {
   eventCount: undefined,
   originalSnapshot: { findingId: FINDING_ID },
   originalSnapshotHash: 'a'.repeat(64),
+  currentDecision: null,
+  decisionHistory: [],
   assets: [{
     assetIdAtCreation: ASSET_ID,
     assetNameAtCreation: 'SRV-APP-01',
@@ -95,11 +102,93 @@ test('traduz status, atualidade e eventos sem exibir enums técnicos', () => {
   assert.equal(getFindingReviewStalenessLabel('NO_LONGER_DETECTED'), 'Não detectado atualmente');
   assert.equal(getFindingReviewEventLabel('CASE_CREATED'), 'Caso criado');
   assert.equal(getFindingReviewEventLabel('CASE_STATUS_CHANGED'), 'Status do caso alterado');
+  assert.equal(getFindingReviewEventLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getFindingReviewIdentityConclusionLabel('SAME_ASSET'), 'Mesmo ativo');
+  assert.equal(getFindingReviewIdentityConclusionLabel('DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('OPEN'), [
     'IN_REVIEW',
     'WAITING_FOR_EVIDENCE',
   ]);
   assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('RESOLVED'), []);
+});
+
+test('parser sanitiza decisão atual e histórico sem propagar fingerprint', () => {
+  const first = {
+    id: DECISION_ID,
+    caseId: CASE_ID,
+    identityConclusion: 'SAME_ASSET',
+    justification: 'Mesma identidade confirmada.',
+    caseVersion: 2,
+    createdBy: 'atlas-mvp-user',
+    createdAt: NOW,
+    requestFingerprint: 'não expor',
+  };
+  const second = {
+    ...first,
+    id: '55555555-5555-4555-8555-555555555555',
+    identityConclusion: 'DIFFERENT_ASSETS',
+    justification: 'Revisão histórica futura.',
+    caseVersion: 3,
+    createdAt: '2026-07-20T13:00:00.000Z',
+  };
+  const parsed = parseFindingReviewCaseDetail({
+    ...detailResponse,
+    currentDecision: second,
+    decisionHistory: [first, second],
+  });
+  assert.equal(parsed?.currentDecision?.identityConclusion, 'DIFFERENT_ASSETS');
+  assert.equal(parsed?.decisionHistory.length, 2);
+  assert.equal('requestFingerprint' in (parsed?.decisionHistory[0] as unknown as object), false);
+});
+
+test('parser rejeita decisões inválidas e inconsistência entre current e history', () => {
+  const decision = {
+    id: DECISION_ID,
+    caseId: CASE_ID,
+    identityConclusion: 'SAME_ASSET',
+    justification: 'Confirmada.',
+    caseVersion: 2,
+    createdBy: 'atlas-mvp-user',
+    createdAt: NOW,
+  };
+  for (const invalid of [
+    { ...decision, id: 'invalid' },
+    { ...decision, createdAt: '2026-02-30T10:00:00Z' },
+    { ...decision, caseVersion: 0 },
+    { ...decision, identityConclusion: 'UNKNOWN' },
+  ]) {
+    assert.equal(parseFindingReviewCaseDetail({
+      ...detailResponse,
+      currentDecision: invalid,
+      decisionHistory: [invalid],
+    }), null);
+  }
+  assert.equal(parseFindingReviewCaseDetail({
+    ...detailResponse,
+    currentDecision: decision,
+    decisionHistory: [],
+  }), null);
+  assert.equal(parseFindingReviewCaseDetail({
+    ...detailResponse,
+    currentDecision: { ...decision, caseId: SECOND_CASE_ID },
+    decisionHistory: [{ ...decision, caseId: SECOND_CASE_ID }],
+  }), null);
+});
+
+test('parser de criação de decisão aceita 201/200 e descarta campos externos', () => {
+  const decision = {
+    id: DECISION_ID,
+    caseId: CASE_ID,
+    identityConclusion: 'SAME_ASSET',
+    justification: 'Confirmada.',
+    caseVersion: 2,
+    createdBy: 'atlas-mvp-user',
+    createdAt: NOW,
+    requestFingerprint: 'não expor',
+  };
+  const parsed = parseCreateFindingReviewDecisionResponse({ decision, idempotentReplay: false });
+  assert.equal(parsed?.decision.identityConclusion, 'SAME_ASSET');
+  assert.equal('requestFingerprint' in (parsed?.decision as unknown as object), false);
 });
 
 test('parser da transição aceita apenas resposta mínima estruturalmente válida', () => {
@@ -334,4 +423,40 @@ test('transição rejeita resposta runtime inválida e preserva erros HTTP contr
     }),
     (error: unknown) => error instanceof ApiError && error.status === 409,
   );
+});
+
+test('cliente de decisão envia contrato técnico, chave opaca e interpreta replay', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({
+      decision: {
+        id: DECISION_ID,
+        caseId: CASE_ID,
+        identityConclusion: 'SAME_ASSET',
+        justification: 'Mesma  identidade.\nConfirmada.',
+        caseVersion: 2,
+        createdBy: 'atlas-mvp-user',
+        createdAt: NOW,
+      },
+      idempotentReplay: true,
+    }, { status: 200 });
+  };
+  const result = await createFindingReviewDecision(
+    CASE_ID,
+    'SAME_ASSET',
+    '  Mesma  identidade.\nConfirmada.  ',
+    1,
+    'atlas-ui-decision-key',
+    { fetchImplementation },
+  );
+  assert.equal(result.idempotentReplay, true);
+  assert.equal(calls[0]?.init.method, 'POST');
+  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-decision-key');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    identityConclusion: 'SAME_ASSET',
+    justification: 'Mesma  identidade.\nConfirmada.',
+    expectedVersion: 1,
+  });
+  assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/decisions$`));
 });

@@ -23,6 +23,7 @@ import {
 const actions = [
   'CASE_CREATED',
   'CASE_STATUS_CHANGED',
+  'CASE_DECISION_RECORDED',
   'ADMIN_STATUS_CHANGED',
   'CONFLICT_STATUS_CHANGED',
   'NETWORK_DISCOVERY_RUN_EXECUTED',
@@ -93,6 +94,17 @@ export function getAuditPresentedValueLabel(entityType: string, value: string): 
 
 function compactValue(value: unknown, entityType: string): string {
   if (!isRecord(value)) return 'Não informado';
+  if (entityType === 'FindingReviewCase') {
+    const version = typeof value.version === 'number' ? `Versão ${value.version}` : null;
+    if (value.identityConclusion === 'SAME_ASSET' || value.identityConclusion === 'DIFFERENT_ASSETS') {
+      return [version, `conclusão: ${getAuditPresentedValueLabel(entityType, value.identityConclusion)}`]
+        .filter(Boolean)
+        .join(' · ');
+    }
+    if (value.currentDecision === null) {
+      return [version, 'decisão anterior não registrada'].filter(Boolean).join(' · ');
+    }
+  }
   const entries = Object.entries(value);
   if (entries.length === 0) return 'Não informado';
 
@@ -123,12 +135,13 @@ export function getAuditEntityHref(entityType: string, entityId: unknown): strin
   return `/conflict-review-cases?caseId=${encodeURIComponent(entityId)}`;
 }
 
-function presentFindingReviewCaseStatuses(value: unknown): unknown {
+function presentFindingReviewCaseValues(value: unknown): unknown {
   if (isFindingReviewCaseStatus(value)) return getFindingReviewCaseStatusLabel(value);
-  if (Array.isArray(value)) return value.map(presentFindingReviewCaseStatuses);
+  if (value === 'SAME_ASSET' || value === 'DIFFERENT_ASSETS') return getAuditValueLabel(value);
+  if (Array.isArray(value)) return value.map(presentFindingReviewCaseValues);
   if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, presentFindingReviewCaseStatuses(entry)]),
+      Object.entries(value).map(([key, entry]) => [key, presentFindingReviewCaseValues(entry)]),
     );
   }
   return value;
@@ -144,7 +157,7 @@ function JsonDetails({
   value: unknown;
 }) {
   const presentedValue = entityType === 'FindingReviewCase'
-    ? presentFindingReviewCaseStatuses(value)
+    ? presentFindingReviewCaseValues(value)
     : value;
   return (
     <div>
@@ -439,7 +452,11 @@ export function AuditPage({ loadAuditLogs = getAuditLogs }: { loadAuditLogs?: Au
                                 label="Valor novo"
                                 value={log.after}
                               />
-                              <JsonDetails label="Metadados" value={log.metadata} />
+                              <JsonDetails
+                                entityType={log.entityType}
+                                label="Metadados"
+                                value={log.metadata}
+                              />
                             </div>
                           </div>
                         </details>

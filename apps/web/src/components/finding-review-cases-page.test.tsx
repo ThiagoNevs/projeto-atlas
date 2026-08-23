@@ -1,19 +1,12 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
-import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 
-import {
-  FindingReviewCasesPage,
-  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
-  buildFindingReviewCaseQueryFromForm,
-  createPendingFindingReviewCaseAttempt,
-  parsePendingFindingReviewCaseAttempt,
-} from './finding-review-cases-page.tsx';
 import { ApiError } from '../lib/api-error.ts';
 import type {
   CreateFindingReviewCaseResponse,
+  CreateFindingReviewDecisionResponse,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
 } from '../lib/api.ts';
@@ -22,11 +15,55 @@ import {
   type JsdomTestEnvironment,
 } from '../test/jsdom-test-environment.ts';
 
+const sharedEnvironment = createJsdomTestEnvironment();
+sharedEnvironment.container.remove();
+
+const { act, createElement } = await import('react');
+const { createRoot } = await import('react-dom/client');
+const {
+  FindingReviewCasesPage,
+  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  buildFindingReviewCaseQueryFromForm,
+  createPendingFindingReviewCaseAttempt,
+  createPendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewCaseAttempt,
+} = await import('./finding-review-cases-page.tsx');
+
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_CASE_ID = '44444444-4444-4444-8444-444444444444';
 const ASSET_ID = '22222222-2222-4222-8222-222222222222';
 const FINDING_ID = 'finding_0123456789abcdef01234567';
 const SECOND_FINDING_ID = 'finding_89abcdef0123456789abcdef';
+
+let activeTestEnvironments = 0;
+
+function createIsolatedTestEnvironment(): JsdomTestEnvironment {
+  assert.equal(activeTestEnvironments, 0);
+  activeTestEnvironments += 1;
+  sharedEnvironment.window.sessionStorage.clear();
+  sharedEnvironment.window.history.replaceState(null, '', '/');
+  const environment = sharedEnvironment;
+  const container = sharedEnvironment.window.document.createElement('div');
+  sharedEnvironment.window.document.body.append(container);
+  let cleaned = false;
+  return {
+    container,
+    window: sharedEnvironment.window,
+    cleanup: () => {
+      if (cleaned) return;
+      cleaned = true;
+      container.replaceChildren();
+      container.remove();
+      environment.window.sessionStorage.clear();
+      environment.window.history.replaceState(null, '', '/');
+      activeTestEnvironments -= 1;
+    },
+  };
+}
+
+after(() => sharedEnvironment.cleanup());
 
 const listResponse: FindingReviewCaseListResponse = {
   items: [{
@@ -50,6 +87,8 @@ const detailResponse: FindingReviewCaseDetail = {
   ...listResponse.items[0]!,
   originalSnapshot: { findingId: FINDING_ID, normalizedHostname: 'srv-app-01' },
   originalSnapshotHash: 'a'.repeat(64),
+  currentDecision: null,
+  decisionHistory: [],
   assets: [{
     assetIdAtCreation: ASSET_ID,
     assetNameAtCreation: 'SRV-APP-01',
@@ -85,9 +124,50 @@ const creationResponse: CreateFindingReviewCaseResponse = {
   idempotentReplay: false,
 };
 
+const decisionReadyDetail: FindingReviewCaseDetail = {
+  ...detailResponse,
+  status: 'IN_REVIEW',
+  version: 2,
+  originalSnapshot: {
+    snapshotVersion: 1,
+    findingId: FINDING_ID,
+    reviewOptions: ['SAME_ASSET', 'DIFFERENT_ASSETS'],
+  },
+  assets: [
+    detailResponse.assets[0]!,
+    {
+      assetIdAtCreation: '55555555-5555-4555-8555-555555555555',
+      assetNameAtCreation: 'SRV-APP-02',
+      role: 'AFFECTED',
+      currentAssetId: '55555555-5555-4555-8555-555555555555',
+      currentAssetName: 'SRV-APP-02',
+      currentAssetAvailable: true,
+    },
+  ],
+};
+
+const decisionResponse: CreateFindingReviewDecisionResponse = {
+  decision: {
+    id: '66666666-6666-4666-8666-666666666666',
+    caseId: CASE_ID,
+    identityConclusion: 'SAME_ASSET',
+    justification: 'Mesma identidade confirmada.',
+    caseVersion: 3,
+    createdBy: 'atlas-mvp-user',
+    createdAt: '2026-07-20T12:10:00.000Z',
+  },
+  idempotentReplay: false,
+};
+
 async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function settleScheduledFocus(environment: JsdomTestEnvironment): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => environment.window.requestAnimationFrame(() => resolve()));
+  });
 }
 
 function deferred<T>() {
@@ -132,7 +212,7 @@ function findButton(container: HTMLElement, text: string): HTMLButtonElement {
 
 async function renderPage(
   props: Parameters<typeof FindingReviewCasesPage>[0],
-  environment = createJsdomTestEnvironment(),
+  environment = createIsolatedTestEnvironment(),
 ) {
   const root: Root = createRoot(environment.container);
   await act(async () => {
@@ -210,6 +290,32 @@ function controlAnimationFrames(environment: JsdomTestEnvironment) {
 async function close(root: Root, cleanup: () => void): Promise<void> {
   await act(async () => root.unmount());
   cleanup();
+}
+
+async function submitEligibleDecision(
+  container: HTMLElement,
+  conclusion: 'SAME_ASSET' | 'DIFFERENT_ASSETS' = 'SAME_ASSET',
+  justification = 'Mesma identidade confirmada.',
+): Promise<void> {
+  const radio = container.querySelector<HTMLInputElement>(`input[value="${conclusion}"]`);
+  const textarea = container.querySelector<HTMLTextAreaElement>('#review-decision-justification');
+  assert.ok(radio && textarea);
+  await act(async () => {
+    radio.click();
+    await flush();
+  });
+  await act(async () => {
+    setControlValue(textarea, justification);
+    await flush();
+  });
+  await act(async () => {
+    findButton(container, 'Revisar decisão').click();
+    await flush();
+  });
+  await act(async () => {
+    findButton(container, 'Registrar decisão').click();
+    await flush();
+  });
 }
 
 test('lista casos e abre detalhe com snapshot, ativo atual e evento', async () => {
@@ -447,7 +553,7 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.equal(harness.environment.window.document.activeElement, heading);
+    assert.equal(harness.environment.window.document.activeElement === heading, true);
     assert.equal(heading.tabIndex, -1);
     assert.equal(panel.hasAttribute('tabindex'), false);
     const closeButton = findButton(harness.environment.container, 'Fechar detalhe');
@@ -456,7 +562,7 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
     assert.equal(harness.environment.window.location.search.includes('caseId='), false);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(document.activeElement === trigger, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -477,9 +583,10 @@ test('move o foco para o detalhe somente depois da conclusão do carregamento', 
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.notEqual(
-      harness.environment.window.document.activeElement,
-      harness.environment.container.querySelector('#review-case-detail-title'),
+    assert.equal(
+      harness.environment.window.document.activeElement
+        === harness.environment.container.querySelector('#review-case-detail-title'),
+      false,
     );
 
     await act(async () => { pending.resolve(detailResponse); await flush(); });
@@ -488,7 +595,7 @@ test('move o foco para o detalhe somente depois da conclusão do carregamento', 
     });
     const heading = harness.environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
     assert.ok(heading);
-    assert.equal(harness.environment.window.document.activeElement, heading);
+    assert.equal(harness.environment.window.document.activeElement === heading, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -524,7 +631,7 @@ test('cancela o foco agendado do caso anterior durante troca rápida de detalhe'
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.notEqual(harness.environment.window.document.activeElement, loadingHeading);
+    assert.equal(harness.environment.window.document.activeElement === loadingHeading, false);
 
     await act(async () => {
       second.resolve({ ...detailResponse, id: SECOND_CASE_ID });
@@ -537,14 +644,14 @@ test('cancela o foco agendado do caso anterior durante troca rápida de detalhe'
       '#review-case-detail-title',
     );
     assert.ok(finalHeading);
-    assert.equal(harness.environment.window.document.activeElement, finalHeading);
+    assert.equal(harness.environment.window.document.activeElement === finalHeading, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
 });
 
 test('erro do detalhe direciona o foco ao heading somente depois de concluir o loading', async () => {
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const frames = controlAnimationFrames(environment);
   const pending = deferred<FindingReviewCaseDetail>();
   const harness = await renderPage({
@@ -565,9 +672,9 @@ test('erro do detalhe direciona o foco ao heading somente depois de concluir o l
     );
     assert.ok(heading);
     assert.equal(heading.tabIndex, -1);
-    assert.notEqual(environment.window.document.activeElement, heading);
+    assert.equal(environment.window.document.activeElement === heading, false);
     await act(async () => { frames.runAll(); await flush(); });
-    assert.equal(environment.window.document.activeElement, heading);
+    assert.equal(environment.window.document.activeElement === heading, true);
     assert.match(environment.container.textContent ?? '', /Falha controlada/);
   } finally {
     frames.restore();
@@ -576,7 +683,7 @@ test('erro do detalhe direciona o foco ao heading somente depois de concluir o l
 });
 
 test('fechar antes do frame cancela o foco do detalhe e restaura o expansor', async () => {
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const frames = controlAnimationFrames(environment);
   const harness = await renderPage({
     loadCases: async () => listResponse,
@@ -599,7 +706,7 @@ test('fechar antes do frame cancela o foco do detalhe e restaura o expansor', as
     });
     assert.equal(environment.container.querySelector('#review-case-detail-title'), null);
     await act(async () => { frames.runAll(); await flush(); });
-    assert.equal(environment.window.document.activeElement, trigger);
+    assert.equal(environment.window.document.activeElement === trigger, true);
   } finally {
     frames.restore();
     await close(harness.root, environment.cleanup);
@@ -607,7 +714,7 @@ test('fechar antes do frame cancela o foco do detalhe e restaura o expansor', as
 });
 
 test('unmount antes do frame cancela o foco pendente do detalhe', async () => {
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const frames = controlAnimationFrames(environment);
   const harness = await renderPage({
     loadCases: async () => listResponse,
@@ -634,7 +741,7 @@ test('unmount antes do frame cancela o foco pendente do detalhe', async () => {
 });
 
 test('rerender do mesmo detalhe não agenda nem rouba o foco novamente', async () => {
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const frames = controlAnimationFrames(environment);
   const props = {
     loadCases: async () => listResponse,
@@ -669,7 +776,7 @@ test('rerender do mesmo detalhe não agenda nem rouba o foco novamente', async (
     });
     await act(async () => { frames.runAll(); await flush(); });
     assert.equal(focusCalls, 1);
-    assert.equal(environment.window.document.activeElement, filterControl);
+    assert.equal(environment.window.document.activeElement === filterControl, true);
   } finally {
     frames.restore();
     await close(harness.root, environment.cleanup);
@@ -876,7 +983,7 @@ test('navegação durante replay conclusivo limpa a tentativa e ignora sua respo
 });
 
 test('resultado incerto preserva a chave entre remontagem e replay', async () => {
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const keys: string[] = [];
   const uncertain = deferred<CreateFindingReviewCaseResponse>();
   const firstContainer = environment.container;
@@ -997,7 +1104,7 @@ test('conteúdo pendente inválido ou expirado exige um novo gesto antes do POST
     Date.parse('2020-01-01T00:00:00.000Z'),
   );
   for (const storedValue of ['{invalid', JSON.stringify(expired)]) {
-    const environment = createJsdomTestEnvironment();
+    const environment = createIsolatedTestEnvironment();
     const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
     environment.window.sessionStorage.setItem(storageKey, storedValue);
     const keys: string[] = [];
@@ -1215,7 +1322,7 @@ test('retry expirado na mesma aba não envia POST e exige novo gesto', async () 
 
 test('getItem indisponível reutiliza a tentativa em memória antes do TTL e bloqueia depois', async () => {
   const clock = installControlledClock('2026-07-20T12:00:00.000Z');
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const storage = environment.window.sessionStorage;
   const originalGetItem = storage.getItem.bind(storage);
   const restoreGetItem = replaceStorageMethod(environment, 'getItem', () => {
@@ -1262,7 +1369,7 @@ test('getItem indisponível reutiliza a tentativa em memória antes do TTL e blo
 
 test('setItem indisponível mantém o envelope completo em memória e respeita sua expiração', async () => {
   const clock = installControlledClock('2026-07-20T12:00:00.000Z');
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const restoreSetItem = replaceStorageMethod(environment, 'setItem', () => {
     throw new Error('storage blocked');
   });
@@ -1304,7 +1411,7 @@ test('setItem indisponível mantém o envelope completo em memória e respeita s
 
 test('removeItem indisponível invalida a tentativa expirada em memória sem crash', async () => {
   const clock = installControlledClock('2026-07-20T12:00:00.000Z');
-  const environment = createJsdomTestEnvironment();
+  const environment = createIsolatedTestEnvironment();
   const restoreRemoveItem = replaceStorageMethod(environment, 'removeItem', () => {
     throw new Error('storage blocked');
   });
@@ -1381,7 +1488,7 @@ test('tentativas incertas permanecem isoladas por finding durante navegação', 
 
 test('respostas conclusivas limpam a tentativa mesmo depois do unmount', async () => {
   for (const status of [400, 404, 409, 503]) {
-    const environment = createJsdomTestEnvironment();
+    const environment = createIsolatedTestEnvironment();
     const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
     const attempt = createPendingFindingReviewCaseAttempt(
       FINDING_ID,
@@ -1653,6 +1760,7 @@ test('exige justificativa ao sair da espera e impede whitespace com foco acessí
   });
   try {
     await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
     await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
@@ -1667,7 +1775,7 @@ test('exige justificativa ao sair da espera e impede whitespace com foco acessí
     });
     assert.equal(updates, 0);
     assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
-    assert.equal(harness.environment.window.document.activeElement, textarea);
+    assert.equal(harness.environment.window.document.activeElement === textarea, true);
     assert.equal(textarea.getAttribute('aria-invalid'), 'true');
     await act(async () => { setControlValue(textarea, 'a'.repeat(501)); await flush(); });
     await act(async () => {
@@ -1691,7 +1799,7 @@ test('loading desabilita select, textarea e botão da transição de espera', as
   const harness = await renderPage({
     initialSearchParams: { caseId: CASE_ID },
     loadCases: async () => listResponse,
-    loadDetail: async () => detailResponse,
+    loadDetail: async () => decisionReadyDetail,
     updateStatus: async () => pending.promise,
   });
   try {
@@ -1709,6 +1817,10 @@ test('loading desabilita select, textarea e botão da transição de espera', as
     assert.equal(select.disabled, true);
     assert.equal(textarea.disabled, true);
     assert.equal(button.disabled, true);
+    assert.equal(
+      findButton(harness.environment.container, 'Revisar decisão').disabled,
+      true,
+    );
     await act(async () => {
       pending.resolve({
         id: CASE_ID,
@@ -1734,6 +1846,7 @@ test('conflito 409 não faz retry automático e exige recarregamento explícito'
   });
   try {
     await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
     await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
@@ -1750,7 +1863,7 @@ test('conflito 409 não faz retry automático e exige recarregamento explícito'
     assert.equal(textarea.value, 'Aguardando evidência.');
     const alert = harness.environment.container.querySelector('[role="alert"]');
     assert.ok(alert);
-    assert.equal(harness.environment.window.document.activeElement, alert);
+    assert.equal(harness.environment.window.document.activeElement === alert, true);
     await act(async () => { findButton(harness.environment.container, 'Recarregar caso').click(); await flush(); });
     assert.equal(updates, 1);
     assert.ok(detailLoads >= 2);
@@ -1931,4 +2044,539 @@ test('resposta da transição após unmount não atualiza React', async () => {
   await act(async () => { pending.resolve({ id: CASE_ID, status: 'IN_REVIEW', version: 2, updatedAt: '2026-07-20T12:05:00.000Z' }); await flush(); });
   assert.equal(harness.environment.container.textContent, '');
   harness.environment.cleanup();
+});
+
+test('decisão elegível usa radios acessíveis, valida justificativa e confirma em dois passos', async () => {
+  let calls = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async () => { calls += 1; return decisionResponse; },
+  });
+  try {
+    await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Os registros investigados representam a mesma identidade de ativo/);
+    assert.match(text, /Mesmo ativo/);
+    assert.match(text, /Ativos diferentes/);
+    const radios = harness.environment.container.querySelectorAll<HTMLInputElement>(
+      'input[name="identity-conclusion"]',
+    );
+    assert.equal(radios.length, 2);
+
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    assert.equal(harness.environment.window.document.activeElement === radios.item(0), true);
+    assert.match(harness.environment.container.textContent ?? '', /Selecione uma conclusão/);
+
+    await act(async () => { radios.item(0).click(); await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-decision-justification',
+    );
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, '   \n  '); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    assert.equal(harness.environment.window.document.activeElement === textarea, true);
+    assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
+
+    await act(async () => { setControlValue(textarea, 'a'.repeat(1001)); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /no máximo 1000 caracteres/);
+    assert.match(harness.environment.container.textContent ?? '', /1001 \/ 1000/);
+
+    await act(async () => { setControlValue(textarea, 'a'.repeat(1000)); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /Confirme a decisão/);
+    await act(async () => {
+      findButton(harness.environment.container, 'Voltar e editar').click();
+      await flush();
+    });
+
+    const editedTextarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-decision-justification',
+    );
+    assert.ok(editedTextarea);
+    await act(async () => {
+      setControlValue(editedTextarea, '  Mesma identidade confirmada.  ');
+      await flush();
+    });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    assert.equal(calls, 0);
+    assert.match(harness.environment.container.textContent ?? '', /Confirme a decisão/);
+    assert.match(harness.environment.container.textContent ?? '', /não resolve o caso/);
+    assert.ok(findButton(harness.environment.container, 'Registrar decisão'));
+    await act(async () => {
+      findButton(harness.environment.container, 'Voltar e editar').click();
+      await flush();
+    });
+    assert.ok(harness.environment.container.querySelector('#review-decision-justification'));
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('registra decisão 201 uma vez, atualiza leitura local e preserva status', async () => {
+  const calls: Array<{ conclusion: string; justification: string; version: number; key: string }> = [];
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async (_id, conclusion, justification, version, key) => {
+      calls.push({ conclusion, justification, version, key });
+      return decisionResponse;
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const radio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[value="SAME_ASSET"]',
+    );
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-decision-justification',
+    );
+    assert.ok(radio && textarea);
+    await act(async () => { radio.click(); await flush(); });
+    await act(async () => { setControlValue(textarea, '  Mesma identidade confirmada.  '); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+    });
+    const register = findButton(harness.environment.container, 'Registrar decisão');
+    await act(async () => { register.click(); register.click(); await flush(); });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0] && {
+      conclusion: calls[0].conclusion,
+      justification: calls[0].justification,
+      version: calls[0].version,
+    }, {
+      conclusion: 'SAME_ASSET',
+      justification: 'Mesma identidade confirmada.',
+      version: 2,
+    });
+    assert.match(calls[0]?.key ?? '', /^atlas-ui-/);
+    const updated = harness.environment.container.textContent ?? '';
+    assert.match(updated, /Decisão registrada com sucesso/);
+    assert.match(updated, /Esta decisão não alterou automaticamente o inventário/);
+    assert.match(updated, /Estado atual: Em análise/);
+    assert.equal(harness.environment.container.querySelector('#review-decision-justification'), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resultado incerto persiste envelope e retry reutiliza chave e payload', async () => {
+  const attempts: Array<{ conclusion: string; justification: string; version: number; key: string }> = [];
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async (_id, conclusion, justification, version, key) => {
+      attempts.push({ conclusion, justification, version, key });
+      if (attempts.length === 1) throw new ApiError('timeout', 408);
+      return { ...decisionResponse, idempotentReplay: true };
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    const radio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[value="SAME_ASSET"]',
+    );
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-decision-justification',
+    );
+    assert.ok(radio && textarea);
+    await act(async () => { radio.click(); await flush(); });
+    await act(async () => { setControlValue(textarea, 'Mesma identidade confirmada.'); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+      findButton(harness.environment.container, 'Registrar decisão').click();
+      await flush();
+    });
+    const storageKey = `atlas:pending-review-decision:${CASE_ID}`;
+    assert.ok(harness.environment.window.sessionStorage.getItem(storageKey));
+    assert.match(harness.environment.container.textContent ?? '', /mesma chave idempotente será reutilizada/i);
+    await act(async () => {
+      findButton(harness.environment.container, 'Tentar novamente').click();
+      await flush();
+    });
+    assert.equal(attempts.length, 2);
+    assert.deepEqual(attempts[1], attempts[0]);
+    assert.equal(harness.environment.window.sessionStorage.getItem(storageKey), null);
+    assert.match(harness.environment.container.textContent ?? '', /recuperada com segurança/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resposta tardia da decisão de A não altera B e limpa somente o envelope de A', async () => {
+  const pendingA = deferred<CreateFindingReviewDecisionResponse>();
+  const secondDetail: FindingReviewCaseDetail = {
+    ...decisionReadyDetail,
+    id: SECOND_CASE_ID,
+    findingId: SECOND_FINDING_ID,
+    originalSnapshot: {
+      snapshotVersion: 1,
+      findingId: SECOND_FINDING_ID,
+      reviewOptions: ['SAME_ASSET', 'DIFFERENT_ASSETS'],
+    },
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async (id) => id === SECOND_CASE_ID ? secondDetail : decisionReadyDetail,
+    createDecision: async () => pendingA.promise,
+  });
+  try {
+    await act(async () => { await flush(); });
+    await submitEligibleDecision(harness.environment.container);
+    const storageKeyA = `atlas:pending-review-decision:${CASE_ID}`;
+    const storageKeyB = `atlas:pending-review-decision:${SECOND_CASE_ID}`;
+
+    harness.environment.window.history.pushState(
+      null,
+      '',
+      `/conflict-review-cases?caseId=${SECOND_CASE_ID}`,
+    );
+    await act(async () => {
+      harness.environment.window.dispatchEvent(new harness.environment.window.PopStateEvent('popstate'));
+      await flush();
+    });
+    assert.ok(harness.environment.window.sessionStorage.getItem(storageKeyA));
+
+    const attemptB = createPendingFindingReviewDecisionAttempt(
+      SECOND_CASE_ID,
+      'DIFFERENT_ASSETS',
+      'Tentativa incerta exclusiva de B.',
+      2,
+      'atlas-ui-decision-case-b',
+    );
+    harness.environment.window.sessionStorage.setItem(storageKeyB, JSON.stringify(attemptB));
+
+    await act(async () => {
+      pendingA.resolve(decisionResponse);
+      await flush();
+    });
+
+    const visible = harness.environment.container.textContent ?? '';
+    assert.match(visible, new RegExp(SECOND_CASE_ID));
+    assert.doesNotMatch(visible, /Decisão registrada com sucesso/);
+    assert.doesNotMatch(visible, /Mesma identidade confirmada/);
+    assert.equal(harness.environment.window.sessionStorage.getItem(storageKeyA), null);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(storageKeyB),
+      JSON.stringify(attemptB),
+    );
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('conflito de versão da decisão é conclusivo, não repete POST e exige recarga', async () => {
+  const requests: string[] = [];
+  let detailLoads = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      return decisionReadyDetail;
+    },
+    createDecision: async (_id, _conclusion, _justification, _version, key) => {
+      requests.push(key);
+      throw new ApiError('Versão obsoleta', 409, 'FINDING_REVIEW_CASE_VERSION_CONFLICT');
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    await submitEligibleDecision(harness.environment.container);
+    assert.equal(requests.length, 1);
+    assert.equal(new Set(requests).size, 1);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    assert.match(harness.environment.container.textContent ?? '', /caso foi alterado/i);
+    assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+    await act(async () => {
+      findButton(harness.environment.container, 'Recarregar caso').click();
+      await flush();
+    });
+    assert.equal(requests.length, 1);
+    assert.ok(detailLoads >= 2);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('reutilização incompatível da chave é conclusiva e não cria nova tentativa', async () => {
+  const requests: string[] = [];
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async (_id, _conclusion, _justification, _version, key) => {
+      requests.push(key);
+      throw new ApiError('Chave reutilizada', 409, 'IDEMPOTENCY_KEY_REUSED');
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    await submitEligibleDecision(harness.environment.container);
+    assert.equal(requests.length, 1);
+    assert.equal(new Set(requests).size, 1);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    assert.match(harness.environment.container.textContent ?? '', /não corresponde à operação original/i);
+    assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+    assert.equal(requests.length, 1);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('decisão já registrada recarrega o GET e apresenta a decisão persistida sem novo POST', async () => {
+  let posts = 0;
+  let detailLoads = 0;
+  const persistedDetail: FindingReviewCaseDetail = {
+    ...decisionReadyDetail,
+    version: decisionResponse.decision.caseVersion,
+    currentDecision: decisionResponse.decision,
+    decisionHistory: [decisionResponse.decision],
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      return detailLoads === 1 ? decisionReadyDetail : persistedDetail;
+    },
+    createDecision: async () => {
+      posts += 1;
+      throw new ApiError(
+        'Decisão existente',
+        409,
+        'FINDING_REVIEW_CASE_DECISION_ALREADY_RECORDED',
+      );
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    await submitEligibleDecision(harness.environment.container);
+    await act(async () => { await flush(); });
+    assert.equal(posts, 1);
+    assert.ok(detailLoads >= 2);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    assert.match(harness.environment.container.textContent ?? '', /Mesma identidade confirmada/);
+    assert.equal(harness.environment.container.querySelector('#review-decision-justification'), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('decisão não permitida é conclusiva e o GET atualizado remove o formulário', async () => {
+  let posts = 0;
+  let detailLoads = 0;
+  const noLongerEligible: FindingReviewCaseDetail = {
+    ...decisionReadyDetail,
+    status: 'WAITING_FOR_EVIDENCE',
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      return detailLoads === 1 ? decisionReadyDetail : noLongerEligible;
+    },
+    createDecision: async () => {
+      posts += 1;
+      throw new ApiError('Decisão não permitida', 422, 'FINDING_REVIEW_CASE_DECISION_NOT_ALLOWED');
+    },
+  });
+  try {
+    await act(async () => { await flush(); });
+    await submitEligibleDecision(harness.environment.container);
+    await act(async () => { await flush(); });
+    assert.equal(posts, 1);
+    assert.ok(detailLoads >= 2);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    assert.match(harness.environment.container.textContent ?? '', /Retome a revisão/);
+    assert.equal(harness.environment.container.querySelector('#review-decision-justification'), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('respostas 404 e 503 da decisão são conclusivas, seguras e sem retry', async (context) => {
+  const scenarios = [
+    { status: 404, expected: /caso não foi encontrado/i },
+    { status: 503, expected: /indisponível neste ambiente/i },
+  ] as const;
+  for (const scenario of scenarios) {
+    await context.test(`HTTP ${scenario.status}`, async () => {
+      const requests: string[] = [];
+      const harness = await renderPage({
+        initialSearchParams: { caseId: CASE_ID },
+        loadCases: async () => listResponse,
+        loadDetail: async () => decisionReadyDetail,
+        createDecision: async (_id, _conclusion, _justification, _version, key) => {
+          requests.push(key);
+          throw new ApiError(`HTTP ${scenario.status}`, scenario.status);
+        },
+      });
+      try {
+        await act(async () => { await flush(); });
+        await submitEligibleDecision(harness.environment.container);
+        assert.equal(requests.length, 1);
+        assert.equal(new Set(requests).size, 1);
+        assert.equal(
+          harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+          null,
+        );
+        assert.match(harness.environment.container.textContent ?? '', scenario.expected);
+      } finally {
+        await close(harness.root, harness.environment.cleanup);
+      }
+    });
+  }
+});
+
+test('envelope de decisão valida TTL e permanece isolado por caso', () => {
+  const now = Date.parse('2026-08-22T12:00:00.000Z');
+  const attempt = createPendingFindingReviewDecisionAttempt(
+    CASE_ID,
+    'DIFFERENT_ASSETS',
+    'São ativos distintos.',
+    2,
+    'atlas-ui-decision-key',
+    now,
+  );
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), CASE_ID, now)?.caseId, CASE_ID);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(
+    JSON.stringify(attempt),
+    CASE_ID,
+    now + PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  ), null);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), SECOND_CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify({ ...attempt, extra: true }), CASE_ID, now), null);
+});
+
+test('exibe decisão atual, histórico múltiplo e evento traduzido sem fingerprint', async () => {
+  const firstDecision = decisionResponse.decision;
+  const secondDecision = {
+    ...firstDecision,
+    id: '77777777-7777-4777-8777-777777777777',
+    identityConclusion: 'DIFFERENT_ASSETS' as const,
+    justification: 'Conclusão\nreavaliada no histórico.',
+    caseVersion: 4,
+    createdAt: '2026-07-20T12:20:00.000Z',
+  };
+  const withDecision: FindingReviewCaseDetail = {
+    ...decisionReadyDetail,
+    version: 4,
+    currentDecision: secondDecision,
+    decisionHistory: [firstDecision, secondDecision],
+    events: [...decisionReadyDetail.events, {
+      id: '88888888-8888-4888-8888-888888888888',
+      eventType: 'CASE_DECISION_RECORDED',
+      versionBefore: 3,
+      versionAfter: 4,
+      actor: 'atlas-mvp-user',
+      metadata: {
+        identityConclusion: 'DIFFERENT_ASSETS',
+        decisionId: secondDecision.id,
+      },
+      createdAt: secondDecision.createdAt,
+    }],
+  };
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => withDecision,
+  });
+  try {
+    await act(async () => { await flush(); });
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Ativos diferentes/);
+    assert.match(text, /Conclusão\s+reavaliada no histórico/);
+    assert.match(text, /Histórico de decisões \(2\)/);
+    assert.match(text, /Decisão de identidade registrada/);
+    assert.match(text, /Conclusão: Ativos diferentes/);
+    assert.doesNotMatch(text, /requestFingerprint/);
+    assert.doesNotMatch(text, new RegExp(secondDecision.id));
+    assert.equal(harness.environment.container.querySelector('#review-decision-justification'), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('decisão em voo bloqueia transição de status', async () => {
+  const pending = deferred<CreateFindingReviewDecisionResponse>();
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async () => pending.promise,
+  });
+  let unmounted = false;
+  try {
+    await act(async () => { await flush(); });
+    const radio = harness.environment.container.querySelector<HTMLInputElement>('input[value="SAME_ASSET"]');
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-decision-justification');
+    assert.ok(radio && textarea);
+    await act(async () => { radio.click(); await flush(); });
+    await act(async () => { setControlValue(textarea, 'Mesma identidade confirmada.'); await flush(); });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar decisão').click();
+      await flush();
+      findButton(harness.environment.container, 'Registrar decisão').click();
+      await flush();
+    });
+    assert.equal(
+      harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status')?.disabled,
+      true,
+    );
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    await act(async () => harness.root.unmount());
+    unmounted = true;
+    assert.ok(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+    );
+    await act(async () => { pending.resolve(decisionResponse); await flush(); });
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-decision:${CASE_ID}`),
+      null,
+    );
+    assert.equal(harness.environment.container.textContent, '');
+  } finally {
+    if (!unmounted) await act(async () => harness.root.unmount());
+    harness.environment.cleanup();
+  }
 });

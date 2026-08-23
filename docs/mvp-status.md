@@ -200,8 +200,13 @@ detalhe do caso; o fingerprint não é retornado.
 As decisões permanecem append-only por invariante de domínio, e a decisão corrente é derivada pela
 maior `caseVersion`. O schema continua 1:N para um fluxo futuro explícito de correção ou superseding,
 mas esta etapa rejeita uma segunda decisão nova no mesmo caso. A decisão não resolve o caso, não
-altera seu status, não cria `Conflict` e não altera o inventário. Ainda não existe interface para
-registrar decisões.
+altera seu status, não cria `Conflict` e não altera o inventário. A interface do detalhe permite
+registrar a primeira decisão elegível com confirmação em dois passos, apresenta a decisão corrente e
+o histórico imutável e traduz `CASE_DECISION_RECORDED` no caso e na Auditoria global. Resultados de
+rede incertos preservam temporariamente, por até 15 minutos no `sessionStorage`, o payload mínimo e a
+mesma `Idempotency-Key` para retry explícito; resultados conclusivos removem esse envelope. A
+justificativa temporária não deve conter senhas, tokens ou dados sensíveis. Correção, edição,
+exclusão e superseding de decisões continuam indisponíveis.
 
 Ainda não existem atribuição, comentários, refresh, estados terminais operacionais, reabertura,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa

@@ -14,16 +14,19 @@ import {
 import { ErrorState, LoadingState } from './page-state';
 import {
   ApiError,
+  createFindingReviewDecision,
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
   updateFindingReviewCaseStatus,
   type ActiveFindingReviewCaseStatus,
   type CreateFindingReviewCaseResponse,
+  type CreateFindingReviewDecisionResponse,
   type FindingReviewCaseDetail,
   type FindingReviewCaseListResponse,
   type FindingReviewCaseQuery,
   type FindingReviewCasesRequestOptions,
+  type FindingReviewIdentityConclusion,
   type UpdateFindingReviewCaseStatusResponse,
 } from '../lib/api';
 import { CONFLICT_FINDING_TYPES, getConflictFindingTypeLabel } from '../lib/conflict-findings';
@@ -36,6 +39,7 @@ import {
   createFindingReviewIdempotencyKey,
   getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewCaseStatusLabel,
+  getFindingReviewIdentityConclusionLabel,
   getFindingReviewEventLabel,
   getFindingReviewStalenessLabel,
   isFindingReviewCaseId,
@@ -70,6 +74,14 @@ export type ReviewCaseStatusUpdater = (
   justification?: string,
   options?: FindingReviewCasesRequestOptions,
 ) => Promise<UpdateFindingReviewCaseStatusResponse>;
+export type ReviewCaseDecisionCreator = (
+  id: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  expectedVersion: number,
+  key: string,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<CreateFindingReviewDecisionResponse>;
 
 interface Props {
   initialSearchParams?: Record<string, string | string[] | undefined>;
@@ -77,6 +89,7 @@ interface Props {
   loadDetail?: ReviewCaseDetailLoader;
   createCase?: ReviewCaseCreator;
   updateStatus?: ReviewCaseStatusUpdater;
+  createDecision?: ReviewCaseDecisionCreator;
 }
 
 export interface FindingReviewCaseFilterForm {
@@ -101,8 +114,11 @@ interface LocationState {
 
 const DETAIL_PANEL_ID = 'finding-review-case-detail';
 const IDEMPOTENCY_STORAGE_PREFIX = 'atlas:pending-review-case:';
+const DECISION_STORAGE_PREFIX = 'atlas:pending-review-decision:';
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]{1,128}$/;
 export const PENDING_REVIEW_CASE_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+export const PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+export const MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH = 1000;
 
 export interface PendingFindingReviewCaseAttempt {
   version: 1;
@@ -118,6 +134,21 @@ type PendingAttemptInspection =
 
 type StoredPendingAttempt = PendingAttemptInspection
   | { status: 'missing'; attempt: null };
+
+export interface PendingFindingReviewDecisionAttempt {
+  version: 1;
+  caseId: string;
+  identityConclusion: FindingReviewIdentityConclusion;
+  justification: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+type PendingDecisionInspection =
+  | { status: 'valid'; attempt: PendingFindingReviewDecisionAttempt }
+  | { status: 'invalid' | 'expired'; attempt: null };
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -453,12 +484,148 @@ function pendingAttemptDiscardedMessage(status: 'invalid' | 'expired'): string {
   return 'O registro temporário da tentativa era inválido e foi descartado. Clique novamente para iniciar uma nova tentativa.';
 }
 
+function mergeDecisionHistory(
+  history: FindingReviewCaseDetail['decisionHistory'],
+  decision: CreateFindingReviewDecisionResponse['decision'],
+): FindingReviewCaseDetail['decisionHistory'] {
+  return [...history.filter((item) => item.id !== decision.id), decision]
+    .sort((left, right) => {
+      if (left.caseVersion !== right.caseVersion) return left.caseVersion - right.caseVersion;
+      if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
+      if (left.id === right.id) return 0;
+      return left.id < right.id ? -1 : 1;
+    });
+}
+
+function decisionStorageKey(caseId: string): string {
+  return `${DECISION_STORAGE_PREFIX}${caseId}`;
+}
+
+export function createPendingFindingReviewDecisionAttempt(
+  caseId: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+  now = Date.now(),
+): PendingFindingReviewDecisionAttempt {
+  return {
+    version: 1,
+    caseId,
+    identityConclusion,
+    justification,
+    expectedVersion,
+    idempotencyKey,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS).toISOString(),
+  };
+}
+
+export function parsePendingFindingReviewDecisionAttempt(
+  serialized: string,
+  expectedCaseId: string,
+  now = Date.now(),
+): PendingFindingReviewDecisionAttempt | null {
+  const inspected = inspectPendingFindingReviewDecisionAttempt(serialized, expectedCaseId, now);
+  return inspected.status === 'valid' ? inspected.attempt : null;
+}
+
+function inspectPendingFindingReviewDecisionAttempt(
+  serialized: string,
+  expectedCaseId: string,
+  now = Date.now(),
+): PendingDecisionInspection {
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { status: 'invalid', attempt: null };
+    }
+    const candidate = value as Record<string, unknown>;
+    const keys = Object.keys(candidate).sort();
+    if (keys.join(',') !== 'caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,version') {
+      return { status: 'invalid', attempt: null };
+    }
+    if (
+      candidate.version !== 1
+      || candidate.caseId !== expectedCaseId
+      || !isFindingReviewCaseId(candidate.caseId)
+      || (candidate.identityConclusion !== 'SAME_ASSET'
+        && candidate.identityConclusion !== 'DIFFERENT_ASSETS')
+      || typeof candidate.justification !== 'string'
+      || candidate.justification.length < 1
+      || candidate.justification.length > MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH
+      || candidate.justification !== candidate.justification.trim()
+      || !Number.isSafeInteger(candidate.expectedVersion)
+      || Number(candidate.expectedVersion) < 1
+      || typeof candidate.idempotencyKey !== 'string'
+      || !IDEMPOTENCY_KEY_PATTERN.test(candidate.idempotencyKey)
+      || typeof candidate.createdAt !== 'string'
+      || typeof candidate.expiresAt !== 'string'
+    ) return { status: 'invalid', attempt: null };
+    const createdAt = Date.parse(candidate.createdAt);
+    const expiresAt = Date.parse(candidate.expiresAt);
+    if (
+      !Number.isFinite(createdAt)
+      || !Number.isFinite(expiresAt)
+      || new Date(createdAt).toISOString() !== candidate.createdAt
+      || new Date(expiresAt).toISOString() !== candidate.expiresAt
+      || createdAt > now
+      || expiresAt - createdAt !== PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS
+    ) return { status: 'invalid', attempt: null };
+    if (expiresAt <= now) return { status: 'expired', attempt: null };
+    return { status: 'valid', attempt: candidate as unknown as PendingFindingReviewDecisionAttempt };
+  } catch {
+    return { status: 'invalid', attempt: null };
+  }
+}
+
+function readPendingFindingReviewDecisionAttempt(caseId: string): PendingDecisionInspection | {
+  status: 'missing'; attempt: null;
+} {
+  try {
+    const key = decisionStorageKey(caseId);
+    const serialized = window.sessionStorage.getItem(key);
+    if (serialized === null) return { status: 'missing', attempt: null };
+    const inspected = inspectPendingFindingReviewDecisionAttempt(serialized, caseId);
+    if (inspected.status !== 'valid') window.sessionStorage.removeItem(key);
+    return inspected;
+  } catch {
+    return { status: 'missing', attempt: null };
+  }
+}
+
+function storePendingFindingReviewDecisionAttempt(
+  attempt: PendingFindingReviewDecisionAttempt,
+): void {
+  try {
+    window.sessionStorage.setItem(decisionStorageKey(attempt.caseId), JSON.stringify(attempt));
+  } catch {
+    // The in-memory envelope remains available during this mounted page.
+  }
+}
+
+function clearPendingFindingReviewDecisionAttempt(
+  caseId: string,
+  expectedAttempt?: PendingFindingReviewDecisionAttempt,
+): void {
+  try {
+    const key = decisionStorageKey(caseId);
+    const serialized = window.sessionStorage.getItem(key);
+    if (serialized !== null && (!expectedAttempt || serialized === JSON.stringify(expectedAttempt))) {
+      window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Storage can be unavailable in restrictive browser contexts.
+  }
+}
+
 export function FindingReviewCasesPage({
   initialSearchParams = {},
   loadCases = getFindingReviewCases,
   loadDetail = getFindingReviewCase,
   createCase = createFindingReviewCase,
   updateStatus = updateFindingReviewCaseStatus,
+  createDecision = createFindingReviewDecision,
 }: Props) {
   const firstLocation = useMemo(() => locationFromParams(initialSearchParams), [initialSearchParams]);
   const [query, setQuery] = useState<FindingReviewCaseQuery>(firstLocation.query);
@@ -497,6 +664,16 @@ export function FindingReviewCasesPage({
   const statusController = useRef<AbortController | null>(null);
   const statusSequence = useRef(0);
 
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [decisionSuccess, setDecisionSuccess] = useState<string | null>(null);
+  const [decisionUncertain, setDecisionUncertain] = useState(false);
+  const [decisionReloadRequired, setDecisionReloadRequired] = useState(false);
+  const decisionInFlight = useRef(false);
+  const decisionController = useRef<AbortController | null>(null);
+  const decisionSequence = useRef(0);
+  const pendingDecisionAttempt = useRef<PendingFindingReviewDecisionAttempt | null>(null);
+
   const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
     firstLocation.requestedFindingId,
   );
@@ -521,6 +698,11 @@ export function FindingReviewCasesPage({
       creationController.current?.abort();
       statusSequence.current += 1;
       statusController.current?.abort();
+      if (decisionInFlight.current && pendingDecisionAttempt.current) {
+        storePendingFindingReviewDecisionAttempt(pendingDecisionAttempt.current);
+      }
+      decisionSequence.current += 1;
+      decisionController.current?.abort();
       if (detailFocusFrame.current !== null) {
         window.cancelAnimationFrame(detailFocusFrame.current);
         detailFocusFrame.current = null;
@@ -576,6 +758,7 @@ export function FindingReviewCasesPage({
       .then((value) => {
         if (!canCommitDetail(sequence, controller, requestedId)) return;
         setDetail(value);
+        restorePendingDecisionForDetail(value);
       })
       .catch((cause) => {
         if (!canCommitDetail(sequence, controller, requestedId) || isAbort(cause)) return;
@@ -615,6 +798,7 @@ export function FindingReviewCasesPage({
       setExistingCaseId(null);
       setRequestedFindingId(restored.requestedFindingId);
       if (restored.caseId !== expandedIdRef.current) {
+        invalidateDecisionRequest();
         invalidateStatusRequest();
         invalidateDetailRequest();
         detailTrigger.current = null;
@@ -709,6 +893,43 @@ export function FindingReviewCasesPage({
     setStatusConflict(false);
   }
 
+  function restorePendingDecisionForDetail(value: FindingReviewCaseDetail): void {
+    if (value.currentDecision) {
+      clearPendingFindingReviewDecisionAttempt(value.id);
+      pendingDecisionAttempt.current = null;
+      setDecisionUncertain(false);
+      return;
+    }
+    const stored = readPendingFindingReviewDecisionAttempt(value.id);
+    if (stored.status === 'valid') {
+      pendingDecisionAttempt.current = stored.attempt;
+      setDecisionUncertain(true);
+      setDecisionError(null);
+    } else if (stored.status === 'invalid' || stored.status === 'expired') {
+      pendingDecisionAttempt.current = null;
+      setDecisionUncertain(false);
+      setDecisionError(stored.status === 'expired'
+        ? 'A tentativa incerta anterior expirou e foi descartada.'
+        : 'A tentativa incerta armazenada era inválida e foi descartada.');
+    }
+  }
+
+  function invalidateDecisionRequest(persistUncertain = true): void {
+    if (persistUncertain && decisionInFlight.current && pendingDecisionAttempt.current) {
+      storePendingFindingReviewDecisionAttempt(pendingDecisionAttempt.current);
+    }
+    decisionSequence.current += 1;
+    decisionController.current?.abort();
+    decisionController.current = null;
+    decisionInFlight.current = false;
+    setDecisionLoading(false);
+    setDecisionError(null);
+    setDecisionSuccess(null);
+    setDecisionUncertain(false);
+    setDecisionReloadRequired(false);
+    pendingDecisionAttempt.current = null;
+  }
+
   function updateQuery(next: FindingReviewCaseQuery, nextRequestedFindingId = requestedFindingId): void {
     invalidateListRequest();
     queryRef.current = next;
@@ -769,6 +990,7 @@ export function FindingReviewCasesPage({
       closeDetail(true);
       return;
     }
+    invalidateDecisionRequest();
     invalidateStatusRequest();
     invalidateDetailRequest();
     if (trigger) detailTrigger.current = trigger;
@@ -782,6 +1004,7 @@ export function FindingReviewCasesPage({
   }
 
   function closeDetail(updateHistory: boolean): void {
+    invalidateDecisionRequest();
     invalidateStatusRequest();
     invalidateDetailRequest();
     expandedIdRef.current = null;
@@ -820,6 +1043,7 @@ export function FindingReviewCasesPage({
       !current
       || expandedIdRef.current !== current.id
       || statusInFlight.current
+      || decisionInFlight.current
       || !getAllowedFindingReviewCaseStatusDestinations(current.status).includes(target)
     ) return;
 
@@ -893,6 +1117,193 @@ export function FindingReviewCasesPage({
     setStatusError(null);
     setStatusConflict(false);
     setStatusSuccess(null);
+    retryDetail();
+    retryList();
+  }
+
+  async function submitDecision(
+    identityConclusion?: FindingReviewIdentityConclusion,
+    justification?: string,
+  ): Promise<void> {
+    const current = detail;
+    if (
+      !current
+      || expandedIdRef.current !== current.id
+      || decisionInFlight.current
+      || statusInFlight.current
+    ) return;
+
+    let attempt = pendingDecisionAttempt.current;
+    if (attempt) {
+      const inspected = inspectPendingFindingReviewDecisionAttempt(
+        JSON.stringify(attempt),
+        current.id,
+      );
+      if (inspected.status !== 'valid') {
+        clearPendingFindingReviewDecisionAttempt(current.id, attempt);
+        pendingDecisionAttempt.current = null;
+        setDecisionUncertain(false);
+        setDecisionError(inspected.status === 'expired'
+          ? 'A tentativa incerta expirou. Revise a decisão antes de iniciar uma nova tentativa.'
+          : 'A tentativa incerta era inválida e foi descartada. Revise a decisão novamente.');
+        return;
+      }
+      attempt = inspected.attempt;
+    } else {
+      const normalizedJustification = justification?.trim() ?? '';
+      if (!identityConclusion || normalizedJustification.length < 1) return;
+      attempt = createPendingFindingReviewDecisionAttempt(
+        current.id,
+        identityConclusion,
+        normalizedJustification,
+        current.version,
+        createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
+      );
+      pendingDecisionAttempt.current = attempt;
+    }
+
+    const controller = new AbortController();
+    const sequence = ++decisionSequence.current;
+    const expectedId = attempt.caseId;
+    decisionController.current = controller;
+    decisionInFlight.current = true;
+    setDecisionLoading(true);
+    setDecisionError(null);
+    setDecisionSuccess(null);
+    setDecisionReloadRequired(false);
+
+    try {
+      const created = await createDecision(
+        attempt.caseId,
+        attempt.identityConclusion,
+        attempt.justification,
+        attempt.expectedVersion,
+        attempt.idempotencyKey,
+        { signal: controller.signal },
+      );
+      if (
+        created.decision.caseId !== expectedId
+        || created.decision.identityConclusion !== attempt.identityConclusion
+        || created.decision.justification !== attempt.justification
+        || created.decision.caseVersion !== attempt.expectedVersion + 1
+      ) throw new ApiError('A API retornou uma decisão incompatível com a solicitação.', 502);
+
+      clearPendingFindingReviewDecisionAttempt(expectedId, attempt);
+      if (pendingDecisionAttempt.current === attempt) pendingDecisionAttempt.current = null;
+      if (!canCommitDecision(sequence, controller, expectedId)) return;
+      setDecisionUncertain(false);
+      setDetail((value) => value?.id === expectedId ? {
+        ...value,
+        currentDecision: created.decision,
+        decisionHistory: mergeDecisionHistory(value.decisionHistory, created.decision),
+        version: created.decision.caseVersion,
+      } : value);
+      setDecisionSuccess(created.idempotentReplay
+        ? 'Decisão já registrada, recuperada com segurança.'
+        : 'Decisão registrada com sucesso.');
+      setListReload((value) => value + 1);
+      void refreshDecisionDetail(expectedId, sequence);
+    } catch (cause) {
+      const conclusive = cause instanceof ApiError
+        && [400, 404, 409, 422, 503].includes(cause.status);
+      if (conclusive) {
+        clearPendingFindingReviewDecisionAttempt(expectedId, attempt);
+        if (pendingDecisionAttempt.current === attempt) pendingDecisionAttempt.current = null;
+      } else {
+        storePendingFindingReviewDecisionAttempt(attempt);
+      }
+      if (!canCommitDecision(sequence, controller, expectedId)) return;
+      if (!conclusive) {
+        setDecisionUncertain(true);
+        setDecisionError('Não foi possível confirmar se a decisão foi registrada. Tente novamente para consultar o mesmo resultado com segurança. A mesma chave idempotente será reutilizada.');
+      } else if (cause instanceof ApiError && cause.code === 'IDEMPOTENCY_KEY_REUSED') {
+        setDecisionUncertain(false);
+        setDecisionReloadRequired(true);
+        setDecisionError('Esta tentativa não corresponde à operação original associada à chave de segurança. Recarregue o caso antes de iniciar uma nova decisão.');
+      } else if (cause instanceof ApiError && cause.code === 'FINDING_REVIEW_CASE_VERSION_CONFLICT') {
+        setDecisionUncertain(false);
+        setDecisionReloadRequired(true);
+        setDecisionError('O caso foi alterado desde que você iniciou esta decisão.');
+      } else if (cause instanceof ApiError && cause.code === 'FINDING_REVIEW_CASE_DECISION_ALREADY_RECORDED') {
+        setDecisionUncertain(false);
+        setDecisionError('Uma decisão já foi registrada para este caso. Os dados atuais serão recarregados.');
+        void refreshDecisionDetail(expectedId, sequence);
+      } else if (cause instanceof ApiError && cause.status === 422) {
+        setDecisionUncertain(false);
+        setDecisionError('A decisão não é mais permitida para o estado ou snapshot atual do caso.');
+        void refreshDecisionDetail(expectedId, sequence);
+      } else if (cause instanceof ApiError && cause.status === 404) {
+        setDecisionUncertain(false);
+        setDecisionError('O caso não foi encontrado. Recarregue a lista para confirmar sua situação.');
+      } else if (cause instanceof ApiError && cause.status === 503) {
+        setDecisionUncertain(false);
+        setDecisionError('O registro de decisões está indisponível neste ambiente. Nenhum dado foi alterado.');
+      } else {
+        setDecisionUncertain(false);
+        setDecisionError(displayError(cause, 'Não foi possível registrar a decisão.'));
+      }
+    } finally {
+      if (sequence === decisionSequence.current) decisionInFlight.current = false;
+      if (decisionController.current === controller) decisionController.current = null;
+      if (mounted.current && sequence === decisionSequence.current) setDecisionLoading(false);
+    }
+  }
+
+  function canCommitDecision(
+    sequence: number,
+    controller: AbortController,
+    expectedId: string,
+  ): boolean {
+    return mounted.current
+      && sequence === decisionSequence.current
+      && !controller.signal.aborted
+      && expandedIdRef.current === expectedId;
+  }
+
+  async function refreshDecisionDetail(
+    caseId: string,
+    expectedSequence = decisionSequence.current,
+  ): Promise<void> {
+    try {
+      const refreshed = await loadDetail(caseId);
+      if (
+        !mounted.current
+        || expandedIdRef.current !== caseId
+        || decisionSequence.current !== expectedSequence
+      ) return;
+      setDetail((current) => {
+        if (current?.id === caseId && current.currentDecision && !refreshed.currentDecision) {
+          return {
+            ...refreshed,
+            currentDecision: current.currentDecision,
+            decisionHistory: mergeDecisionHistory(
+              refreshed.decisionHistory,
+              current.currentDecision,
+            ),
+            version: Math.max(refreshed.version, current.version),
+          };
+        }
+        return refreshed;
+      });
+      setDecisionReloadRequired(false);
+      setListReload((value) => value + 1);
+    } catch {
+      if (
+        !mounted.current
+        || expandedIdRef.current !== caseId
+        || decisionSequence.current !== expectedSequence
+      ) return;
+      setDecisionError((value) => value
+        ?? 'A decisão foi confirmada, mas não foi possível atualizar todos os dados do caso.');
+    }
+  }
+
+  function reloadAfterDecisionConflict(): void {
+    pendingDecisionAttempt.current = null;
+    setDecisionUncertain(false);
+    setDecisionError(null);
+    setDecisionSuccess(null);
+    setDecisionReloadRequired(false);
     retryDetail();
     retryList();
   }
@@ -1066,6 +1477,14 @@ export function FindingReviewCasesPage({
             statusConflict={statusConflict}
             submitStatus={submitStatusTransition}
             reloadStatus={reloadAfterStatusConflict}
+            decisionLoading={decisionLoading}
+            decisionError={decisionError}
+            decisionSuccess={decisionSuccess}
+            decisionUncertain={decisionUncertain}
+            decisionReloadRequired={decisionReloadRequired}
+            decisionPendingAttempt={pendingDecisionAttempt.current}
+            submitDecision={submitDecision}
+            reloadDecision={reloadAfterDecisionConflict}
           />
         </section>
       ) : null}
@@ -1086,6 +1505,14 @@ function ReviewCaseDetail({
   statusConflict,
   submitStatus,
   reloadStatus,
+  decisionLoading,
+  decisionError,
+  decisionSuccess,
+  decisionUncertain,
+  decisionReloadRequired,
+  decisionPendingAttempt,
+  submitDecision,
+  reloadDecision,
 }: {
   detail: FindingReviewCaseDetail | null;
   loading: boolean;
@@ -1102,6 +1529,17 @@ function ReviewCaseDetail({
     justification?: string,
   ) => Promise<void>;
   reloadStatus: () => void;
+  decisionLoading: boolean;
+  decisionError: string | null;
+  decisionSuccess: string | null;
+  decisionUncertain: boolean;
+  decisionReloadRequired: boolean;
+  decisionPendingAttempt: PendingFindingReviewDecisionAttempt | null;
+  submitDecision: (
+    identityConclusion?: FindingReviewIdentityConclusion,
+    justification?: string,
+  ) => Promise<void>;
+  reloadDecision: () => void;
 }) {
   if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
   if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
@@ -1110,6 +1548,21 @@ function ReviewCaseDetail({
     <>
       <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
       <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Atualidade</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}</dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
+      <IdentityDecisionControl
+        key={`${detail.id}:${detail.version}:${detail.currentDecision?.id ?? 'none'}`}
+        detail={detail}
+        loading={decisionLoading}
+        mutationBlocked={statusLoading || statusConflict}
+        error={decisionError}
+        success={decisionSuccess}
+        uncertain={decisionUncertain}
+        reloadRequired={decisionReloadRequired}
+        pendingAttempt={decisionPendingAttempt?.caseId === detail.id
+          ? decisionPendingAttempt
+          : null}
+        submit={submitDecision}
+        reload={reloadDecision}
+      />
       <StatusTransitionControl
         key={`${detail.id}:${detail.status}:${detail.version}`}
         detail={detail}
@@ -1119,13 +1572,194 @@ function ReviewCaseDetail({
         conflict={statusConflict}
         submit={submitStatus}
         reload={reloadStatus}
+        mutationBlocked={decisionLoading || decisionUncertain || decisionReloadRequired}
       />
       <div className="review-detail-grid">
         <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
-        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}{formatTransitionJustification(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
+        <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}{formatDecisionEvent(event.eventType, event.metadata)}{formatTransitionJustification(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>
       <details className="review-snapshot"><summary>Visualizar snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
     </>
+  );
+}
+
+function getSupportedDecisionOptions(snapshot: unknown): FindingReviewIdentityConclusion[] {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return [];
+  const options = (snapshot as Record<string, unknown>).reviewOptions;
+  if (!Array.isArray(options)) return [];
+  return [...new Set(options.filter((option): option is FindingReviewIdentityConclusion => (
+    option === 'SAME_ASSET' || option === 'DIFFERENT_ASSETS'
+  )))];
+}
+
+function IdentityDecisionControl({
+  detail,
+  loading,
+  mutationBlocked,
+  error,
+  success,
+  uncertain,
+  reloadRequired,
+  pendingAttempt,
+  submit,
+  reload,
+}: {
+  detail: FindingReviewCaseDetail;
+  loading: boolean;
+  mutationBlocked: boolean;
+  error: string | null;
+  success: string | null;
+  uncertain: boolean;
+  reloadRequired: boolean;
+  pendingAttempt: PendingFindingReviewDecisionAttempt | null;
+  submit: (
+    identityConclusion?: FindingReviewIdentityConclusion,
+    justification?: string,
+  ) => Promise<void>;
+  reload: () => void;
+}) {
+  const options = getSupportedDecisionOptions(detail.originalSnapshot);
+  const distinctAssetCount = new Set(detail.assets.map((asset) => asset.assetIdAtCreation)).size;
+  const eligible = detail.status === 'IN_REVIEW'
+    && detail.currentDecision === null
+    && options.length > 0
+    && distinctAssetCount >= 2;
+  const [conclusion, setConclusion] = useState<FindingReviewIdentityConclusion | ''>(
+    pendingAttempt?.identityConclusion ?? '',
+  );
+  const [justification, setJustification] = useState(pendingAttempt?.justification ?? '');
+  const [confirmation, setConfirmation] = useState(false);
+  const [conclusionError, setConclusionError] = useState<string | null>(null);
+  const [justificationError, setJustificationError] = useState<string | null>(null);
+  const firstRadio = useRef<HTMLInputElement | null>(null);
+  const justificationField = useRef<HTMLTextAreaElement | null>(null);
+  const confirmationHeading = useRef<HTMLHeadingElement | null>(null);
+
+  useEffect(() => {
+    if (confirmation) confirmationHeading.current?.focus();
+  }, [confirmation]);
+
+  if (detail.currentDecision) {
+    return (
+      <section className="review-decision-control" aria-labelledby="review-decision-title">
+        <div><p className="section-kicker">Conclusão humana</p><h3 id="review-decision-title">Decisão de identidade</h3></div>
+        <article className="review-decision-card">
+          <strong>{getFindingReviewIdentityConclusionLabel(detail.currentDecision.identityConclusion)}</strong>
+          <p className="review-decision-justification">{detail.currentDecision.justification}</p>
+          <small>{formatDateTime(detail.currentDecision.createdAt)} · {detail.currentDecision.createdBy} · versão {detail.currentDecision.caseVersion}</small>
+          <p>Esta decisão não alterou automaticamente o inventário.</p>
+        </article>
+        <DecisionHistory decisions={detail.decisionHistory} />
+        {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
+      </section>
+    );
+  }
+
+  const ineligibleMessage = detail.status === 'OPEN'
+    ? 'A investigação precisa estar em revisão antes de registrar uma decisão.'
+    : detail.status === 'WAITING_FOR_EVIDENCE'
+      ? 'Retome a revisão após reunir as evidências necessárias.'
+      : options.length === 0
+        ? 'Este tipo de finding não aceita uma conclusão de identidade.'
+        : distinctAssetCount < 2
+          ? 'Não há múltiplos ativos históricos suficientes para esta decisão.'
+          : 'Uma decisão de identidade não está disponível no estado atual.';
+
+  const locked = loading || mutationBlocked || uncertain || reloadRequired;
+  const normalizedJustification = justification.trim();
+
+  function reviewDecision(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    let invalid = false;
+    if (!conclusion) {
+      setConclusionError('Selecione uma conclusão de identidade.');
+      firstRadio.current?.focus();
+      invalid = true;
+    }
+    if (normalizedJustification.length < 1) {
+      setJustificationError('Informe uma justificativa para a decisão.');
+      if (!invalid) justificationField.current?.focus();
+      invalid = true;
+    } else if (normalizedJustification.length > MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH) {
+      setJustificationError('A justificativa deve ter no máximo 1000 caracteres.');
+      if (!invalid) justificationField.current?.focus();
+      invalid = true;
+    }
+    if (invalid) return;
+    setConclusionError(null);
+    setJustificationError(null);
+    setConfirmation(true);
+  }
+
+  return (
+    <section className="review-decision-control" aria-labelledby="review-decision-title">
+      <div><p className="section-kicker">Conclusão humana</p><h3 id="review-decision-title">Decisão de identidade</h3><p>O backend valida novamente todas as condições antes do registro.</p></div>
+      {!eligible && !uncertain ? <p className="review-decision-guidance">{ineligibleMessage}</p> : null}
+      {uncertain && pendingAttempt ? (
+        <div className="review-decision-uncertain" role="alert">
+          <strong>Resultado incerto</strong>
+          <p>Não foi possível confirmar se a decisão foi registrada. Tente novamente para consultar o mesmo resultado com segurança. A mesma chave idempotente será reutilizada.</p>
+          <button className="button button-primary" type="button" disabled={loading || mutationBlocked} onClick={() => void submit()}>{loading ? 'Tentando novamente…' : 'Tentar novamente'}</button>
+        </div>
+      ) : eligible && !confirmation ? (
+        <form className="review-decision-form" onSubmit={reviewDecision}>
+          <fieldset disabled={locked} aria-invalid={conclusionError !== null} aria-describedby={conclusionError ? 'review-decision-conclusion-error' : undefined}>
+            <legend>Os registros investigados representam a mesma identidade de ativo?</legend>
+            {options.map((option, index) => (
+              <label className="review-decision-option" key={option}>
+                <input
+                  ref={index === 0 ? firstRadio : undefined}
+                  type="radio"
+                  name="identity-conclusion"
+                  value={option}
+                  checked={conclusion === option}
+                  onChange={() => { setConclusion(option); setConclusionError(null); }}
+                />
+                <span><strong>{getFindingReviewIdentityConclusionLabel(option)}</strong><small>{option === 'SAME_ASSET'
+                  ? 'Os registros representam o mesmo ativo. Esta conclusão não mescla nem altera cadastros automaticamente.'
+                  : 'Os registros representam ativos distintos. Esta conclusão não separa, exclui ou corrige ativos automaticamente.'}</small></span>
+              </label>
+            ))}
+          </fieldset>
+          {conclusionError ? <p id="review-decision-conclusion-error" className="form-message form-message-error" role="alert">{conclusionError}</p> : null}
+          <label htmlFor="review-decision-justification">Justificativa</label>
+          <textarea
+            id="review-decision-justification"
+            ref={justificationField}
+            value={justification}
+            maxLength={MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH + 1}
+            disabled={locked}
+            aria-invalid={justificationError !== null}
+            aria-describedby="review-decision-justification-help review-decision-counter"
+            onInput={(event) => { setJustification(event.currentTarget.value); setJustificationError(null); }}
+          />
+          <small id="review-decision-justification-help">Espaços no início e no fim serão desconsiderados. Não inclua senhas, tokens ou dados sensíveis.</small>
+          <span id="review-decision-counter" className="review-decision-counter">{justification.length} / {MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH}</span>
+          {justificationError ? <p className="form-message form-message-error" role="alert">{justificationError}</p> : null}
+          <button className="button button-primary" type="submit" disabled={locked}>Revisar decisão</button>
+        </form>
+      ) : eligible ? (
+        <div className="review-decision-confirmation">
+          <h4 ref={confirmationHeading} tabIndex={-1}>Confirme a decisão</h4>
+          <dl><div><dt>Conclusão</dt><dd>{getFindingReviewIdentityConclusionLabel(conclusion as FindingReviewIdentityConclusion)}</dd></div><div><dt>Justificativa</dt><dd className="review-decision-justification">{normalizedJustification}</dd></div></dl>
+          <p>Registrar a decisão não resolve o caso e não altera o inventário. A decisão não poderá ser editada nesta versão.</p>
+          <div className="review-decision-actions"><button className="button button-primary" type="button" disabled={loading || mutationBlocked} onClick={() => void submit(conclusion as FindingReviewIdentityConclusion, normalizedJustification)}>{loading ? 'Registrando…' : 'Registrar decisão'}</button><button className="button button-secondary" type="button" disabled={loading} onClick={() => setConfirmation(false)}>Voltar e editar</button></div>
+        </div>
+      ) : null}
+      {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
+      {error ? <div className="form-message form-message-error" role="alert">{error}{reloadRequired ? <button className="table-link-button" type="button" onClick={reload}> Recarregar caso</button> : null}</div> : null}
+      {loading ? <p className="form-message" role="status" aria-live="polite">Registrando a decisão…</p> : null}
+    </section>
+  );
+}
+
+function DecisionHistory({ decisions }: { decisions: FindingReviewCaseDetail['decisionHistory'] }) {
+  if (decisions.length === 0) return null;
+  return (
+    <details className="review-decision-history">
+      <summary>Histórico de decisões ({decisions.length})</summary>
+      <ol>{decisions.map((decision) => <li key={decision.id}><strong>{getFindingReviewIdentityConclusionLabel(decision.identityConclusion)}</strong><p className="review-decision-justification">{decision.justification}</p><small>{formatDateTime(decision.createdAt)} · {decision.createdBy} · versão {decision.caseVersion}</small></li>)}</ol>
+    </details>
   );
 }
 
@@ -1137,6 +1771,7 @@ function StatusTransitionControl({
   conflict,
   submit,
   reload,
+  mutationBlocked,
 }: {
   detail: FindingReviewCaseDetail;
   loading: boolean;
@@ -1145,6 +1780,7 @@ function StatusTransitionControl({
   conflict: boolean;
   submit: (status: ActiveFindingReviewCaseStatus, justification?: string) => Promise<void>;
   reload: () => void;
+  mutationBlocked: boolean;
 }) {
   const destinations = getAllowedFindingReviewCaseStatusDestinations(detail.status);
   const [target, setTarget] = useState<ActiveFindingReviewCaseStatus | ''>('');
@@ -1190,7 +1826,7 @@ function StatusTransitionControl({
         void submit(target);
       }}>
         <label htmlFor="review-case-next-status">Novo estado</label>
-        <select id="review-case-next-status" value={target} disabled={loading || conflict} onChange={(event) => {
+        <select id="review-case-next-status" value={target} disabled={loading || conflict || mutationBlocked} onChange={(event) => {
           const next = event.target.value as ActiveFindingReviewCaseStatus | '';
           setTarget(next);
           setValidationError(null);
@@ -1213,7 +1849,7 @@ function StatusTransitionControl({
               value={justification}
               required
               maxLength={MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH}
-              disabled={loading || conflict}
+              disabled={loading || conflict || mutationBlocked}
               aria-describedby="review-case-status-justification-help"
               aria-invalid={validationError !== null}
               onInput={(event) => {
@@ -1224,7 +1860,7 @@ function StatusTransitionControl({
             <small id="review-case-status-justification-help">Explique o contexto operacional. Não inclua credenciais, tokens ou dados sensíveis.</small>
           </div>
         ) : null}
-        <button className="button button-primary" type="submit" disabled={loading || conflict || !target}>{loading ? 'Alterando…' : 'Confirmar alteração'}</button>
+        <button className="button button-primary" type="submit" disabled={loading || conflict || mutationBlocked || !target}>{loading ? 'Alterando…' : 'Confirmar alteração'}</button>
       </form>
       {validationError ? <p className="form-message form-message-error" role="alert">{validationError}</p> : null}
       {loading ? <p className="form-message" role="status" aria-live="polite">Alterando o estado do caso…</p> : null}
@@ -1249,4 +1885,11 @@ function formatTransitionJustification(metadata: Record<string, string> | null) 
   const justification = metadata?.justification;
   if (!justification || justification.trim().length === 0) return null;
   return <span className="review-event-justification"><b>Justificativa:</b> {justification}</span>;
+}
+
+function formatDecisionEvent(eventType: string, metadata: Record<string, string> | null) {
+  if (eventType !== 'CASE_DECISION_RECORDED') return null;
+  const conclusion = metadata?.identityConclusion;
+  if (conclusion !== 'SAME_ASSET' && conclusion !== 'DIFFERENT_ASSETS') return null;
+  return <span>Conclusão: {getFindingReviewIdentityConclusionLabel(conclusion)}</span>;
 }

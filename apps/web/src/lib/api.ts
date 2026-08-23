@@ -13,7 +13,9 @@ import {
 } from './evidence-provenance.ts';
 import type {
   ActiveFindingReviewCaseStatus,
+  CreateFindingReviewDecisionResponse,
   CreateFindingReviewCaseResponse,
+  FindingReviewIdentityConclusion,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
   FindingReviewCaseQuery,
@@ -21,6 +23,7 @@ import type {
 } from './finding-review-cases.ts';
 import {
   parseCreateFindingReviewCaseResponse,
+  parseCreateFindingReviewDecisionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
   parseUpdateFindingReviewCaseStatusResponse,
@@ -65,6 +68,7 @@ export type {
 } from './conflict-findings';
 export type {
   ActiveFindingReviewCaseStatus,
+  CreateFindingReviewDecisionResponse,
   CreateFindingReviewCaseResponse,
   FindingReviewCaseAsset,
   FindingReviewCaseDetail,
@@ -74,6 +78,8 @@ export type {
   FindingReviewCaseQuery,
   FindingReviewCaseSortField,
   FindingReviewCaseStatus,
+  FindingReviewDecision,
+  FindingReviewIdentityConclusion,
   FindingReviewSortDirection,
   FindingReviewStaleness,
   UpdateFindingReviewCaseStatusResponse,
@@ -979,6 +985,34 @@ export async function updateFindingReviewCaseStatus(
     },
     parseUpdateFindingReviewCaseStatusResponse,
     'A API retornou uma transição de status inválida.',
+    options,
+  );
+}
+
+export async function createFindingReviewDecision(
+  id: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<CreateFindingReviewDecisionResponse> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(id)}/decisions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        identityConclusion,
+        justification: justification.trim(),
+        expectedVersion,
+      }),
+    },
+    parseCreateFindingReviewDecisionResponse,
+    'A API retornou uma decisão de identidade inválida.',
     options,
   );
 }

@@ -626,10 +626,14 @@ permanecem propostos e fora do MVP atual.
 - **Concorrência:** `expectedVersion`, update condicional e as constraints existentes garantem uma
   única decisão original. `caseVersion` representa a versão resultante.
 - **Response:** decisão imutável registrada e indicador de replay. O detalhe expõe
-  `currentDecision` e `decisionHistory`, sem fingerprint.
+  `currentDecision` e `decisionHistory`, sem fingerprint. A interface do detalhe consome esses campos,
+  registra a primeira decisão em duas etapas e reutiliza a mesma chave idempotente em retries explícitos
+  cujo resultado de transporte ficou incerto. O envelope temporário usa `sessionStorage`, TTL de 15
+  minutos e é removido em respostas conclusivas. A decisão não resolve o caso nem altera o inventário;
+  correção ou superseding continuam fora do fluxo disponível.
 - **Efeitos:** incrementa somente versão/`updatedAt`, cria `CASE_DECISION_RECORDED` e `AuditLog` na
   mesma transação; não muda status, inventário ou `Conflict`.
-- **Limites atuais:** não existem componentes, interface, resolução, correção ou superseding. Embora
+- **Limites atuais:** não existem componentes de decisão, resolução terminal, correção ou superseding. Embora
   o schema seja 1:N, uma segunda decisão nova é rejeitada até existir fluxo explícito futuro.
 
 ### 14.8 `POST /conflict-review-cases/:id/refresh` — proposto

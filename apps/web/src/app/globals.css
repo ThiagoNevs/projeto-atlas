@@ -4469,6 +4469,133 @@ input {
   background: rgba(7, 16, 29, 0.42);
 }
 
+.review-decision-control {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(78, 199, 239, 0.3);
+  border-radius: 12px;
+  background: rgba(78, 199, 239, 0.055);
+}
+
+.review-decision-control h3,
+.review-decision-control h4,
+.review-decision-control p {
+  margin: 0;
+}
+
+.review-decision-control > div > p:last-child,
+.review-decision-guidance {
+  margin-top: 0.35rem;
+  color: var(--muted);
+}
+
+.review-decision-form,
+.review-decision-form fieldset {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.review-decision-form fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.review-decision-form legend,
+.review-decision-form > label {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.review-decision-option {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  padding: 0.85rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(7, 16, 29, 0.45);
+  cursor: pointer;
+}
+
+.review-decision-option input {
+  margin-top: 0.2rem;
+}
+
+.review-decision-option span,
+.review-decision-option small {
+  display: block;
+}
+
+.review-decision-option small,
+.review-decision-form > small,
+.review-decision-card small,
+.review-decision-history small {
+  color: var(--muted);
+}
+
+.review-decision-form textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+
+.review-decision-counter {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.review-decision-card,
+.review-decision-confirmation,
+.review-decision-uncertain {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(7, 16, 29, 0.52);
+}
+
+.review-decision-justification {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-decision-confirmation dl {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.review-decision-confirmation dt {
+  color: var(--faint);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.review-decision-confirmation dd {
+  margin: 0.25rem 0 0;
+}
+
+.review-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.review-decision-history summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.review-decision-history ol {
+  display: grid;
+  gap: 0.75rem;
+  padding-left: 1.25rem;
+}
+
 .review-status-control h3,
 .review-status-control p {
   margin: 0;
@@ -4633,6 +4760,16 @@ input {
   .review-status-control form .button {
     grid-column: 1;
     grid-row: auto;
+    width: 100%;
+  }
+
+  .review-decision-actions {
+    flex-direction: column;
+  }
+
+  .review-decision-actions .button,
+  .review-decision-form > .button,
+  .review-decision-uncertain .button {
     width: 100%;
   }
 }
