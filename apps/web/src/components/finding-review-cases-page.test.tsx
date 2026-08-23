@@ -1,19 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 
-import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 
-import {
-  FindingReviewCasesPage,
-  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
-  PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
-  buildFindingReviewCaseQueryFromForm,
-  createPendingFindingReviewCaseAttempt,
-  createPendingFindingReviewDecisionAttempt,
-  parsePendingFindingReviewDecisionAttempt,
-  parsePendingFindingReviewCaseAttempt,
-} from './finding-review-cases-page.tsx';
 import { ApiError } from '../lib/api-error.ts';
 import type {
   CreateFindingReviewCaseResponse,
@@ -26,31 +15,32 @@ import {
   type JsdomTestEnvironment,
 } from '../test/jsdom-test-environment.ts';
 
+const sharedEnvironment = createJsdomTestEnvironment();
+sharedEnvironment.container.remove();
+
+const { act, createElement } = await import('react');
+const { createRoot } = await import('react-dom/client');
+const {
+  FindingReviewCasesPage,
+  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  buildFindingReviewCaseQueryFromForm,
+  createPendingFindingReviewCaseAttempt,
+  createPendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewCaseAttempt,
+} = await import('./finding-review-cases-page.tsx');
+
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_CASE_ID = '44444444-4444-4444-8444-444444444444';
 const ASSET_ID = '22222222-2222-4222-8222-222222222222';
 const FINDING_ID = 'finding_0123456789abcdef01234567';
 const SECOND_FINDING_ID = 'finding_89abcdef0123456789abcdef';
 
-const MAX_TESTS_PER_JSDOM = 8;
-let sharedEnvironment = createJsdomTestEnvironment();
-let sharedEnvironmentUses = 0;
 let activeTestEnvironments = 0;
-sharedEnvironment.container.remove();
-
-function rotateSharedEnvironment(): void {
-  sharedEnvironment.cleanup();
-  sharedEnvironment = createJsdomTestEnvironment();
-  sharedEnvironment.container.remove();
-  sharedEnvironmentUses = 0;
-}
 
 function createIsolatedTestEnvironment(): JsdomTestEnvironment {
-  if (sharedEnvironmentUses >= MAX_TESTS_PER_JSDOM) {
-    assert.equal(activeTestEnvironments, 0);
-    rotateSharedEnvironment();
-  }
-  sharedEnvironmentUses += 1;
+  assert.equal(activeTestEnvironments, 0);
   activeTestEnvironments += 1;
   sharedEnvironment.window.sessionStorage.clear();
   sharedEnvironment.window.history.replaceState(null, '', '/');
@@ -172,6 +162,12 @@ const decisionResponse: CreateFindingReviewDecisionResponse = {
 async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function settleScheduledFocus(environment: JsdomTestEnvironment): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => environment.window.requestAnimationFrame(() => resolve()));
+  });
 }
 
 function deferred<T>() {
@@ -557,7 +553,7 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.equal(harness.environment.window.document.activeElement, heading);
+    assert.equal(harness.environment.window.document.activeElement === heading, true);
     assert.equal(heading.tabIndex, -1);
     assert.equal(panel.hasAttribute('tabindex'), false);
     const closeButton = findButton(harness.environment.container, 'Fechar detalhe');
@@ -566,7 +562,7 @@ test('deep link acompanha abertura e fechamento e restaura foco ao acionador', a
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
     assert.equal(harness.environment.window.location.search.includes('caseId='), false);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(document.activeElement === trigger, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -587,9 +583,10 @@ test('move o foco para o detalhe somente depois da conclusão do carregamento', 
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.notEqual(
-      harness.environment.window.document.activeElement,
-      harness.environment.container.querySelector('#review-case-detail-title'),
+    assert.equal(
+      harness.environment.window.document.activeElement
+        === harness.environment.container.querySelector('#review-case-detail-title'),
+      false,
     );
 
     await act(async () => { pending.resolve(detailResponse); await flush(); });
@@ -598,7 +595,7 @@ test('move o foco para o detalhe somente depois da conclusão do carregamento', 
     });
     const heading = harness.environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
     assert.ok(heading);
-    assert.equal(harness.environment.window.document.activeElement, heading);
+    assert.equal(harness.environment.window.document.activeElement === heading, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -634,7 +631,7 @@ test('cancela o foco agendado do caso anterior durante troca rápida de detalhe'
     await act(async () => {
       await new Promise((resolve) => harness.environment.window.requestAnimationFrame(resolve));
     });
-    assert.notEqual(harness.environment.window.document.activeElement, loadingHeading);
+    assert.equal(harness.environment.window.document.activeElement === loadingHeading, false);
 
     await act(async () => {
       second.resolve({ ...detailResponse, id: SECOND_CASE_ID });
@@ -647,7 +644,7 @@ test('cancela o foco agendado do caso anterior durante troca rápida de detalhe'
       '#review-case-detail-title',
     );
     assert.ok(finalHeading);
-    assert.equal(harness.environment.window.document.activeElement, finalHeading);
+    assert.equal(harness.environment.window.document.activeElement === finalHeading, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -675,9 +672,9 @@ test('erro do detalhe direciona o foco ao heading somente depois de concluir o l
     );
     assert.ok(heading);
     assert.equal(heading.tabIndex, -1);
-    assert.notEqual(environment.window.document.activeElement, heading);
+    assert.equal(environment.window.document.activeElement === heading, false);
     await act(async () => { frames.runAll(); await flush(); });
-    assert.equal(environment.window.document.activeElement, heading);
+    assert.equal(environment.window.document.activeElement === heading, true);
     assert.match(environment.container.textContent ?? '', /Falha controlada/);
   } finally {
     frames.restore();
@@ -709,7 +706,7 @@ test('fechar antes do frame cancela o foco do detalhe e restaura o expansor', as
     });
     assert.equal(environment.container.querySelector('#review-case-detail-title'), null);
     await act(async () => { frames.runAll(); await flush(); });
-    assert.equal(environment.window.document.activeElement, trigger);
+    assert.equal(environment.window.document.activeElement === trigger, true);
   } finally {
     frames.restore();
     await close(harness.root, environment.cleanup);
@@ -779,7 +776,7 @@ test('rerender do mesmo detalhe não agenda nem rouba o foco novamente', async (
     });
     await act(async () => { frames.runAll(); await flush(); });
     assert.equal(focusCalls, 1);
-    assert.equal(environment.window.document.activeElement, filterControl);
+    assert.equal(environment.window.document.activeElement === filterControl, true);
   } finally {
     frames.restore();
     await close(harness.root, environment.cleanup);
@@ -1763,6 +1760,7 @@ test('exige justificativa ao sair da espera e impede whitespace com foco acessí
   });
   try {
     await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
     await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
@@ -1777,7 +1775,7 @@ test('exige justificativa ao sair da espera e impede whitespace com foco acessí
     });
     assert.equal(updates, 0);
     assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
-    assert.equal(harness.environment.window.document.activeElement, textarea);
+    assert.equal(harness.environment.window.document.activeElement === textarea, true);
     assert.equal(textarea.getAttribute('aria-invalid'), 'true');
     await act(async () => { setControlValue(textarea, 'a'.repeat(501)); await flush(); });
     await act(async () => {
@@ -1848,6 +1846,7 @@ test('conflito 409 não faz retry automático e exige recarregamento explícito'
   });
   try {
     await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
     const select = harness.environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
     assert.ok(select);
     await act(async () => { setControlValue(select, 'WAITING_FOR_EVIDENCE'); await flush(); });
@@ -1864,7 +1863,7 @@ test('conflito 409 não faz retry automático e exige recarregamento explícito'
     assert.equal(textarea.value, 'Aguardando evidência.');
     const alert = harness.environment.container.querySelector('[role="alert"]');
     assert.ok(alert);
-    assert.equal(harness.environment.window.document.activeElement, alert);
+    assert.equal(harness.environment.window.document.activeElement === alert, true);
     await act(async () => { findButton(harness.environment.container, 'Recarregar caso').click(); await flush(); });
     assert.equal(updates, 1);
     assert.ok(detailLoads >= 2);
@@ -2057,6 +2056,7 @@ test('decisão elegível usa radios acessíveis, valida justificativa e confirma
   });
   try {
     await act(async () => { await flush(); });
+    await settleScheduledFocus(harness.environment);
     const text = harness.environment.container.textContent ?? '';
     assert.match(text, /Os registros investigados representam a mesma identidade de ativo/);
     assert.match(text, /Mesmo ativo/);
@@ -2070,7 +2070,7 @@ test('decisão elegível usa radios acessíveis, valida justificativa e confirma
       findButton(harness.environment.container, 'Revisar decisão').click();
       await flush();
     });
-    assert.equal(harness.environment.window.document.activeElement, radios.item(0));
+    assert.equal(harness.environment.window.document.activeElement === radios.item(0), true);
     assert.match(harness.environment.container.textContent ?? '', /Selecione uma conclusão/);
 
     await act(async () => { radios.item(0).click(); await flush(); });
@@ -2083,7 +2083,7 @@ test('decisão elegível usa radios acessíveis, valida justificativa e confirma
       findButton(harness.environment.container, 'Revisar decisão').click();
       await flush();
     });
-    assert.equal(harness.environment.window.document.activeElement, textarea);
+    assert.equal(harness.environment.window.document.activeElement === textarea, true);
     assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
 
     await act(async () => { setControlValue(textarea, 'a'.repeat(1001)); await flush(); });
