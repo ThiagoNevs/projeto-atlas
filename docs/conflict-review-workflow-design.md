@@ -652,6 +652,11 @@ permanecem propostos e fora do MVP atual.
 - **Semântica:** `RESOLVED` encerra a investigação. Não corrige o finding derivado, não mescla ativos,
   não cria suppression, não altera `Conflict` e não executa remediation. Reabertura, correção e
   superseding continuam fora do escopo.
+- **Interface:** o detalhe do caso oferece confirmação em duas etapas somente para `IN_REVIEW` com
+  decisão corrente. Falhas de resultado incerto reutilizam explicitamente a mesma tentativa por até
+  15 minutos no `sessionStorage`; respostas conclusivas removem o envelope. Após sucesso, a resposta
+  da mutação é aplicada localmente antes do refresh, e a apresentação histórica é derivada do evento
+  `CASE_RESOLVED`, sem modelar uma entidade de resolução inexistente.
 
 ### 14.9 `POST /conflict-review-cases/:id/refresh` — proposto
 

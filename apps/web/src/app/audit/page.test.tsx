@@ -95,6 +95,7 @@ test('traduz ações, entidade e todos os estados dos casos de revisão', () => 
   assert.equal(getAuditActionLabel('CASE_CREATED'), 'Caso de revisão criado');
   assert.equal(getAuditActionLabel('CASE_STATUS_CHANGED'), 'Status do caso de revisão alterado');
   assert.equal(getAuditActionLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getAuditActionLabel('CASE_RESOLVED'), 'Investigação concluída');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'SAME_ASSET'), 'Mesmo ativo');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.equal(getAuditEntityTypeLabel('FindingReviewCase'), 'Caso de revisão');
@@ -103,6 +104,41 @@ test('traduz ações, entidade e todos os estados dos casos de revisão', () => 
       .map((status) => getAuditPresentedValueLabel('FindingReviewCase', status)),
     ['Aberto', 'Em análise', 'Aguardando evidências', 'Resolvido', 'Descartado', 'Cancelado'],
   );
+});
+
+test('apresenta resolução do caso em português e preserva o deep link seguro', async () => {
+  const resolutionLog = auditLog({
+    id: '77777777-7777-4777-8777-777777777777',
+    action: 'CASE_RESOLVED',
+    entityType: 'FindingReviewCase',
+    entityId: CASE_ID,
+    before: { status: 'IN_REVIEW', version: 3 },
+    after: {
+      status: 'RESOLVED',
+      version: 4,
+      decisionId: '66666666-6666-4666-8666-666666666666',
+      identityConclusion: 'SAME_ASSET',
+    },
+    metadata: {
+      eventType: 'CASE_RESOLVED',
+      identityConclusion: 'SAME_ASSET',
+      justification: 'Investigação encerrada.',
+    },
+  });
+  const harness = await renderPage(async () => response([resolutionLog]));
+  try {
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Investigação concluída/);
+    assert.match(text, /Em análise/);
+    assert.match(text, /Resolvido/);
+    assert.match(text, /Mesmo ativo/);
+    assert.equal(
+      harness.environment.container.querySelector<HTMLAnchorElement>('a.table-link-button')?.getAttribute('href'),
+      `/conflict-review-cases?caseId=${CASE_ID}`,
+    );
+  } finally {
+    await close(harness.root, harness.environment);
+  }
 });
 
 test('apresenta decisão de identidade sem UUID na linha principal e mantém deep link seguro', async () => {

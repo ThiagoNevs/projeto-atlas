@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   createFindingReviewDecision,
+  createFindingReviewCaseResolution,
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
@@ -18,6 +19,7 @@ import {
   getFindingReviewStalenessLabel,
   isFindingReviewTimestamp,
   parseCreateFindingReviewCaseResponse,
+  parseCreateFindingReviewCaseResolutionResponse,
   parseCreateFindingReviewDecisionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
@@ -103,6 +105,7 @@ test('traduz status, atualidade e eventos sem exibir enums técnicos', () => {
   assert.equal(getFindingReviewEventLabel('CASE_CREATED'), 'Caso criado');
   assert.equal(getFindingReviewEventLabel('CASE_STATUS_CHANGED'), 'Status do caso alterado');
   assert.equal(getFindingReviewEventLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getFindingReviewEventLabel('CASE_RESOLVED'), 'Investigação concluída');
   assert.equal(getFindingReviewIdentityConclusionLabel('SAME_ASSET'), 'Mesmo ativo');
   assert.equal(getFindingReviewIdentityConclusionLabel('DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('OPEN'), [
@@ -189,6 +192,37 @@ test('parser de criação de decisão aceita 201/200 e descarta campos externos'
   const parsed = parseCreateFindingReviewDecisionResponse({ decision, idempotentReplay: false });
   assert.equal(parsed?.decision.identityConclusion, 'SAME_ASSET');
   assert.equal('requestFingerprint' in (parsed?.decision as unknown as object), false);
+});
+
+test('parser da resolução aceita somente o resultado mínimo e coerente', () => {
+  const response = {
+    idempotentReplay: false,
+    resolution: {
+      eventId: EVENT_ID,
+      caseId: CASE_ID,
+      decisionId: DECISION_ID,
+      identityConclusion: 'SAME_ASSET',
+      justification: 'Investigação concluída com base nas evidências.',
+      versionBefore: 2,
+      versionAfter: 3,
+      previousStatus: 'IN_REVIEW',
+      status: 'RESOLVED',
+      resolvedBy: 'atlas-mvp-user',
+      resolvedAt: NOW,
+      requestFingerprint: 'não expor',
+    },
+  };
+  const parsed = parseCreateFindingReviewCaseResolutionResponse(response);
+  assert.equal(parsed?.resolution.status, 'RESOLVED');
+  assert.equal('requestFingerprint' in (parsed?.resolution as unknown as object), false);
+  assert.equal(parseCreateFindingReviewCaseResolutionResponse({
+    ...response,
+    resolution: { ...response.resolution, versionAfter: 4 },
+  }), null);
+  assert.equal(parseCreateFindingReviewCaseResolutionResponse({
+    ...response,
+    resolution: { ...response.resolution, status: 'IN_REVIEW' },
+  }), null);
 });
 
 test('parser da transição aceita apenas resposta mínima estruturalmente válida', () => {
@@ -459,4 +493,42 @@ test('cliente de decisão envia contrato técnico, chave opaca e interpreta repl
     expectedVersion: 1,
   });
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/decisions$`));
+});
+
+test('cliente de resolução envia versão, justificativa canônica e interpreta replay 200', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({
+      idempotentReplay: true,
+      resolution: {
+        eventId: EVENT_ID,
+        caseId: CASE_ID,
+        decisionId: DECISION_ID,
+        identityConclusion: 'DIFFERENT_ASSETS',
+        justification: 'Ativos distintos confirmados.\nInvestigação encerrada.',
+        versionBefore: 2,
+        versionAfter: 3,
+        previousStatus: 'IN_REVIEW',
+        status: 'RESOLVED',
+        resolvedBy: 'atlas-mvp-user',
+        resolvedAt: NOW,
+      },
+    }, { status: 200 });
+  };
+  const result = await createFindingReviewCaseResolution(
+    CASE_ID,
+    2,
+    '  Ativos distintos confirmados.\nInvestigação encerrada.  ',
+    'atlas-ui-resolution-key',
+    { fetchImplementation },
+  );
+  assert.equal(result.idempotentReplay, true);
+  assert.equal(calls[0]?.init.method, 'POST');
+  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-resolution-key');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    expectedVersion: 2,
+    justification: 'Ativos distintos confirmados.\nInvestigação encerrada.',
+  });
+  assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/resolutions$`));
 });

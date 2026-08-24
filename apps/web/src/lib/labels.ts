@@ -109,6 +109,7 @@ const auditActionLabels: Record<string, string> = {
   CASE_CREATED: 'Caso de revisão criado',
   CASE_STATUS_CHANGED: 'Status do caso de revisão alterado',
   CASE_DECISION_RECORDED: 'Decisão de identidade registrada',
+  CASE_RESOLVED: 'Investigação concluída',
   ADMIN_STATUS_CHANGED: 'Status administrativo alterado',
   CONFLICT_STATUS_CHANGED: 'Status do conflito alterado',
   NETWORK_DISCOVERY_RUN_EXECUTED: 'Descoberta de rede executada',

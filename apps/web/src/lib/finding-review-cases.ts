@@ -137,6 +137,25 @@ export interface CreateFindingReviewDecisionResponse {
   idempotentReplay: boolean;
 }
 
+export interface FindingReviewCaseResolutionResult {
+  eventId: string;
+  caseId: string;
+  decisionId: string;
+  identityConclusion: FindingReviewIdentityConclusion;
+  justification: string;
+  versionBefore: number;
+  versionAfter: number;
+  previousStatus: 'IN_REVIEW';
+  status: 'RESOLVED';
+  resolvedBy: string;
+  resolvedAt: string;
+}
+
+export interface CreateFindingReviewCaseResolutionResponse {
+  idempotentReplay: boolean;
+  resolution: FindingReviewCaseResolutionResult;
+}
+
 export const DEFAULT_FINDING_REVIEW_CASE_QUERY: Required<
   Pick<FindingReviewCaseQuery, 'page' | 'pageSize' | 'sortBy' | 'sortDirection'>
 > = { page: 1, pageSize: 25, sortBy: 'createdAt', sortDirection: 'desc' };
@@ -182,6 +201,7 @@ export function getFindingReviewEventLabel(value: string): string {
   if (value === 'CASE_CREATED') return 'Caso criado';
   if (value === 'CASE_STATUS_CHANGED') return 'Status do caso alterado';
   if (value === 'CASE_DECISION_RECORDED') return 'Decisão de identidade registrada';
+  if (value === 'CASE_RESOLVED') return 'Investigação concluída';
   return 'Evento do caso';
 }
 
@@ -323,6 +343,48 @@ export function parseCreateFindingReviewDecisionResponse(
   if (!isRecord(value) || typeof value.idempotentReplay !== 'boolean') return null;
   const decision = parseDecision(value.decision);
   return decision ? { decision, idempotentReplay: value.idempotentReplay } : null;
+}
+
+export function parseCreateFindingReviewCaseResolutionResponse(
+  value: unknown,
+): CreateFindingReviewCaseResolutionResponse | null {
+  if (!isRecord(value) || typeof value.idempotentReplay !== 'boolean') return null;
+  const resolution = value.resolution;
+  if (
+    !isRecord(resolution)
+    || !isFindingReviewCaseId(resolution.eventId)
+    || !isFindingReviewCaseId(resolution.caseId)
+    || !isFindingReviewCaseId(resolution.decisionId)
+    || !FINDING_REVIEW_IDENTITY_CONCLUSIONS.includes(
+      resolution.identityConclusion as FindingReviewIdentityConclusion,
+    )
+    || typeof resolution.justification !== 'string'
+    || resolution.justification.length < 1
+    || !isPositiveInteger(resolution.versionBefore)
+    || !isPositiveInteger(resolution.versionAfter)
+    || resolution.versionAfter !== resolution.versionBefore + 1
+    || resolution.previousStatus !== 'IN_REVIEW'
+    || resolution.status !== 'RESOLVED'
+    || typeof resolution.resolvedBy !== 'string'
+    || resolution.resolvedBy.length < 1
+    || !isFindingReviewTimestamp(resolution.resolvedAt)
+  ) return null;
+  return {
+    idempotentReplay: value.idempotentReplay,
+    resolution: {
+      eventId: resolution.eventId,
+      caseId: resolution.caseId,
+      decisionId: resolution.decisionId,
+      identityConclusion: resolution.identityConclusion as FindingReviewIdentityConclusion,
+      justification: resolution.justification,
+      versionBefore: resolution.versionBefore,
+      versionAfter: resolution.versionAfter,
+      previousStatus: 'IN_REVIEW',
+      status: 'RESOLVED',
+      resolvedBy: resolution.resolvedBy,
+      resolvedAt: resolution.resolvedAt,
+    },
+  };
 }
 
 export function parseCreateFindingReviewCaseResponse(

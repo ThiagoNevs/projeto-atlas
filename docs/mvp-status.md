@@ -214,8 +214,11 @@ O backend também permite encerrar logicamente uma investigação por
 HTTP 201; replay semântico retorna HTTP 200 mesmo depois que o caso já está `RESOLVED`. O fingerprint é
 escopado por caso, o update é otimista e `CASE_RESOLVED`, mudança do caso e `AuditLog` pertencem à mesma
 transação. A resolução libera `activeReviewSubjectKey`, mas não recalcula nem corrige o finding, não
-mescla ativos, não altera `Conflict` e não cria suppression ou remediation. Ainda não existe interface
-para esse comando.
+mescla ativos, não altera `Conflict` e não cria suppression ou remediation. A interface do detalhe
+apresenta a resolução elegível em duas etapas,
+distingue decisão de identidade de encerramento lógico, mantém retries incertos por até 15 minutos no
+`sessionStorage` e atualiza o estado confirmado localmente antes do refresh. Casos resolvidos exibem
+os dados derivados do evento `CASE_RESOLVED`; não existe uma entidade pública fictícia de resolução.
 
 Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`, reabertura,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
