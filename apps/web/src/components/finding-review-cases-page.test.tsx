@@ -6,6 +6,7 @@ import type { Root } from 'react-dom/client';
 import { ApiError } from '../lib/api-error.ts';
 import type {
   CreateFindingReviewCaseResponse,
+  CreateFindingReviewCaseReopenResponse,
   CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
   FindingReviewCaseDetail,
@@ -26,12 +27,15 @@ const {
   PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
   PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
   PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS,
   buildFindingReviewCaseQueryFromForm,
   createPendingFindingReviewCaseAttempt,
   createPendingFindingReviewDecisionAttempt,
   createPendingFindingReviewResolutionAttempt,
+  createPendingFindingReviewReopenAttempt,
   parsePendingFindingReviewDecisionAttempt,
   parsePendingFindingReviewResolutionAttempt,
+  parsePendingFindingReviewReopenAttempt,
   parsePendingFindingReviewCaseAttempt,
 } = await import('./finding-review-cases-page.tsx');
 
@@ -197,6 +201,41 @@ const resolutionResponse: CreateFindingReviewCaseResolutionResponse = {
     status: 'RESOLVED',
     resolvedBy: 'atlas-mvp-user',
     resolvedAt: '2026-07-20T12:20:00.000Z',
+  },
+};
+
+const resolvedDetail: FindingReviewCaseDetail = {
+  ...decisionRecordedDetail,
+  status: 'RESOLVED',
+  version: 4,
+  updatedAt: resolutionResponse.resolution.resolvedAt,
+  events: [...decisionRecordedDetail.events, {
+    id: resolutionResponse.resolution.eventId,
+    eventType: 'CASE_RESOLVED',
+    versionBefore: 3,
+    versionAfter: 4,
+    actor: resolutionResponse.resolution.resolvedBy,
+    metadata: {
+      decisionId: resolutionResponse.resolution.decisionId,
+      identityConclusion: resolutionResponse.resolution.identityConclusion,
+      justification: resolutionResponse.resolution.justification,
+    },
+    createdAt: resolutionResponse.resolution.resolvedAt,
+  }],
+};
+
+const reopenResponse: CreateFindingReviewCaseReopenResponse = {
+  idempotentReplay: false,
+  reopen: {
+    eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    caseId: CASE_ID,
+    justification: 'Novas evidências exigem retomar a investigação.',
+    versionBefore: 4,
+    versionAfter: 5,
+    previousStatus: 'RESOLVED',
+    status: 'IN_REVIEW',
+    reopenedBy: 'atlas-mvp-user',
+    reopenedAt: '2026-07-20T12:30:00.000Z',
   },
 };
 
@@ -384,6 +423,17 @@ async function reviewAndSubmitResolution(
     findButton(container, 'Resolver caso').click();
     await flush();
   });
+}
+
+async function reviewAndSubmitReopen(
+  container: HTMLElement,
+  justification = reopenResponse.reopen.justification,
+): Promise<void> {
+  const textarea = container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
+  assert.ok(textarea);
+  await act(async () => { setControlValue(textarea, justification); await flush(); });
+  await act(async () => { findButton(container, 'Revisar reabertura').click(); await flush(); });
+  await act(async () => { findButton(container, 'Reabrir investigação').click(); await flush(); });
 }
 
 test('lista casos e abre detalhe com snapshot, ativo atual e evento', async () => {
@@ -3130,5 +3180,580 @@ test('transição em voo desabilita a resolução', async () => {
     });
   } finally {
     await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('mostra reabertura somente em RESOLVED e preserva a decisão atual', async () => {
+  for (const status of ['OPEN', 'IN_REVIEW', 'WAITING_FOR_EVIDENCE', 'DISMISSED', 'CANCELLED'] as const) {
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => ({ ...decisionRecordedDetail, status }),
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      assert.equal(harness.environment.container.querySelector('#review-reopen-justification'), null);
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+
+  const harness = await renderPage({ loadCases: async () => listResponse, loadDetail: async () => resolvedDetail });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    assert.ok(harness.environment.container.querySelector('#review-reopen-justification'));
+    assert.match(harness.environment.container.textContent ?? '', /Mesma identidade confirmada/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+
+  const withoutDecision = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => ({ ...resolvedDetail, currentDecision: null, decisionHistory: [] }),
+  });
+  try {
+    await openFirstCaseDetail(withoutDecision.environment.container);
+    assert.ok(withoutDecision.environment.container.querySelector('#review-reopen-justification'));
+  } finally {
+    await close(withoutDecision.root, withoutDecision.environment.cleanup);
+  }
+});
+
+test('valida justificativa e apresenta confirmação completa sem POST na primeira etapa', async () => {
+  let calls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async () => { calls += 1; return reopenResponse; },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
+    assert.ok(textarea);
+    await act(async () => {
+      setControlValue(textarea, ' \n ');
+      findButton(harness.environment.container, 'Revisar reabertura').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /Informe uma justificativa/);
+    assert.equal(document.activeElement === textarea, true);
+    await act(async () => {
+      setControlValue(textarea, 'x'.repeat(1001));
+      findButton(harness.environment.container, 'Revisar reabertura').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /no máximo 1000 caracteres/);
+    await act(async () => {
+      setControlValue(textarea, 'x'.repeat(1000));
+      findButton(harness.environment.container, 'Revisar reabertura').click();
+      await flush();
+    });
+    assert.equal(calls, 0);
+    assert.equal(document.activeElement?.textContent, 'Confirme a reabertura');
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Resolvido → Em análise/);
+    assert.match(text, /decisão atual.*resolução anterior.*histórico/i);
+    assert.match(text, /inventário.*Conflict.*evidências não serão modificados/i);
+    assert.match(text, /Nenhuma remediação será executada/);
+    await act(async () => { findButton(harness.environment.container, 'Voltar e editar').click(); await flush(); });
+    const restored = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
+    assert.ok(restored);
+    await act(async () => {
+      setControlValue(restored, '  Espaços  internos\ne quebra preservados.  ');
+      findButton(harness.environment.container, 'Revisar reabertura').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /Espaços  internos\s+e quebra preservados/);
+    assert.equal(calls, 0);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('reabre com payload canônico, aplica sucesso local antes do GET e preserva decisão se refresh falhar', async () => {
+  const calls: Array<{ id: string; version: number; justification: string; key: string }> = [];
+  let detailLoads = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      if (detailLoads > 1) throw new ApiError('refresh falhou', 0);
+      return resolvedDetail;
+    },
+    createReopen: async (id, version, justification, key) => {
+      calls.push({ id, version, justification, key });
+      return { ...reopenResponse, reopen: { ...reopenResponse.reopen, justification } };
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await reviewAndSubmitReopen(harness.environment.container, '  Nova  evidência\nconfirmada.  ');
+    await act(async () => { await flush(); });
+    assert.deepEqual(calls.map(({ id, version, justification }) => ({ id, version, justification })), [{
+      id: CASE_ID,
+      version: 4,
+      justification: 'Nova  evidência\nconfirmada.',
+    }]);
+    assert.match(calls[0]?.key ?? '', /^atlas-ui-/);
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Em análise/);
+    assert.match(text, /Versão5|Versão 5/);
+    assert.match(text, /Mesma identidade confirmada/);
+    assert.match(text, /reabertura foi confirmada, mas não foi possível atualizar/i);
+    assert.equal(harness.environment.container.querySelector('#review-reopen-justification'), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('aceita replay e GET posterior apresenta CASE_REOPENED sem dados técnicos sensíveis', async () => {
+  let loads = 0;
+  const refreshed: FindingReviewCaseDetail = {
+    ...resolvedDetail,
+    status: 'IN_REVIEW',
+    version: 5,
+    updatedAt: reopenResponse.reopen.reopenedAt,
+    events: [...resolvedDetail.events, {
+      id: reopenResponse.reopen.eventId,
+      eventType: 'CASE_REOPENED',
+      versionBefore: 4,
+      versionAfter: 5,
+      actor: reopenResponse.reopen.reopenedBy,
+      metadata: { justification: reopenResponse.reopen.justification },
+      createdAt: reopenResponse.reopen.reopenedAt,
+    }],
+  };
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => { loads += 1; return loads === 1 ? resolvedDetail : refreshed; },
+    createReopen: async () => ({ ...reopenResponse, idempotentReplay: true }),
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await reviewAndSubmitReopen(harness.environment.container);
+    await act(async () => { await flush(); });
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Reabertura já registrada, recuperada com segurança/);
+    assert.match(text, /Investigação reaberta/);
+    assert.match(text, /Resolvido → Em análise/);
+    assert.match(text, /Novas evidências exigem retomar/);
+    assert.match(text, /Versão 4 → 5/);
+    assert.doesNotMatch(text, /requestFingerprint|Idempotency-Key|requestId/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('resultado incerto preserva envelope e retry reutiliza chave, payload e versão sem POST automático', async () => {
+  const first = deferred<CreateFindingReviewCaseReopenResponse>();
+  const calls: Array<{ version: number; justification: string; key: string }> = [];
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async (_id, version, justification, key) => {
+      calls.push({ version, justification, key });
+      if (calls.length === 1) return first.promise;
+      return { ...reopenResponse, idempotentReplay: true };
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, reopenResponse.reopen.justification); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Revisar reabertura').click(); await flush(); });
+    await act(async () => {
+      const button = findButton(harness.environment.container, 'Reabrir investigação');
+      button.click();
+      button.click();
+      await flush();
+    });
+    assert.equal(calls.length, 1);
+    await act(async () => { first.reject(new ApiError('Falha de transporte', 0)); await flush(); });
+    assert.equal(calls.length, 1);
+    const serialized = harness.environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`);
+    assert.ok(serialized);
+    await act(async () => { findButton(harness.environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1], calls[0]);
+    assert.equal(harness.environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('valida envelope de reabertura, TTL, versão desconhecida e isolamento por caso', () => {
+  const now = Date.parse('2026-07-20T12:00:00.000Z');
+  const attempt = createPendingFindingReviewReopenAttempt(
+    CASE_ID,
+    'Justificativa canônica.',
+    4,
+    'atlas-ui-reopen-key',
+    now,
+  );
+  assert.equal(Date.parse(attempt.expiresAt) - Date.parse(attempt.createdAt), PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS);
+  assert.deepEqual(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, now + 1), attempt);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, now + PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), SECOND_CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt('{invalid', CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify({ ...attempt, version: 2 }), CASE_ID, now), null);
+});
+
+test('retry expirado na mesma aba não envia nova chave e exige recarga explícita', async () => {
+  const clock = installControlledClock('2026-07-20T12:00:00.000Z');
+  let calls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async () => { calls += 1; throw new ApiError('rede', 0); },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await reviewAndSubmitReopen(harness.environment.container);
+    assert.equal(calls, 1);
+    clock.advanceBy(PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS);
+    await act(async () => { findButton(harness.environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls, 1);
+    assert.match(harness.environment.container.textContent ?? '', /tentativa incerta expirou/i);
+    assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+  } finally {
+    clock.restore();
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('limpa envelope de reabertura válido mas expirado no componente sem retry ou POST', async () => {
+  const clock = installControlledClock('2026-07-20T12:30:00.000Z');
+  const environment = createIsolatedTestEnvironment();
+  const storageKey = `atlas:pending-review-reopen:${CASE_ID}`;
+  const expired = createPendingFindingReviewReopenAttempt(
+    CASE_ID,
+    'Tentativa válida, porém expirada.',
+    4,
+    'atlas-ui-reopen-expired',
+    clock.now - PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS - 1,
+  );
+  environment.window.sessionStorage.setItem(storageKey, JSON.stringify(expired));
+  let calls = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async () => { calls += 1; return reopenResponse; },
+  }, environment);
+  try {
+    assert.equal(environment.window.sessionStorage.getItem(storageKey), null);
+    assert.equal(calls, 0);
+    assert.equal(
+      [...environment.container.querySelectorAll('button')]
+        .some((button) => button.textContent?.trim() === 'Tentar novamente'),
+      false,
+    );
+    const textarea = environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-reopen-justification',
+    );
+    assert.ok(textarea);
+    assert.equal(textarea.value, '');
+  } finally {
+    clock.restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('limpa envelopes de reabertura malformados e com versão desconhecida sem enviar POST', async () => {
+  for (const raw of ['{invalid', JSON.stringify({
+    ...createPendingFindingReviewReopenAttempt(CASE_ID, 'Válida.', 4, 'atlas-ui-reopen-version'),
+    version: 2,
+  })]) {
+    let calls = 0;
+    const environment = createIsolatedTestEnvironment();
+    environment.window.sessionStorage.setItem(`atlas:pending-review-reopen:${CASE_ID}`, raw);
+    const harness = await renderPage({
+      initialSearchParams: { caseId: CASE_ID },
+      loadCases: async () => listResponse,
+      loadDetail: async () => resolvedDetail,
+      createReopen: async () => { calls += 1; return reopenResponse; },
+    }, environment);
+    try {
+      assert.equal(environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`), null);
+      assert.equal(calls, 0);
+    } finally {
+      await close(harness.root, environment.cleanup);
+    }
+  }
+});
+
+test('associa erro de justificativa do servidor à textarea e remove a tentativa pendente', async () => {
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async () => {
+      throw new ApiError(
+        'A justificativa da reabertura é inválida.',
+        400,
+        'INVALID_FINDING_REVIEW_REOPEN_JUSTIFICATION',
+      );
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await settleScheduledFocus(harness.environment);
+    await reviewAndSubmitReopen(harness.environment.container);
+    await act(async () => { await flush(); });
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-reopen-justification',
+    );
+    const serverError = harness.environment.container.querySelector<HTMLElement>(
+      '#review-reopen-justification-server-error',
+    );
+    assert.ok(textarea && serverError);
+    assert.equal(document.activeElement === textarea, true);
+    assert.equal(textarea.getAttribute('aria-invalid'), 'true');
+    assert.equal(
+      textarea.getAttribute('aria-describedby')?.split(/\s+/).includes(serverError.id),
+      true,
+    );
+    assert.equal(serverError.getAttribute('role'), 'alert');
+    assert.match(serverError.textContent ?? '', /justificativa da reabertura é inválida/i);
+    assert.equal(
+      harness.environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`),
+      null,
+    );
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('mantém retry incerto em memória quando sessionStorage está indisponível', async () => {
+  const environment = createIsolatedTestEnvironment();
+  const restore = replaceStorageMethod(environment, 'setItem', () => { throw new Error('storage indisponível'); });
+  let calls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    createReopen: async () => {
+      calls += 1;
+      if (calls === 1) throw new ApiError('rede', 0);
+      return { ...reopenResponse, idempotentReplay: true };
+    },
+  }, environment);
+  try {
+    await openFirstCaseDetail(environment.container);
+    await reviewAndSubmitReopen(environment.container);
+    assert.ok(findButton(environment.container, 'Tentar novamente'));
+    await act(async () => { findButton(environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls, 2);
+  } finally {
+    restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('erros conclusivos de reabertura limpam pending e não repetem POST', async () => {
+  for (const scenario of [
+    { status: 409, code: 'FINDING_REVIEW_CASE_VERSION_CONFLICT', message: /alterado desde que você iniciou/ },
+    { status: 409, code: 'IDEMPOTENCY_KEY_REUSED', message: /não corresponde à operação original/ },
+    { status: 422, code: 'FINDING_REVIEW_CASE_REOPEN_NOT_ALLOWED', message: /não está mais disponível para reabertura/ },
+    { status: 400, code: 'FINDING_REVIEW_REOPEN_JUSTIFICATION_REQUIRED', message: /Informe uma justificativa/ },
+    { status: 400, code: 'INVALID_FINDING_REVIEW_REOPEN_JUSTIFICATION', message: /justificativa da reabertura é inválida/ },
+    { status: 404, code: 'FINDING_REVIEW_CASE_NOT_FOUND', message: /caso não foi encontrado/ },
+    { status: 503, code: 'FINDING_REVIEW_CASES_DISABLED', message: /indisponível neste ambiente/ },
+  ]) {
+    let calls = 0;
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => resolvedDetail,
+      createReopen: async () => { calls += 1; throw new ApiError('controlado', scenario.status, scenario.code); },
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      await reviewAndSubmitReopen(harness.environment.container);
+      assert.equal(calls, 1);
+      assert.match(harness.environment.container.textContent ?? '', scenario.message);
+      assert.equal(harness.environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`), null);
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+});
+
+test('ACTIVE_REVIEW_CASE_EXISTS cria link apenas para UUID válido', async () => {
+  for (const existingCaseId of [SECOND_CASE_ID, 'javascript:alert(1)']) {
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => resolvedDetail,
+      createReopen: async () => { throw new ApiError('conflito', 409, 'ACTIVE_REVIEW_CASE_EXISTS', existingCaseId); },
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      await reviewAndSubmitReopen(harness.environment.container);
+      assert.match(harness.environment.container.textContent ?? '', /Já existe outra investigação ativa/);
+      const link = [...harness.environment.container.querySelectorAll('a')]
+        .find((item) => item.textContent === 'Abrir investigação existente');
+      if (existingCaseId === SECOND_CASE_ID) {
+        assert.equal(link?.getAttribute('href'), `/conflict-review-cases?caseId=${SECOND_CASE_ID}`);
+      } else {
+        assert.equal(link, undefined);
+      }
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+});
+
+test('resposta tardia da reabertura de A não altera o caso B', async () => {
+  const pending = deferred<CreateFindingReviewCaseReopenResponse>();
+  const secondResolved: FindingReviewCaseDetail = {
+    ...resolvedDetail,
+    id: SECOND_CASE_ID,
+    findingId: SECOND_FINDING_ID,
+    currentDecision: { ...decisionResponse.decision, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', caseId: SECOND_CASE_ID },
+    decisionHistory: [{ ...decisionResponse.decision, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', caseId: SECOND_CASE_ID }],
+  };
+  const listWithTwo: FindingReviewCaseListResponse = {
+    items: [listResponse.items[0]!, { ...listResponse.items[0]!, id: SECOND_CASE_ID, findingId: SECOND_FINDING_ID }],
+    pagination: { page: 1, pageSize: 25, totalItems: 2, totalPages: 1 },
+  };
+  const harness = await renderPage({
+    loadCases: async () => listWithTwo,
+    loadDetail: async (id) => id === SECOND_CASE_ID ? secondResolved : resolvedDetail,
+    createReopen: async () => pending.promise,
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, reopenResponse.reopen.justification); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Revisar reabertura').click(); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Reabrir investigação').click(); await flush(); });
+    await act(async () => { findButton(harness.environment.container, 'Ver detalhe').click(); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', new RegExp(SECOND_FINDING_ID));
+    await act(async () => { pending.resolve(reopenResponse); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', new RegExp(SECOND_FINDING_ID));
+    assert.doesNotMatch(harness.environment.container.textContent ?? '', /Investigação reaberta com sucesso/);
+    assert.equal(harness.environment.window.sessionStorage.getItem(`atlas:pending-review-reopen:${CASE_ID}`), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('mutações ativas e reabertura permanecem mutuamente exclusivas nos estados reais da UI', async () => {
+  const statusPending = deferred<{
+    id: string;
+    status: 'IN_REVIEW';
+    version: number;
+    updatedAt: string;
+  }>();
+  let statusCalls = 0;
+  let statusReopenCalls = 0;
+  const statusHarness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => { statusCalls += 1; return statusPending.promise; },
+    createReopen: async () => { statusReopenCalls += 1; return reopenResponse; },
+  });
+  try {
+    await openFirstCaseDetail(statusHarness.environment.container);
+    const select = statusHarness.environment.container.querySelector<HTMLSelectElement>(
+      '#review-case-next-status',
+    );
+    assert.ok(select);
+    await act(async () => { setControlValue(select, 'IN_REVIEW'); await flush(); });
+    await act(async () => {
+      findButton(statusHarness.environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+    assert.equal(statusCalls, 1);
+    assert.equal(statusHarness.environment.container.querySelector('#review-reopen-justification'), null);
+    assert.equal(statusReopenCalls, 0);
+    await act(async () => {
+      statusPending.resolve({
+        id: CASE_ID,
+        status: 'IN_REVIEW',
+        version: 2,
+        updatedAt: '2026-07-20T12:05:00.000Z',
+      });
+      await flush();
+    });
+  } finally {
+    await close(statusHarness.root, statusHarness.environment.cleanup);
+  }
+
+  const decisionPending = deferred<CreateFindingReviewDecisionResponse>();
+  let decisionCalls = 0;
+  let decisionReopenCalls = 0;
+  const decisionHarness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionReadyDetail,
+    createDecision: async () => { decisionCalls += 1; return decisionPending.promise; },
+    createReopen: async () => { decisionReopenCalls += 1; return reopenResponse; },
+  });
+  try {
+    await openFirstCaseDetail(decisionHarness.environment.container);
+    await submitEligibleDecision(decisionHarness.environment.container);
+    assert.equal(decisionCalls, 1);
+    assert.equal(decisionHarness.environment.container.querySelector('#review-reopen-justification'), null);
+    assert.equal(decisionReopenCalls, 0);
+    await act(async () => { decisionPending.resolve(decisionResponse); await flush(); });
+  } finally {
+    await close(decisionHarness.root, decisionHarness.environment.cleanup);
+  }
+
+  const resolutionPending = deferred<CreateFindingReviewCaseResolutionResponse>();
+  let resolutionCalls = 0;
+  let resolutionReopenCalls = 0;
+  const resolutionHarness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    createResolution: async () => { resolutionCalls += 1; return resolutionPending.promise; },
+    createReopen: async () => { resolutionReopenCalls += 1; return reopenResponse; },
+  });
+  try {
+    await openFirstCaseDetail(resolutionHarness.environment.container);
+    await reviewAndSubmitResolution(resolutionHarness.environment.container);
+    assert.equal(resolutionCalls, 1);
+    assert.equal(resolutionHarness.environment.container.querySelector('#review-reopen-justification'), null);
+    assert.equal(resolutionReopenCalls, 0);
+    await act(async () => { resolutionPending.resolve(resolutionResponse); await flush(); });
+  } finally {
+    await close(resolutionHarness.root, resolutionHarness.environment.cleanup);
+  }
+
+  const reopenPending = deferred<CreateFindingReviewCaseReopenResponse>();
+  let reopenCalls = 0;
+  let incompatibleStatusCalls = 0;
+  let incompatibleDecisionCalls = 0;
+  let incompatibleResolutionCalls = 0;
+  const reopenHarness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => resolvedDetail,
+    updateStatus: async () => {
+      incompatibleStatusCalls += 1;
+      return { id: CASE_ID, status: 'IN_REVIEW', version: 5, updatedAt: reopenResponse.reopen.reopenedAt };
+    },
+    createDecision: async () => { incompatibleDecisionCalls += 1; return decisionResponse; },
+    createResolution: async () => { incompatibleResolutionCalls += 1; return resolutionResponse; },
+    createReopen: async () => { reopenCalls += 1; return reopenPending.promise; },
+  });
+  try {
+    await openFirstCaseDetail(reopenHarness.environment.container);
+    const textarea = reopenHarness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-reopen-justification',
+    );
+    assert.ok(textarea);
+    await act(async () => { setControlValue(textarea, reopenResponse.reopen.justification); await flush(); });
+    await act(async () => { findButton(reopenHarness.environment.container, 'Revisar reabertura').click(); await flush(); });
+    await act(async () => { findButton(reopenHarness.environment.container, 'Reabrir investigação').click(); await flush(); });
+    assert.equal(reopenCalls, 1);
+    assert.equal(findButton(reopenHarness.environment.container, 'Reabrindo…').disabled, true);
+    assert.equal(reopenHarness.environment.container.querySelector('#review-case-next-status'), null);
+    assert.equal(reopenHarness.environment.container.querySelector('#review-decision-justification'), null);
+    assert.equal(reopenHarness.environment.container.querySelector('#review-resolution-justification'), null);
+    assert.deepEqual(
+      [incompatibleStatusCalls, incompatibleDecisionCalls, incompatibleResolutionCalls],
+      [0, 0, 0],
+    );
+    await act(async () => { reopenPending.resolve(reopenResponse); await flush(); });
+  } finally {
+    await close(reopenHarness.root, reopenHarness.environment.cleanup);
   }
 });

@@ -96,6 +96,7 @@ test('traduz ações, entidade e todos os estados dos casos de revisão', () => 
   assert.equal(getAuditActionLabel('CASE_STATUS_CHANGED'), 'Status do caso de revisão alterado');
   assert.equal(getAuditActionLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
   assert.equal(getAuditActionLabel('CASE_RESOLVED'), 'Investigação concluída');
+  assert.equal(getAuditActionLabel('CASE_REOPENED'), 'Investigação reaberta');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'SAME_ASSET'), 'Mesmo ativo');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.equal(getAuditEntityTypeLabel('FindingReviewCase'), 'Caso de revisão');
@@ -136,6 +137,48 @@ test('apresenta resolução do caso em português e preserva o deep link seguro'
       harness.environment.container.querySelector<HTMLAnchorElement>('a.table-link-button')?.getAttribute('href'),
       `/conflict-review-cases?caseId=${CASE_ID}`,
     );
+  } finally {
+    await close(harness.root, harness.environment);
+  }
+});
+
+test('apresenta reabertura em português, preserva resumo e envia filtro técnico', async () => {
+  const queries: Parameters<AuditLogsLoader>[0][] = [];
+  const reopenLog = auditLog({
+    action: 'CASE_REOPENED',
+    before: { status: 'RESOLVED', version: 4 },
+    after: { status: 'IN_REVIEW', version: 5 },
+    metadata: { eventType: 'CASE_REOPENED', justification: 'Novas evidências.' },
+  });
+  const reopenResponse = {
+    ...response([reopenLog]),
+    summary: { ...emptyResponse.summary, total: 37, conflictTreatments: 9 },
+  };
+  const harness = await renderPage(async (query) => {
+    queries.push(query);
+    return reopenResponse;
+  });
+  try {
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Investigação reaberta/);
+    assert.match(text, /Resolvido/);
+    assert.match(text, /Em análise/);
+    assert.match(text, /Justificativa: Novas evidências/);
+    assert.match(text, /37/);
+    assert.equal(
+      harness.environment.container.querySelector<HTMLAnchorElement>('a.table-link-button')?.getAttribute('href'),
+      `/conflict-review-cases?caseId=${CASE_ID}`,
+    );
+    const action = harness.environment.container.querySelectorAll('select').item(0);
+    const form = harness.environment.container.querySelector('form');
+    assert.match(action.textContent ?? '', /Investigação reaberta/);
+    assert.ok(form);
+    await act(async () => {
+      setControlValue(action, 'CASE_REOPENED');
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+    });
+    assert.equal(queries.at(-1)?.action, 'CASE_REOPENED');
   } finally {
     await close(harness.root, harness.environment);
   }
@@ -253,6 +296,7 @@ test('filtros apresentam labels e enviam valores técnicos inalterados', async (
     assert.match(action.textContent ?? '', /Caso de revisão criado/);
     assert.match(action.textContent ?? '', /Status do caso de revisão alterado/);
     assert.match(action.textContent ?? '', /Decisão de identidade registrada/);
+    assert.match(action.textContent ?? '', /Investigação reaberta/);
     assert.match(entityType.textContent ?? '', /Caso de revisão/);
 
     await act(async () => {

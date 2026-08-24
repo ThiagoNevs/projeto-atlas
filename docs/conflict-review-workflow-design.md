@@ -653,22 +653,34 @@ permanecem propostos e fora do MVP atual.
 - **Efeitos:** altera somente status para `RESOLVED`, versão, `updatedAt` e libera
   `activeReviewSubjectKey`; cria `CASE_RESOLVED` e `AuditLog` na mesma transação PostgreSQL.
 - **Semântica:** `RESOLVED` encerra a investigação. Não corrige o finding derivado, não mescla ativos,
-  não cria suppression, não altera `Conflict` e não executa remediation. Reabertura, correção e
-  superseding continuam fora do escopo.
+  não cria suppression, não altera `Conflict` e não executa remediation. Correção e superseding
+  continuam fora do escopo.
 - **Interface:** o detalhe do caso oferece confirmação em duas etapas somente para `IN_REVIEW` com
   decisão corrente. Falhas de resultado incerto reutilizam explicitamente a mesma tentativa por até
   15 minutos no `sessionStorage`; respostas conclusivas removem o envelope. Após sucesso, a resposta
   da mutação é aplicada localmente antes do refresh, e a apresentação histórica é derivada do evento
   `CASE_RESOLVED`, sem modelar uma entidade de resolução inexistente.
 
-### 14.9 `POST /conflict-review-cases/:id/refresh` — proposto
+### 14.9 `POST /conflict-review-cases/:id/reopens` — implementado para reabertura lógica
+
+- **Request:** `expectedVersion` e justificativa obrigatória de 1 a 1.000 caracteres, com
+  `Idempotency-Key` obrigatória.
+- **Elegibilidade:** somente caso `RESOLVED`; a decisão corrente e seu histórico são preservados.
+- **Efeitos:** move o caso para `IN_REVIEW`, incrementa a versão, restaura a chave do assunto ativo e
+  cria `CASE_REOPENED` e `AuditLog` atomicamente. Não altera inventário, evidências ou `Conflict`.
+- **Interface:** o detalhe oferece justificativa e confirmação em duas etapas. Resultado de transporte
+  incerto pode ser repetido explicitamente com a mesma chave, payload e versão por até 15 minutos no
+  `sessionStorage`. A resposta confirmada atualiza status e versão antes do refresh, sem inventar um
+  evento otimista. A resolução anterior e a decisão atual permanecem visíveis no histórico.
+
+### 14.10 `POST /conflict-review-cases/:id/refresh` — proposto
 
 - **Objetivo:** recalcular e comparar o finding.
 - **Request:** `expectedVersion`.
 - **Response:** staleness, snapshot atual e diff estruturado.
 - **Efeitos:** preserva original, salva comparação, evento e auditoria; não muda decisão/status.
 
-### 14.10 Regras transversais dos contratos
+### 14.11 Regras transversais dos contratos
 
 | Endpoint | Autorização | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- | --- |
