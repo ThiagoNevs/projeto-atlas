@@ -22,6 +22,7 @@ de conflitos.
 - Detecção de ativo administrativamente encerrado que voltou a aparecer.
 - Conflitos de ciclo de vida e identidade de rede.
 - Resolution Center com mudança auditável de status.
+- Finding Review com achados derivados, casos persistidos, transições operacionais, primeira decisão de identidade, resolução e reabertura lógicas, timeline e auditoria.
 - Tela de auditoria com busca, filtros, resumo, paginação e detalhe dos registros.
 - Tela operacional de qualidade dos dados com lacunas, scores e prioridades de correção.
 - Declaração manual de ativos ainda não observados por fontes técnicas, com evidência e auditoria.
@@ -106,7 +107,8 @@ conter segredos.
 
 A funcionalidade experimental de casos de revisão permanece desabilitada por padrão. Para validá-la
 apenas em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. A
-flag controla criação, listagem e detalhe. O fluxo ainda usa o ator provisório `atlas-mvp-user` e não
+flag controla o fluxo implementado de Finding Review: criação, listagem, detalhe, transições,
+decisão, resolução, reabertura e respectivos replays. O fluxo ainda usa o ator provisório `atlas-mvp-user` e não
 representa autenticação, autorização ou RBAC reais. Com a flag desabilitada ou inválida, todos esses
 endpoints retornam HTTP 503, inclusive em tentativas de replay. A `Idempotency-Key` é case-sensitive,
 aceita somente caracteres ASCII seguros e nunca é persistida em formato bruto. O nome HTTP do header
@@ -129,8 +131,11 @@ operação não usa `Idempotency-Key`; em resultado de rede incerto, a interface
 Como a versão é um PostgreSQL `INT4` e a transição sempre incrementa o valor, o maior
 `expectedVersion` aceito é `2147483646`. Valores superiores retornam HTTP 400 antes da transação,
 sem escrita e sem exposição de erro Prisma.
-Decisões, estados terminais, comentários, atribuição e refresh continuam fora do escopo. O ator
-`atlas-mvp-user` permanece provisório, sem autenticação ou RBAC.
+A primeira decisão de identidade, a resolução lógica para `RESOLVED` e a reabertura lógica para
+`IN_REVIEW` estão implementadas e preservam o histórico sem alterar inventário ou `Conflict`.
+Correção ou superseding de decisões, comandos para `DISMISSED`/`CANCELLED`, comentários, atribuição,
+refresh e revalidação continuam fora do escopo. O ator `atlas-mvp-user` permanece provisório, sem
+autenticação ou RBAC.
 
 Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
 navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e trata como incerto um
@@ -202,6 +207,8 @@ corepack pnpm dev:web
 - Inventário: [http://localhost:3000/assets](http://localhost:3000/assets)
 - Importação de ativos (CSV, XLSX, XLSM e conteúdo colado): [http://localhost:3000/assets/import](http://localhost:3000/assets/import)
 - Resolution Center: [http://localhost:3000/conflicts](http://localhost:3000/conflicts)
+- Achados de identidade e rede: [http://localhost:3000/conflict-findings](http://localhost:3000/conflict-findings)
+- Casos de revisão: [http://localhost:3000/conflict-review-cases](http://localhost:3000/conflict-review-cases)
 - Network Discovery Lite: [http://localhost:3000/network-discovery](http://localhost:3000/network-discovery)
 - Auditoria: [http://localhost:3000/audit](http://localhost:3000/audit)
 - Qualidade dos dados: [http://localhost:3000/data-quality](http://localhost:3000/data-quality)
