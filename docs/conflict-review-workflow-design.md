@@ -307,13 +307,14 @@ Estados recomendados:
 | `IN_REVIEW` | `CANCELLED` | motivo administrativo |
 | `WAITING_FOR_EVIDENCE` | `IN_REVIEW` | nova informação ou retomada explícita |
 | `WAITING_FOR_EVIDENCE` | `CANCELLED` | motivo administrativo |
-| `RESOLVED` | `OPEN` | reabertura autorizada e justificativa |
-| `DISMISSED` | `OPEN` | reabertura autorizada e justificativa |
-| `CANCELLED` | `OPEN` | somente administrador/lead e justificativa |
+| `RESOLVED` | `IN_REVIEW` | reabertura explícita e justificativa |
 
-`RESOLVED`, `DISMISSED` e `CANCELLED` são terminais até reabertura explícita. Staleness não muda o
-status do caso automaticamente. `WAITING_FOR_EVIDENCE` deverá voltar a `IN_REVIEW` antes de uma
-conclusão, evitando uma transição implícita sem retomada formal.
+No estágio atual, somente `RESOLVED` pode ser reaberto, sempre para `IN_REVIEW`. `DISMISSED` e
+`CANCELLED` permanecem terminais e não compartilham o comando de reabertura. Essa decisão substitui a
+proposta conceitual anterior de retorno genérico para `OPEN`, evitando misturar retomada de uma
+investigação concluída com políticas ainda não aprovadas para dispensa e cancelamento. Staleness não
+muda o status automaticamente. `WAITING_FOR_EVIDENCE` volta a `IN_REVIEW` pelo fluxo operacional
+existente antes de uma conclusão.
 
 ## 9. Decisões humanas
 
@@ -367,8 +368,9 @@ evolução de contrato mais arriscada e dificuldade para relacionar fonte, evid�
 Portanto, JSON poderá existir apenas como metadata complementar, não como representação primária dos
 componentes.
 
-Decisões anteriores não serão atualizadas nem apagadas. Uma mudança após reabertura criará nova
-decisão e evento, mantendo a decisão anterior no histórico. Na fundação persistente inicial, a decisão
+Decisões anteriores não serão atualizadas nem apagadas. A reabertura preserva a decisão corrente e
+permite nova resolução com ela; uma correção futura criará decisão e evento adicionais, mantendo a
+decisão anterior no histórico. Na fundação persistente inicial, a decisão
 corrente é derivada deterministicamente pela maior `caseVersion`; não existe `currentDecisionId` no
 caso. Um ponteiro explícito poderá ser introduzido futuramente se houver necessidade concreta, sem
 substituir a coleção histórica.
@@ -524,7 +526,8 @@ A criação futura seguirá esta sequência:
 6. em colisão, retornar replay idempotente ou `409`, informando o caso ativo conforme autorização.
 
 Podem existir vários casos históricos para a mesma `reviewSubjectKey`, mas no máximo um ativo. Ao
-reabrir um caso terminal, a operação tentará readquirir `activeReviewSubjectKey` em transação. Se
+reabrir um caso `RESOLVED`, a operação readquire `activeReviewSubjectKey` a partir da
+`reviewSubjectKey` persistida, sem recalcular o finding. Se
 outro caso já a possuir, a reabertura falhará com `409`; nenhum caso será mesclado automaticamente.
 A tentativa rejeitada será auditada apenas conforme política de auditoria aprovada, sem evento de
 sucesso.

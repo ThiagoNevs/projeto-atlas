@@ -967,7 +967,49 @@ O comando usa controle otimista por `expectedVersion`, altera o caso para `RESOL
 versão, libera `activeReviewSubjectKey` e cria `CASE_RESOLVED` e `AuditLog` atomicamente. `RESOLVED`
 significa apenas que a investigação foi encerrada: o Atlas não recalcula ou corrige o finding, não
 mescla ativos, não altera o inventário ou `Conflict`, não cria suppression e não executa remediation.
-Reabertura, correção, superseding e interface para resolução continuam fora desta entrega.
+Correção e superseding de decisões continuam fora desta entrega.
+
+### Reabrir logicamente um caso de revisão
+
+Somente um caso `RESOLVED` pode voltar para `IN_REVIEW`:
+
+```powershell
+curl.exe -X POST http://localhost:3001/conflict-review-cases/CASE_UUID/reopens `
+  -H "Content-Type: application/json" `
+  -H "Idempotency-Key: reabertura-caso-001" `
+  -d '{
+    "expectedVersion":6,
+    "justification":"Novas evidências exigem reavaliação da conclusão anterior."
+  }'
+```
+
+Uma reabertura nova retorna HTTP `201`; o replay da mesma chave, caso, versão original e justificativa
+normalizada retorna HTTP `200`. A justificativa é obrigatória, recebe trim somente nas extremidades,
+preserva whitespace interno e aceita de 1 a 1.000 caracteres. Reutilizar a chave com conteúdo
+diferente retorna `409 IDEMPOTENCY_KEY_REUSED`.
+
+```json
+{
+  "idempotentReplay": false,
+  "reopen": {
+    "eventId": "EVENT_UUID",
+    "caseId": "CASE_UUID",
+    "justification": "Novas evidências exigem reavaliação da conclusão anterior.",
+    "versionBefore": 6,
+    "versionAfter": 7,
+    "previousStatus": "RESOLVED",
+    "status": "IN_REVIEW",
+    "reopenedBy": "atlas-mvp-user",
+    "reopenedAt": "2026-08-24T12:00:00.000Z"
+  }
+}
+```
+
+O comando restaura `activeReviewSubjectKey` a partir da `reviewSubjectKey` persistida, incrementa a
+versão e cria `CASE_REOPENED` e `AuditLog` na mesma transação. Se outro caso já estiver ativo para o
+mesmo assunto, retorna `409 ACTIVE_REVIEW_CASE_EXISTS`. A decisão corrente e todo o histórico são
+preservados, permitindo concluir novamente a investigação com a mesma decisão. `DISMISSED` e
+`CANCELLED` não podem ser reabertos por este comando. A operação não altera inventário ou `Conflict`.
 
 ### Criar caso
 
