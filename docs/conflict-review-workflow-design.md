@@ -1,18 +1,42 @@
 # Desenho do fluxo persistido de revisão de achados
 
+> **Nota de consolidação:** este documento nasceu como desenho arquitetural. O contexto histórico foi
+> preservado para registrar o raciocínio original. A tabela abaixo resume o estado implementado após o
+> PR #30; extensões ainda não entregues permanecem identificadas como planejadas ou históricas.
+
+| Área | Estado |
+| --- | --- |
+| Persistência e snapshot | Implementado |
+| Lista e detalhe | Implementado |
+| Transições entre estados ativos | Implementado |
+| Primeira decisão de identidade | Implementado |
+| Resolução lógica | Implementado |
+| Reabertura lógica | Implementado |
+| Atribuição | Planejado |
+| Comentários | Planejado |
+| Refresh e revalidação de staleness | Planejado |
+| Correção ou superseding de decisão | Planejado |
+| Remediation e merge de ativos | Planejado |
+
+Os estados exibidos atualmente são Aberto (`OPEN`), Em análise (`IN_REVIEW`), Aguardando evidências
+(`WAITING_FOR_EVIDENCE`) e Resolvido (`RESOLVED`). A timeline e a Auditoria reconhecem
+`CASE_CREATED`, `CASE_STATUS_CHANGED`, `CASE_DECISION_RECORDED`, `CASE_RESOLVED` e `CASE_REOPENED`.
+
 ## 1. Status da decisão
 
-- **Status:** proposta arquitetural para aprovação.
-- **Escopo:** desenho e documentação; nenhuma implementação funcional.
+- **Status:** desenho arquitetural aprovado, com estado implementado e notas históricas consolidados.
+- **Escopo:** registrar decisões, implementação atual e extensões futuras sem confundir essas fases.
 - **Política de origem:** `2026-07-conflict-v1`.
-- **Estado atual:** findings derivados, recalculados em memória e somente leitura.
+- **Estado atual:** findings continuam derivados; casos, transições, primeira decisão, resolução e
+  reabertura lógicas estão implementados atrás de feature flag.
 - **Recomendação:** modelo híbrido com uma entidade própria `FindingReviewCase`.
 - **Regra central:** persistir a investigação e a decisão humana sem transformar a decisão em
   evidência técnica ou alteração automática do inventário.
 
-Este documento não cria casos, fila, responsáveis, SLA, comentários, decisões, endpoints, tabelas
-ou migrations. Todos os contratos e schemas abaixo são propostas para PRs futuros e dependem de
-aprovação explícita, especialmente antes de qualquer alteração no Prisma.
+Este documento originalmente não criava casos, decisões, endpoints, tabelas ou migrations. Essas
+notas históricas permanecem para explicar a evolução do desenho; a tabela de estado acima e a seção de
+contratos implementados são a referência atual. Responsáveis, SLA, comentários, refresh, superseding,
+remediation e novas alterações de Prisma continuam dependentes de aprovação explícita.
 
 ## 2. Contexto e objetivo
 
@@ -26,9 +50,10 @@ O Atlas já deriva findings de identidade e rede por meio de:
 Os findings possuem `findingId` determinístico, são explicáveis, permanecem em modo `SHADOW` e não
 geram escrita. Eles podem desaparecer ou mudar quando as evidências, os ativos ou a política mudam.
 
-O objetivo futuro é permitir que uma pessoa crie explicitamente um caso, preserve o contexto
-analisado, registre a investigação e chegue a uma conclusão auditável. A primeira versão persistida
-deverá continuar sem alterar hostname, IP, atributos, interfaces, evidências ou status do ativo.
+O objetivo original era permitir que uma pessoa criasse explicitamente um caso, preservasse o contexto
+analisado, registrasse a investigação e chegasse a uma conclusão auditável. Esse fluxo está implementado
+até resolução e reabertura lógicas e continua sem alterar hostname, IP, atributos, interfaces,
+evidências ou status do ativo.
 
 ## 3. Domínio atual inspecionado
 
@@ -100,9 +125,10 @@ O MVP não possui autenticação, autorização, guard, JWT ou RBAC. Ações atu
 `atlas-mvp-user`. Logo, a implementação persistida não deverá ser liberada como fluxo produtivo sem
 identidade autenticada e autorização mínima.
 
-As mudanças atuais usam transação, mas não usam `version`, ETag, `If-Match` ou update condicional.
-Duas pessoas podem ler o mesmo estado e a última gravação prevalecer. Esse padrão não é suficiente
-para decisões de revisão.
+Antes da implementação persistida do Finding Review, as mudanças administrativas já existentes usavam
+transação, mas não `version`, ETag, `If-Match` ou update condicional. Esse contexto histórico permitia
+last-write-wins e motivou a concorrência otimista do caso. O fluxo atual de `FindingReviewCase` usa
+`expectedVersion`, update condicional e incremento de `version`, conforme detalhado na seção 11.
 
 ## 4. Alternativas arquiteturais
 
@@ -179,15 +205,17 @@ conflito, mas a criação deverá ser explícita, autorizada, idempotente e audi
 | Conceito | Natureza | Persistência | Pode alterar inventário |
 | --- | --- | --- | --- |
 | Finding | análise derivada e temporária | não | não |
-| FindingReviewCase | investigação humana | sim, no futuro | não |
-| ReviewDecision | conclusão humana contextual | sim, no futuro | não |
+| FindingReviewCase | investigação humana | sim | não |
+| FindingReviewDecision | conclusão humana contextual | sim, primeira decisão implementada | não |
 | Conflict | divergência formal do domínio atual | sim | não diretamente |
 | InventoryChangeRequest | proposta futura de ação | futuro | somente após aprovação e execução |
 | Evidência técnica | observação de uma fonte | sim | alimenta o estado técnico por regras existentes |
 
-### 5.2 Agregado do caso
+### 5.2 Agregado do caso — modelo implementado e extensões
 
-O caso proposto deverá conter:
+O caso implementado contém a identidade do finding, snapshot, vínculos históricos, estado, versão e
+eventos. A decisão tipada também é persistida em histórico próprio. A lista original abaixo preserva o
+modelo-alvo; responsável, componentes, comentários e vínculo formal com `Conflict` continuam futuros:
 
 - identidade e tipo do caso;
 - `findingId`, `policyVersion` e tipo do finding na criação;
@@ -204,7 +232,11 @@ O caso proposto deverá conter:
 - comentários humanos separados de referências técnicas;
 - vínculo opcional futuro com `Conflict` formal.
 
-## 6. Relação entre finding e caso
+## 6. Relação entre finding e caso — desenho original
+
+O contrato implementado está consolidado na seção 14. O fluxo abaixo preserva o raciocínio original;
+em particular, o request atual envia somente `findingId`, enquanto a política é determinada pelo
+servidor.
 
 A criação deverá ocorrer somente pela ação explícita **Criar caso de revisão**.
 
@@ -286,7 +318,7 @@ deverá preservar os IDs do snapshot e produzir diferença explícita, sem redir
 
 ## 8. Máquina de estados do caso
 
-Estados recomendados:
+O enum aprovado contém:
 
 - `OPEN`: criado e aguardando triagem;
 - `IN_REVIEW`: investigação em andamento;
@@ -295,28 +327,35 @@ Estados recomendados:
 - `DISMISSED`: o finding foi conscientemente dispensado com justificativa;
 - `CANCELLED`: caso inválido ou criado indevidamente, com motivo administrativo.
 
-### 8.1 Transições
+### 8.1 State machine implementada
 
 | Origem | Destino permitido | Requisitos |
 | --- | --- | --- |
-| `OPEN` | `IN_REVIEW` | permissão de revisão; responsável recomendado |
-| `OPEN` | `CANCELLED` | motivo obrigatório |
-| `IN_REVIEW` | `WAITING_FOR_EVIDENCE` | contexto faltante e comentário obrigatório |
-| `IN_REVIEW` | `RESOLVED` | decisão conclusiva, motivo e comentário |
-| `IN_REVIEW` | `DISMISSED` | motivo e comentário; permissão de dispensa |
-| `IN_REVIEW` | `CANCELLED` | motivo administrativo |
-| `WAITING_FOR_EVIDENCE` | `IN_REVIEW` | nova informação ou retomada explícita |
-| `WAITING_FOR_EVIDENCE` | `CANCELLED` | motivo administrativo |
-| `RESOLVED` | `IN_REVIEW` | reabertura explícita e justificativa |
+| `OPEN` | `IN_REVIEW` | transição operacional com `expectedVersion` |
+| `OPEN` | `WAITING_FOR_EVIDENCE` | justificativa obrigatória |
+| `IN_REVIEW` | `OPEN` | transição operacional com `expectedVersion` |
+| `IN_REVIEW` | `WAITING_FOR_EVIDENCE` | justificativa obrigatória |
+| `WAITING_FOR_EVIDENCE` | `OPEN` | justificativa obrigatória |
+| `WAITING_FOR_EVIDENCE` | `IN_REVIEW` | justificativa obrigatória |
+| `IN_REVIEW` | `RESOLVED` | somente comando de resolução, com decisão corrente e justificativa |
+| `RESOLVED` | `IN_REVIEW` | somente comando de reabertura e justificativa |
 
-No estágio atual, somente `RESOLVED` pode ser reaberto, sempre para `IN_REVIEW`. `DISMISSED` e
-`CANCELLED` permanecem terminais e não compartilham o comando de reabertura. Essa decisão substitui a
-proposta conceitual anterior de retorno genérico para `OPEN`, evitando misturar retomada de uma
-investigação concluída com políticas ainda não aprovadas para dispensa e cancelamento. Staleness não
-muda o status automaticamente. `WAITING_FOR_EVIDENCE` volta a `IN_REVIEW` pelo fluxo operacional
-existente antes de uma conclusão.
+O PATCH genérico aceita somente as seis transições entre estados ativos. A resolução e a reabertura
+possuem comandos próprios. Staleness não muda o status automaticamente.
+
+### 8.2 Estados e transições conceituais futuras
+
+`DISMISSED` e `CANCELLED` existem no enum, mas não possuem comando atual. A proposta original previa
+cancelamento a partir de estados ativos e dispensa a partir de `IN_REVIEW`; essas transições continuam
+conceituais e dependem de política, autorização e contrato próprios. Nenhum dos dois estados compartilha
+o comando de reabertura de `RESOLVED`.
 
 ## 9. Decisões humanas
+
+O estado atual permite registrar somente a primeira decisão `SAME_ASSET` ou `DIFFERENT_ASSETS` em um
+caso `IN_REVIEW`. Ela é append-only, não muda o status, permanece após resolução e reabertura e é
+exposta como `currentDecision` pela maior `caseVersion`. Componentes, correção e superseding continuam
+futuros.
 
 ### 9.1 Conclusão de identidade
 
@@ -383,7 +422,7 @@ o caso e não compete com `SAME_ASSET` ou `DIFFERENT_ASSETS`.
 
 ### 9.5 Efeito da decisão
 
-Na primeira implementação, nenhuma decisão deverá automaticamente:
+Na implementação atual, nenhuma decisão automaticamente:
 
 - alterar `Asset.name` ou `AssetAttribute`;
 - alterar ou remover IP/MAC;
@@ -405,20 +444,16 @@ Uma decisão humana é contexto administrativo e não evidência técnica.
 
 ## 10. Auditoria e histórico
 
-Eventos mínimos recomendados, alinhados ao padrão em maiúsculas do Atlas:
+Eventos implementados, alinhados ao padrão em maiúsculas do Atlas:
 
-- `FINDING_REVIEW_CASE_CREATED`;
-- `FINDING_REVIEW_CASE_ASSIGNED`;
-- `FINDING_REVIEW_STARTED`;
-- `FINDING_REVIEW_COMMENT_ADDED`;
-- `FINDING_REVIEW_DECISION_RECORDED`;
-- `FINDING_REVIEW_DECISION_CHANGED`;
-- `FINDING_REVIEW_CASE_RESOLVED`;
-- `FINDING_REVIEW_CASE_DISMISSED`;
-- `FINDING_REVIEW_CASE_CANCELLED`;
-- `FINDING_REVIEW_CASE_REOPENED`;
-- `FINDING_REVIEW_REFRESHED`;
-- `FINDING_REVIEW_BECAME_STALE`.
+- `CASE_CREATED`;
+- `CASE_STATUS_CHANGED`;
+- `CASE_DECISION_RECORDED`;
+- `CASE_RESOLVED`;
+- `CASE_REOPENED`.
+
+Atribuição, comentários, correção de decisão, dispensa, cancelamento e refresh exigirão event types
+próprios em escopos futuros; os nomes conceituais antigos não constituem contrato implementado.
 
 Cada evento deverá registrar caso, ator autenticado, timestamp, `versionBefore`, `versionAfter`,
 estado anterior/posterior, conclusão anterior/posterior, justificativa e metadata minimizada. Na
@@ -431,9 +466,9 @@ global, contendo `caseId`, `eventId`, `versionBefore`, `versionAfter`, `eventTyp
 aplicável. A tabela específica de eventos do caso será a fonte estruturada do fluxo; `AuditLog`
 permanecerá a trilha transversal do produto.
 
-Uma mutação futura deverá, na mesma transação:
+As mutações implementadas seguem, na mesma transação, a sequência equivalente a:
 
-1. validar `version` ou `If-Match`;
+1. validar `expectedVersion` nos comandos em que a precondição se aplica;
 2. atualizar o caso e incrementar a versão atomicamente;
 3. aplicar relações de decisão ou componentes, quando existirem;
 4. criar `FindingReviewEvent` com as versões anterior e posterior;
@@ -448,10 +483,11 @@ sem finalidade. Comentários não deverão ser copiados para logs de aplicação
 
 ## 11. Concorrência
 
-Recomendação: locking otimista com `version` inteiro e precondição HTTP.
+O fluxo implementado usa locking otimista com `version` inteiro e `expectedVersion`. ETag e `If-Match`
+permanecem apenas alternativas históricas:
 
-- respostas de detalhe incluem `version` e ETag;
-- comandos mutáveis exigem `If-Match` ou `expectedVersion`;
+- respostas de detalhe incluem `version`, sem ETag;
+- comandos mutáveis exigem `expectedVersion`;
 - o update usa `WHERE id = ? AND version = ?` dentro de transação;
 - sucesso incrementa `version` uma vez;
 - zero registros atualizados retorna `409 Conflict`;
@@ -464,12 +500,15 @@ comentários.
 
 ## 12. Idempotência e unicidade do assunto
 
-- **Criação:** exigir `Idempotency-Key`; uma chave repetida com o mesmo payload devolve o mesmo
+- **Criação:** exige `Idempotency-Key`; uma chave repetida com o mesmo payload devolve o mesmo
   resultado, e payload diferente com a mesma chave retorna `409`.
-- **Decisão/status:** a mesma chave e payload retornam o resultado anterior; payload diferente retorna
-  `409`.
-- **Comentário:** usar `requestId`/idempotency key para não duplicar em retry.
-- **Refresh:** hash igual não cria snapshot duplicado; pode registrar somente a consulta, conforme
+- **Decisão:** exige chave; replay semântico retorna a decisão original e reutilização incompatível
+  retorna `409`.
+- **Resolução/reabertura:** exigem chave com fingerprint escopado por caso e replay semântico.
+- **Status ativo:** não usa chave; `expectedVersion` e releitura explícita tratam concorrência e
+  resultado de transporte incerto.
+- **Comentário futuro:** deverá usar `requestId`/idempotency key para não duplicar em retry.
+- **Refresh futuro:** hash igual não deverá criar snapshot duplicado; poderá registrar somente a consulta, conforme
   política de auditoria aprovada.
 
 ### 12.1 `reviewSubjectKey`
@@ -516,7 +555,7 @@ reavaliado por migration posterior se a operação demonstrar necessidade.
 
 ### 12.3 Criação concorrente, reabertura e histórico
 
-A criação futura seguirá esta sequência:
+A criação implementada segue esta sequência:
 
 1. recalcular o finding no servidor;
 2. calcular a `reviewSubjectKey` no servidor;
@@ -556,9 +595,9 @@ ser aceito como identidade produtiva.
 
 ## 14. Contratos de API
 
-Os contratos mínimos de criação, leitura e transição operacional ativa foram implementados sob o
-prefixo `/conflict-review-cases`. Os contratos de decisão, comentários, atribuição e refresh abaixo
-permanecem propostos e fora do MVP atual.
+Os contratos de criação, leitura, transição operacional ativa, primeira decisão, resolução e
+reabertura foram implementados sob o prefixo `/conflict-review-cases`. Comentários, atribuição,
+refresh e correção ou superseding de decisão permanecem propostos e fora do MVP atual.
 
 ### 14.1 `POST /conflict-review-cases` — implementado
 
@@ -568,7 +607,7 @@ permanecem propostos e fora do MVP atual.
 - **Response:** `201` com resumo do caso; `200` em replay idempotente.
 - **Validações:** finding existe, paridade material e cálculo servidor da
   `reviewSubjectKey` e ausência de caso ativo duplicado.
-- **Erros:** `400`, `401`, `403`, `404`, `409`, `422` e `503` controlado.
+- **Erros:** `400`, `404`, `409`, `422` e `503` controlados.
 - **Efeitos:** cria caso, vínculos, snapshot, evento e `AuditLog`; não altera inventário.
 
 ### 14.2 `GET /conflict-review-cases` — implementado
@@ -636,7 +675,7 @@ permanecem propostos e fora do MVP atual.
   correção ou superseding continuam fora do fluxo disponível.
 - **Efeitos:** incrementa somente versão/`updatedAt`, cria `CASE_DECISION_RECORDED` e `AuditLog` na
   mesma transação; não muda status, inventário ou `Conflict`.
-- **Limites atuais:** não existem componentes de decisão, resolução terminal, correção ou superseding. Embora
+- **Limites atuais:** não existem componentes de decisão, correção ou superseding. Embora
   o schema seja 1:N, uma segunda decisão nova é rejeitada até existir fluxo explícito futuro.
 
 ### 14.8 `POST /conflict-review-cases/:id/resolutions` — implementado para resolução lógica
@@ -682,21 +721,29 @@ permanecem propostos e fora do MVP atual.
 
 ### 14.11 Regras transversais dos contratos
 
-| Endpoint | Autorização | Idempotência | Concorrência | Auditoria |
-| --- | --- | --- | --- | --- |
-| criar caso | `case:create` | header obrigatório | constraint por assunto ativo | caso criado |
-| listar/detalhar | `case:read` | não aplicável | ETag no detalhe | leitura não auditada por padrão |
-| mudar status ativo | futura `case:transition` | não usa chave idempotente | `expectedVersion` no body | estado e versão anteriores e novos |
-| atribuir | `case:assign` | header obrigatório | versão/`If-Match` | responsável anterior e novo |
-| comentar | `case:comment` | request ID único | append + versão esperada | metadata, sem copiar corpo em log técnico |
-| decidir | `case:decide` | header obrigatório | versão/`If-Match` | decisão anterior e nova |
-| atualizar análise | `case:refresh` | hash deduplicado | versão/`If-Match` | staleness e hashes, sem payload bruto |
+#### Contrato implementado atualmente
 
-Todos os comandos deverão usar DTOs com whitelist, limites de tamanho, transação e respostas de
-erro controladas. `401` representa ausência de identidade, `403` falta de permissão, `404` recurso
-inexistente, `409` concorrência/duplicidade ou finding alterado, e `422` transição ou decisão
-semanticamente incompatível. Nenhum comando deverá produzir `AssetEvent` na primeira versão, pois
-o evento pertence ao caso e não representa mudança técnica do ativo.
+O MVP ainda não possui autenticação ou RBAC; todos os comandos usam o ator provisório
+`atlas-mvp-user`.
+
+| Endpoint | Idempotência | Concorrência | Auditoria |
+| --- | --- | --- | --- |
+| criar caso | header obrigatório | constraint por assunto ativo | `CASE_CREATED` e `AuditLog` |
+| listar/detalhar | não aplicável | `version` na resposta, sem ETag | leitura não auditada por padrão |
+| mudar status ativo | não usa chave idempotente | `expectedVersion` no body | `CASE_STATUS_CHANGED` e `AuditLog` |
+| decidir | header obrigatório | `expectedVersion` no body | `CASE_DECISION_RECORDED` e `AuditLog` |
+| resolver | header obrigatório | `expectedVersion` no body | `CASE_RESOLVED` e `AuditLog` |
+| reabrir | header obrigatório | `expectedVersion` no body | `CASE_REOPENED` e `AuditLog` |
+
+Os comandos implementados usam DTOs com whitelist, limites de tamanho, transação e respostas de erro
+controladas. Eles não produzem `AssetEvent`, pois seus eventos pertencem ao caso e não representam
+mudança técnica do ativo.
+
+#### Propostas históricas e extensões futuras
+
+Permissões como `case:create` e `case:read`, respostas `401`/`403` por autenticação ou RBAC e o uso de
+ETag/`If-Match` fizeram parte do desenho original, mas não integram o contrato atual. Atribuição,
+comentários e refresh continuam planejados e exigirão contratos próprios antes da implementação.
 
 ## 15. Comparação entre snapshots
 
@@ -748,12 +795,16 @@ agregado. Se um comentário também solicitar transição, serão comandos e eve
 Essas definições são obrigatórias antes da fase funcional de comentários, mas não bloqueiam a
 persistência mínima de casos sem comentários.
 
-## 17. Interface futura
+## 17. Contexto histórico do desenho de interface
+
+Esta seção preserva a proposta original. A interface atual já permite criar, listar, filtrar e
+detalhar casos, transicionar estados ativos, registrar a primeira decisão, resolver e reabrir
+logicamente. Atribuição, comentários, refresh e integração com `Conflict` continuam planejados.
 
 ### 17.1 Inventário de findings
 
-A interface atual poderá futuramente exibir **Criar caso de revisão**, apenas quando o usuário tiver
-permissão. A listagem nunca criará casos automaticamente.
+O planejamento original previa **Criar caso de revisão** apenas por ação explícita. A interface atual
+já oferece essa ação, e a listagem continua sem criar casos automaticamente.
 
 ### 17.2 Lista de casos
 
@@ -771,11 +822,12 @@ Seções recomendadas:
 - decisão e justificativa;
 - eventual conflito formal relacionado.
 
-Não existe código frontend dessas telas neste PR.
+No estágio original deste documento ainda não existia frontend. A tela atual cobre as seções já
+implementadas; comparação com análise atual, comentários e eventual conflito formal permanecem futuras.
 
 ## 18. Compatibilidade com Resolution Center
 
-O Resolution Center atual deverá coexistir com a futura fila de casos:
+O Resolution Center atual coexiste com a fila implementada de casos:
 
 - Resolution Center continua tratando `Conflict` formal;
 - lista de casos trata investigação de findings;
@@ -806,11 +858,11 @@ por links e referência auditável, preserva retrocompatibilidade.
 | comentários | nota única | não | tabela append-only |
 | evidências | `ConflictValue.evidenceId` | parcial | referências no snapshot/relação |
 
-## 20. Proposta conceitual de schema
+## 20. Modelo-alvo histórico e extensões futuras
 
-O pseudocódigo abaixo representa o agregado futuro. A fundação relacional mínima de
-`FindingReviewDecision` foi autorizada e implementada separadamente; componentes, comentários,
-ponteiro de decisão corrente e os demais campos continuam apenas conceituais:
+O pseudocódigo abaixo preserva o modelo-alvo original. Caso, ativos históricos, eventos e a fundação
+relacional de `FindingReviewDecision` já foram implementados em escopos menores. Componentes,
+comentários, ponteiro explícito de decisão corrente e os demais campos continuam apenas conceituais:
 
 ```prisma
 enum FindingReviewCaseStatus {
@@ -971,11 +1023,15 @@ Snapshots JSON preservam o contrato derivado com baixo acoplamento inicial, mas 
 volume, validação, consulta e evolução de schema. Campos usados em filtros, constraints e relações
 devem ser normalizados. O JSON deverá ser validado, versionado, minimizado e ter limite de tamanho.
 
-O bloco representa o agregado futuro completo. A primeira migration deverá criar somente as
-estruturas autorizadas para a Fase 1; tabelas de decisão, componentes e comentários não deverão ser
-antecipadas sem necessidade e aprovação específicas.
+No desenho original, o bloco representava o agregado futuro completo. As migrations iniciais criaram
+somente as estruturas autorizadas para caso, eventos e primeira decisão; componentes e comentários
+continuam sem implementação e não deverão ser antecipados sem necessidade e aprovação específicas.
 
-## 21. Plano de migration futura
+## 21. Contexto histórico do plano de persistência
+
+As migrations expand-only da fundação do caso e da decisão já foram integradas. A sequência abaixo
+registra o plano original; qualquer estrutura ainda conceitual exige nova autorização e migration
+própria.
 
 1. aprovar nomes, estados, decisões, retenção e autorização;
 2. criar enums e tabelas novas sem alterar `Conflict` inicialmente;
@@ -986,7 +1042,8 @@ antecipadas sem necessidade e aprovação específicas.
 7. validar rollback por desativação da feature e preservação das tabelas;
 8. só remover campos/estruturas em migration posterior e explicitamente aprovada.
 
-Não há dados existentes de casos a migrar. O vínculo opcional com `Conflict` deverá ser adicionado
+No momento do desenho não havia dados existentes de casos a migrar. O vínculo opcional com `Conflict`
+continua futuro e deverá ser adicionado
 apenas quando sua semântica e `onDelete` forem aprovados. A migration futura deverá ter plano de
 backup, teste em base demo e rollback documentado.
 
@@ -1024,7 +1081,11 @@ Métricas recomendadas:
 Não deverão ser criadas métricas de desempenho individual de pessoas sem política formal. Logs,
 métricas e traces deverão usar IDs de correlação e não expor comentários.
 
-## 24. Plano incremental de implementação
+## 24. Plano incremental de implementação — contexto histórico
+
+As fundações de persistência e leitura, as transições ativas, a primeira decisão, a resolução e a
+reabertura lógicas já foram entregues. As fases abaixo preservam a decomposição original; itens não
+implementados continuam explicitamente futuros.
 
 ### Fase 1 — persistência mínima e consulta somente leitura
 
@@ -1073,7 +1134,11 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 - **Testes:** autorização forte, auditoria, rollback e proteção contra evidência manual falsa.
 - **Dependência:** decisão de produto e revisão de segurança específicas.
 
-## 25. Critérios de aceite da futura primeira implementação
+## 25. Critérios históricos da fundação inicial
+
+A maior parte dos critérios técnicos abaixo foi atendida pelas entregas incrementais. Autenticação e
+autorização reais continuam pendentes, e referências a lista/detalhe somente leitura descrevem o
+escopo da fundação inicial, não o fluxo atual completo.
 
 - caso criado somente por ação explícita;
 - finding recalculado e validado na criação;
@@ -1093,7 +1158,7 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 - rollback e feature flag documentados;
 - dados e metadata minimizados.
 
-## 26. Decisões arquiteturais e aprovações pendentes
+## 26. Decisões arquiteturais e aprovações pendentes — contexto consolidado
 
 ### 26.1 Decisões fechadas por este documento
 
@@ -1110,6 +1175,10 @@ métricas e traces deverão usar IDs de correlação e não expor comentários.
 - nenhuma decisão, componente, caso ou refresh altera inventário ou cria `Conflict` automaticamente.
 
 ### 26.2 Decisões que ainda exigem aprovação humana
+
+A tabela preserva perguntas do planejamento original. Nomes da fundação, feature flag, idempotência e
+escopo inicial já foram definidos pelas implementações; autenticação, retenção, comentários,
+integração com `Conflict` e ações no inventário continuam dependentes de decisão futura.
 
 | Pergunta | Recomendação | Impacto da aprovação |
 | --- | --- | --- |
@@ -1146,7 +1215,7 @@ As mitigações propostas neste documento — agregado próprio, snapshot imutá
 históricas, locking, idempotência, RBAC e separação de execução — são requisitos da implementação,
 não otimizações opcionais.
 
-## 28. Fora do escopo desta proposta
+## 28. Fora do escopo do desenho original — contexto histórico
 
 - implementação de qualquer endpoint;
 - alteração de Prisma ou migration;
@@ -1168,11 +1237,12 @@ O desenho recomenda formalmente:
 2. criar casos somente por ação explícita e após recálculo;
 3. usar `FindingReviewCase` para snapshot, investigação, estado e histórico;
 4. identificar o assunto pela `reviewSubjectKey` e limitar a um caso ativo por chave;
-5. representar decisões futuras por conclusão de identidade e componentes relacionais coexistentes;
+5. representar decisões por conclusão de identidade e, futuramente, componentes relacionais coexistentes;
 6. registrar versões anterior e posterior em todo evento de mutação;
 7. manter `Conflict` como conceito formal separado;
 8. não alterar o inventário na primeira versão persistida;
 9. exigir autenticação, autorização, idempotência e concorrência otimista antes de escrita;
 10. implementar em fases pequenas, cada uma com testes de ausência de efeitos colaterais.
 
-Qualquer schema, migration ou endpoint de escrita deverá ser objeto de autorização e PR futuros.
+Qualquer extensão futura de schema, migration ou endpoint de escrita deverá ser objeto de autorização
+e PR próprios.

@@ -40,6 +40,7 @@ conectores e descoberta real permanecem fora do estado atual.
 - Enriquecimento manual auditável de atributos ausentes, com proteção contra sobrescrita.
 - Seção de Proveniência dos dados no detalhe do ativo, com modo sombra, origem, candidatos, histórico, timestamps separados, limitações explícitas e recomendação simulada apresentada sem alterar o valor persistido.
 - Catálogo de Fontes de Dados para apresentar origens atuais e conectores planejados sem integração real.
+- Finding Review com inventário de achados, casos persistidos, transições operacionais, primeira decisão de identidade, resolução e reabertura lógicas, histórico e auditoria.
 - Suíte E2E integrada ao PostgreSQL.
 
 ## Funcionalidades parciais
@@ -59,7 +60,8 @@ aprovação, atribuição de responsável, SLA, comentários encadeados ou resol
 
 Eventos críticos geram `AuditLog` e podem ser consultados na tela dedicada. Exportação e
 política de retenção ainda não fazem parte do MVP. O ator continua simulado porque não há
-autenticação. A tela reconhece a criação e as mudanças operacionais dos casos de revisão,
+autenticação. A tela reconhece criação, transições operacionais, decisão de identidade, resolução e
+reabertura dos casos de revisão,
 apresenta seus estados em português e oferece acesso ao caso relacionado quando o identificador
 persistido é válido.
 
@@ -91,6 +93,8 @@ informações do ativo. A recomendação continua somente leitura e nenhuma deci
 
 ### Análise de conflitos de identidade e rede
 
+#### Estado atual
+
 O backend expõe `GET /assets/:id/conflict-analysis` com a política determinística
 `2026-07-conflict-v1`. Em modo sombra, a consulta identifica possíveis hostnames duplicados, IP
 compartilhado por hostnames diferentes e divergência de hostname no mesmo ativo. Os achados são
@@ -98,7 +102,8 @@ explicáveis, temporários e somente leitura: nenhum conflito formal, decisão, 
 do inventário é persistida. `GET /conflict-analysis/findings` acrescenta uma visão global paginada,
 filtrável, ordenável e deduplicada, calculada com uma leitura de banco e a mesma política. A interface,
 disponível em `/conflict-findings`, apresenta resumo, filtros, paginação, limitações e detalhe sob
-demanda sem persistir decisões. Uma fila operacional e a resolução humana auditada permanecem futuras.
+demanda. O Finding Review persiste explicitamente a investigação e permite conduzir o caso até decisão,
+resolução lógica e eventual reabertura auditada, sem transformar o finding derivado em fonte de verdade.
 O desenho aprovado para essa evolução está documentado em
 `docs/conflict-review-workflow-design.md`. A fundação de persistência foi criada por uma migration
 inicial expand-only. Uma segunda migration corretiva, também não destrutiva para os dados, relaxou a
@@ -117,10 +122,11 @@ proteção final contra dois casos ativos concorrentes para o mesmo assunto.
 
 A `Idempotency-Key` é opaca, case-sensitive, limitada a 128 caracteres ASCII seguros e não recebe
 normalização Unicode. O replay é resolvido pelo fingerprint persistido antes do recálculo do finding,
-continuando disponível quando o achado deixa de ser detectado. A feature flag controla o módulo
-funcional inteiro: quando desabilitada ou inválida, criação, replay, listagem e detalhe retornam HTTP 503. A serialização canônica
-não depende de locale, e testes com PostgreSQL real comprovam rollback integral em falhas nas relações,
-no evento ou no `AuditLog`.
+continuando disponível quando o achado deixa de ser detectado. A feature flag controla o fluxo de
+Finding Review implementado, incluindo criação e replay, listagem, detalhe, transições, decisão,
+resolução e reabertura. Quando desabilitada ou inválida, essas operações retornam HTTP 503. A
+serialização canônica não depende de locale, e testes com PostgreSQL real comprovam rollback integral
+em falhas nas relações, no evento ou no `AuditLog`.
 
 Vetores sintéticos fixos protegem a serialização, o fingerprint ASCII e o hash do snapshot. O contrato
 final `snapshotVersion: 1` usa comparação binária com `<` e `>`, normaliza explicitamente somente os
@@ -231,6 +237,8 @@ do detalhe oferece justificativa e confirmação em duas etapas, retry idempoten
 resultado incerto e atualização local antes do refresh. Ela preserva `currentDecision`, histórico e
 resolução anterior; `CASE_REOPENED` aparece na timeline e na Auditoria global em português.
 
+#### Limitações e próximas evoluções
+
 Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
 autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
@@ -251,6 +259,10 @@ frontend.
 - Coleta e gestão de credenciais.
 - Scheduler de descoberta.
 - Notificações, alertas externos e integrações com ITSM/SIEM.
+- Correção ou superseding de decisões e componentes estruturados adicionais.
+- Comandos para `DISMISSED` e `CANCELLED`, atribuição, comentários, refresh e revalidação.
+- Canonicalização ou merge de ativos, remediation e suppression persistente para `DIFFERENT_ASSETS`.
+- Integração deliberada entre Finding Review, `Conflict` e Resolution Center.
 - Aplicativo móvel.
 - Operação em alta disponibilidade.
 
@@ -284,3 +296,6 @@ frontend.
 12. Rejeição e auditoria de configurações inseguras ou perfis desabilitados.
 13. Fontes de Dados mostrando cadastro manual, enriquecimento manual, descoberta simulada e conectores futuros.
 14. Inventário de achados de identidade e rede em modo sombra, com filtros, contexto, limitações e detalhe somente leitura.
+15. Criação idempotente, listagem, detalhe e transições operacionais de casos de revisão.
+16. Primeira decisão de identidade, resolução lógica e reabertura com histórico preservado, sem merge ou remediation.
+17. Timeline do caso e Auditoria global para `CASE_CREATED`, `CASE_STATUS_CHANGED`, `CASE_DECISION_RECORDED`, `CASE_RESOLVED` e `CASE_REOPENED`.

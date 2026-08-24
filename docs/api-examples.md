@@ -744,8 +744,9 @@ A funcionalidade está desabilitada por padrão e ainda não possui autenticaç�
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.
 
-A flag controla criação e leitura: quando estiver ausente, desabilitada ou inválida, POST, listagem,
-detalhe e replay retornam HTTP 503. Ao reabilitar a flag, os casos existentes voltam a ficar acessíveis.
+A flag controla todo o fluxo implementado de Finding Review: criação, listagem, detalhe, transições,
+decisão, resolução, reabertura e respectivos replays retornam HTTP 503 quando ela estiver ausente,
+desabilitada ou inválida. Ao reabilitar a flag, os casos existentes voltam a ficar acessíveis.
 
 ### Listar casos
 
@@ -854,7 +855,9 @@ Resposta mínima em sucesso:
 
 São permitidas somente as seis transições distintas entre `OPEN`, `IN_REVIEW` e
 `WAITING_FOR_EVIDENCE`. O mesmo estado e os destinos `RESOLVED`, `DISMISSED` e `CANCELLED` são
-rejeitados nesta etapa. A atualização é condicionada por `expectedVersion`, incrementa a versão uma
+rejeitados por este PATCH. `RESOLVED` é alcançado somente pelo endpoint dedicado de resolução, e
+`RESOLVED → IN_REVIEW` somente pelo endpoint dedicado de reabertura; `DISMISSED` e `CANCELLED` não
+possuem comando atual. A atualização é condicionada por `expectedVersion`, incrementa a versão uma
 vez e retorna HTTP 409 quando outra operação atualizou o caso primeiro. Em sucesso, o backend cria
 `CASE_STATUS_CHANGED` e `AuditLog` na mesma transação PostgreSQL; nenhuma tabela do inventário é
 alterada. Nas transições que entram ou saem da espera, a mesma justificativa normalizada é preservada
@@ -870,8 +873,8 @@ detalhes Prisma como `P2020` nunca fazem parte da resposta.
 Esse PATCH não usa `Idempotency-Key` e não deve receber retry automático. Se a conexão falhar ou
 expirar, o resultado pode ser incerto: consulte novamente o detalhe antes de oferecer outra alteração.
 Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quanto essa verificação explícita.
-O ator `atlas-mvp-user` continua provisório; autenticação, RBAC e transições terminais permanecem
-futuros.
+O ator `atlas-mvp-user` continua provisório; autenticação, RBAC e comandos para `DISMISSED` e
+`CANCELLED` permanecem futuros.
 
 ### Registrar a primeira decisão de identidade
 
@@ -1067,10 +1070,11 @@ sobre a serialização canônica. Vetores literais com Unicode e um snapshot rea
 A implementação provisória anterior existiu somente no draft e não chegou à `main`; por isso não há
 `snapshotVersion: 2`. Refresh e revalidação de snapshots permanecem fora do escopo.
 
-O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body. Esses dados são
-recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem registrada em
-auditoria. Esta entrega não possui endpoints GET de casos, frontend, decisões ou integração com
-`Conflict`, e não altera o inventário.
+O backend não aceita snapshot, hash, assunto, ativos, ator, estado ou decisão no body de criação.
+Esses dados são recalculados e construídos no servidor. A chave idempotente bruta não é persistida nem
+registrada em auditoria. O fluxo atual também possui GETs de lista e detalhe, frontend, primeira
+decisão, resolução e reabertura lógicas. Nenhuma dessas operações integra implicitamente o caso com
+`Conflict` ou altera o inventário.
 
 Caso a criação falhe ao relacionar os ativos, criar o evento ou registrar o `AuditLog`, a transação
 PostgreSQL é revertida integralmente. O fingerprint permanece disponível para uma nova tentativa.
