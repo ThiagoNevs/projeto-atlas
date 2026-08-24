@@ -14,11 +14,13 @@ import {
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
 import { CreateFindingReviewDecisionDto } from './dto/create-finding-review-decision.dto';
 import { CreateFindingReviewCaseResolutionDto } from './dto/create-finding-review-case-resolution.dto';
+import { CreateFindingReviewCaseReopenDto } from './dto/create-finding-review-case-reopen.dto';
 import { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
 import { UpdateFindingReviewCaseStatusDto } from './dto/update-finding-review-case-status.dto';
 import { FindingReviewCasesService } from './finding-review-cases.service';
 import { FindingReviewDecisionsService } from './finding-review-decisions.service';
 import { FindingReviewResolutionsService } from './finding-review-resolutions.service';
+import { FindingReviewReopensService } from './finding-review-reopens.service';
 
 interface PassthroughResponse {
   status(code: number): PassthroughResponse;
@@ -40,6 +42,7 @@ export class FindingReviewCasesController {
     private readonly cases: FindingReviewCasesService,
     private readonly decisions: FindingReviewDecisionsService,
     private readonly resolutions: FindingReviewResolutionsService,
+    private readonly reopens: FindingReviewReopensService,
   ) {}
 
   @Get()
@@ -80,6 +83,18 @@ export class FindingReviewCasesController {
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
     const result = await this.resolutions.create(id, payload, idempotencyKey);
+    response.status(result.idempotentReplay ? 200 : 201);
+    return result;
+  }
+
+  @Post(':id/reopens')
+  async createReopen(
+    @Param('id', reviewCaseIdPipe) id: string,
+    @Body() payload: CreateFindingReviewCaseReopenDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: PassthroughResponse,
+  ) {
+    const result = await this.reopens.create(id, payload, idempotencyKey);
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
   }

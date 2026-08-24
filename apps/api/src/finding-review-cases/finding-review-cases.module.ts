@@ -6,6 +6,7 @@ import { FindingReviewCasesFeature } from './finding-review-cases.feature';
 import { FindingReviewCasesService } from './finding-review-cases.service';
 import { FindingReviewDecisionsService } from './finding-review-decisions.service';
 import { FindingReviewResolutionsService } from './finding-review-resolutions.service';
+import { FindingReviewReopensService } from './finding-review-reopens.service';
 
 @Module({
   imports: [ConflictAnalysisModule],
@@ -15,6 +16,7 @@ import { FindingReviewResolutionsService } from './finding-review-resolutions.se
     FindingReviewCasesService,
     FindingReviewDecisionsService,
     FindingReviewResolutionsService,
+    FindingReviewReopensService,
   ],
 })
 export class FindingReviewCasesModule {}

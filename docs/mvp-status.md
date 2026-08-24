@@ -220,7 +220,16 @@ distingue decisão de identidade de encerramento lógico, mantém retries incert
 `sessionStorage` e atualiza o estado confirmado localmente antes do refresh. Casos resolvidos exibem
 os dados derivados do evento `CASE_RESOLVED`; não existe uma entidade pública fictícia de resolução.
 
-Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`, reabertura,
+O backend permite reabrir explicitamente um caso `RESOLVED` por
+`POST /conflict-review-cases/:id/reopens`. A operação exige `expectedVersion`, justificativa de 1 a
+1.000 caracteres e `Idempotency-Key`; retorna HTTP 201 na primeira execução e HTTP 200 em replay.
+Ela restaura a chave ativa a partir de `reviewSubjectKey`, move o caso para `IN_REVIEW`, preserva a
+decisão corrente e cria `CASE_REOPENED` e `AuditLog` atomicamente. Outro caso ativo para o mesmo
+assunto bloqueia a reabertura com HTTP 409. Múltiplos ciclos de resolução e reabertura são suportados
+sem apagar histórico. A reabertura não altera inventário, finding derivado ou `Conflict`; a interface
+para essa ação permanece para uma entrega posterior.
+
+Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
 autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
 
