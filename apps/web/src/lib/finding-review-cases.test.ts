@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createFindingReviewDecision,
   createFindingReviewCaseResolution,
+  createFindingReviewCaseReopen,
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
@@ -20,6 +21,7 @@ import {
   isFindingReviewTimestamp,
   parseCreateFindingReviewCaseResponse,
   parseCreateFindingReviewCaseResolutionResponse,
+  parseCreateFindingReviewCaseReopenResponse,
   parseCreateFindingReviewDecisionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
@@ -106,6 +108,7 @@ test('traduz status, atualidade e eventos sem exibir enums técnicos', () => {
   assert.equal(getFindingReviewEventLabel('CASE_STATUS_CHANGED'), 'Status do caso alterado');
   assert.equal(getFindingReviewEventLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
   assert.equal(getFindingReviewEventLabel('CASE_RESOLVED'), 'Investigação concluída');
+  assert.equal(getFindingReviewEventLabel('CASE_REOPENED'), 'Investigação reaberta');
   assert.equal(getFindingReviewIdentityConclusionLabel('SAME_ASSET'), 'Mesmo ativo');
   assert.equal(getFindingReviewIdentityConclusionLabel('DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.deepEqual(getAllowedFindingReviewCaseStatusDestinations('OPEN'), [
@@ -223,6 +226,40 @@ test('parser da resolução aceita somente o resultado mínimo e coerente', () =
     ...response,
     resolution: { ...response.resolution, status: 'IN_REVIEW' },
   }), null);
+});
+
+test('parser da reabertura aceita resposta coerente e descarta dados técnicos extras', () => {
+  const response = {
+    idempotentReplay: false,
+    reopen: {
+      eventId: EVENT_ID,
+      caseId: CASE_ID,
+      justification: 'Novas evidências exigem revisão.',
+      versionBefore: 3,
+      versionAfter: 4,
+      previousStatus: 'RESOLVED',
+      status: 'IN_REVIEW',
+      reopenedBy: 'atlas-mvp-user',
+      reopenedAt: NOW,
+      requestFingerprint: 'não expor',
+      requestId: 'não expor',
+    },
+  };
+  const parsed = parseCreateFindingReviewCaseReopenResponse(response);
+  assert.equal(parsed?.reopen.status, 'IN_REVIEW');
+  assert.equal('requestFingerprint' in (parsed?.reopen as unknown as object), false);
+  assert.equal('requestId' in (parsed?.reopen as unknown as object), false);
+  for (const invalid of [
+    { ...response.reopen, eventId: 'inválido' },
+    { ...response.reopen, caseId: 'inválido' },
+    { ...response.reopen, versionBefore: 0 },
+    { ...response.reopen, versionAfter: 5 },
+    { ...response.reopen, previousStatus: 'IN_REVIEW' },
+    { ...response.reopen, status: 'RESOLVED' },
+    { ...response.reopen, reopenedAt: '2026-02-30T12:00:00Z' },
+  ]) {
+    assert.equal(parseCreateFindingReviewCaseReopenResponse({ ...response, reopen: invalid }), null);
+  }
 });
 
 test('parser da transição aceita apenas resposta mínima estruturalmente válida', () => {
@@ -531,4 +568,40 @@ test('cliente de resolução envia versão, justificativa canônica e interpreta
     justification: 'Ativos distintos confirmados.\nInvestigação encerrada.',
   });
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/resolutions$`));
+});
+
+test('cliente de reabertura envia versão, justificativa canônica e interpreta replay 200', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({
+      idempotentReplay: true,
+      reopen: {
+        eventId: EVENT_ID,
+        caseId: CASE_ID,
+        justification: 'Novas  evidências.\nRetomar análise.',
+        versionBefore: 3,
+        versionAfter: 4,
+        previousStatus: 'RESOLVED',
+        status: 'IN_REVIEW',
+        reopenedBy: 'atlas-mvp-user',
+        reopenedAt: NOW,
+      },
+    }, { status: 200 });
+  };
+  const result = await createFindingReviewCaseReopen(
+    CASE_ID,
+    3,
+    '  Novas  evidências.\nRetomar análise.  ',
+    'atlas-ui-reopen-key',
+    { fetchImplementation },
+  );
+  assert.equal(result.idempotentReplay, true);
+  assert.equal(calls[0]?.init.method, 'POST');
+  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-reopen-key');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    expectedVersion: 3,
+    justification: 'Novas  evidências.\nRetomar análise.',
+  });
+  assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/reopens$`));
 });

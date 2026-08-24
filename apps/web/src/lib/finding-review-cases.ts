@@ -156,6 +156,23 @@ export interface CreateFindingReviewCaseResolutionResponse {
   resolution: FindingReviewCaseResolutionResult;
 }
 
+export interface FindingReviewCaseReopenResult {
+  eventId: string;
+  caseId: string;
+  justification: string;
+  versionBefore: number;
+  versionAfter: number;
+  previousStatus: 'RESOLVED';
+  status: 'IN_REVIEW';
+  reopenedBy: string;
+  reopenedAt: string;
+}
+
+export interface CreateFindingReviewCaseReopenResponse {
+  idempotentReplay: boolean;
+  reopen: FindingReviewCaseReopenResult;
+}
+
 export const DEFAULT_FINDING_REVIEW_CASE_QUERY: Required<
   Pick<FindingReviewCaseQuery, 'page' | 'pageSize' | 'sortBy' | 'sortDirection'>
 > = { page: 1, pageSize: 25, sortBy: 'createdAt', sortDirection: 'desc' };
@@ -202,6 +219,7 @@ export function getFindingReviewEventLabel(value: string): string {
   if (value === 'CASE_STATUS_CHANGED') return 'Status do caso alterado';
   if (value === 'CASE_DECISION_RECORDED') return 'Decisão de identidade registrada';
   if (value === 'CASE_RESOLVED') return 'Investigação concluída';
+  if (value === 'CASE_REOPENED') return 'Investigação reaberta';
   return 'Evento do caso';
 }
 
@@ -383,6 +401,42 @@ export function parseCreateFindingReviewCaseResolutionResponse(
       status: 'RESOLVED',
       resolvedBy: resolution.resolvedBy,
       resolvedAt: resolution.resolvedAt,
+    },
+  };
+}
+
+export function parseCreateFindingReviewCaseReopenResponse(
+  value: unknown,
+): CreateFindingReviewCaseReopenResponse | null {
+  if (!isRecord(value) || typeof value.idempotentReplay !== 'boolean') return null;
+  const reopen = value.reopen;
+  if (
+    !isRecord(reopen)
+    || !isFindingReviewCaseId(reopen.eventId)
+    || !isFindingReviewCaseId(reopen.caseId)
+    || typeof reopen.justification !== 'string'
+    || reopen.justification.length < 1
+    || !isPositiveInteger(reopen.versionBefore)
+    || !isPositiveInteger(reopen.versionAfter)
+    || reopen.versionAfter !== reopen.versionBefore + 1
+    || reopen.previousStatus !== 'RESOLVED'
+    || reopen.status !== 'IN_REVIEW'
+    || typeof reopen.reopenedBy !== 'string'
+    || reopen.reopenedBy.length < 1
+    || !isFindingReviewTimestamp(reopen.reopenedAt)
+  ) return null;
+  return {
+    idempotentReplay: value.idempotentReplay,
+    reopen: {
+      eventId: reopen.eventId,
+      caseId: reopen.caseId,
+      justification: reopen.justification,
+      versionBefore: reopen.versionBefore,
+      versionAfter: reopen.versionAfter,
+      previousStatus: 'RESOLVED',
+      status: 'IN_REVIEW',
+      reopenedBy: reopen.reopenedBy,
+      reopenedAt: reopen.reopenedAt,
     },
   };
 }

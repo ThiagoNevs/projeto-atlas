@@ -226,8 +226,10 @@ O backend permite reabrir explicitamente um caso `RESOLVED` por
 Ela restaura a chave ativa a partir de `reviewSubjectKey`, move o caso para `IN_REVIEW`, preserva a
 decisão corrente e cria `CASE_REOPENED` e `AuditLog` atomicamente. Outro caso ativo para o mesmo
 assunto bloqueia a reabertura com HTTP 409. Múltiplos ciclos de resolução e reabertura são suportados
-sem apagar histórico. A reabertura não altera inventário, finding derivado ou `Conflict`; a interface
-para essa ação permanece para uma entrega posterior.
+sem apagar histórico. A reabertura não altera inventário, finding derivado ou `Conflict`. A interface
+do detalhe oferece justificativa e confirmação em duas etapas, retry idempotente explícito para
+resultado incerto e atualização local antes do refresh. Ela preserva `currentDecision`, histórico e
+resolução anterior; `CASE_REOPENED` aparece na timeline e na Auditoria global em português.
 
 Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`,
 integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa

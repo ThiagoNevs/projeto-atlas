@@ -4487,17 +4487,30 @@ input {
   background: rgba(60, 205, 152, 0.055);
 }
 
+.review-reopen-control {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(244, 183, 64, 0.32);
+  border-radius: 12px;
+  background: rgba(244, 183, 64, 0.055);
+}
+
 .review-decision-control h3,
 .review-decision-control h4,
 .review-decision-control p,
 .review-resolution-control h3,
 .review-resolution-control h4,
-.review-resolution-control p {
+.review-resolution-control p,
+.review-reopen-control h3,
+.review-reopen-control h4,
+.review-reopen-control p {
   margin: 0;
 }
 
 .review-decision-control > div > p:last-child,
 .review-resolution-control > div > p:last-child,
+.review-reopen-control > div > p:last-child,
 .review-decision-guidance {
   margin-top: 0.35rem;
   color: var(--muted);
@@ -4505,6 +4518,7 @@ input {
 
 .review-decision-form,
 .review-resolution-form,
+.review-reopen-form,
 .review-decision-form fieldset {
   display: grid;
   gap: 0.75rem;
@@ -4518,7 +4532,8 @@ input {
 
 .review-decision-form legend,
 .review-decision-form > label,
-.review-resolution-form > label {
+.review-resolution-form > label,
+.review-reopen-form > label {
   color: var(--text);
   font-weight: 800;
 }
@@ -4546,6 +4561,7 @@ input {
 .review-decision-option small,
 .review-decision-form > small,
 .review-resolution-form > small,
+.review-reopen-form > small,
 .review-decision-card small,
 .review-decision-history small,
 .review-resolution-card small {
@@ -4553,7 +4569,8 @@ input {
 }
 
 .review-decision-form textarea,
-.review-resolution-form textarea {
+.review-resolution-form textarea,
+.review-reopen-form textarea {
   min-height: 8rem;
   resize: vertical;
 }
@@ -4569,7 +4586,9 @@ input {
 .review-decision-uncertain,
 .review-resolution-card,
 .review-resolution-confirmation,
-.review-resolution-context {
+.review-resolution-context,
+.review-reopen-confirmation,
+.review-reopen-context {
   display: grid;
   gap: 0.75rem;
   padding: 1rem;
@@ -4585,6 +4604,7 @@ input {
 
 .review-decision-confirmation dl,
 .review-resolution-confirmation dl,
+.review-reopen-confirmation dl,
 .review-resolution-card dl {
   display: grid;
   gap: 0.75rem;
@@ -4593,6 +4613,7 @@ input {
 
 .review-decision-confirmation dt,
 .review-resolution-confirmation dt,
+.review-reopen-confirmation dt,
 .review-resolution-card dt {
   color: var(--faint);
   font-size: 0.68rem;
@@ -4602,6 +4623,7 @@ input {
 
 .review-decision-confirmation dd,
 .review-resolution-confirmation dd,
+.review-reopen-confirmation dd,
 .review-resolution-card dd {
   margin: 0.25rem 0 0;
 }
