@@ -11,6 +11,7 @@ import type {
   CreateFindingReviewDecisionResponse,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
+  UpdateFindingReviewCaseStatusResponse,
 } from '../lib/api.ts';
 import {
   createJsdomTestEnvironment,
@@ -482,6 +483,48 @@ test('cria caso com chave idempotente e apresenta sucesso', async () => {
   }
 });
 
+test('criação com filtros ativos preserva a query, abre o caso e recarrega a lista uma vez', async () => {
+  const listQueries: Array<Record<string, unknown>> = [];
+  let detailCalls = 0;
+  const harness = await renderPage({
+    initialSearchParams: {
+      create: '1',
+      findingId: FINDING_ID,
+      status: 'IN_REVIEW',
+      pageSize: '10',
+      sortBy: 'updatedAt',
+      sortDirection: 'asc',
+    },
+    loadCases: async (query) => {
+      listQueries.push({ ...query });
+      return listResponse;
+    },
+    loadDetail: async () => {
+      detailCalls += 1;
+      return detailResponse;
+    },
+    createCase: async () => creationResponse,
+  });
+  try {
+    await act(async () => { findButton(harness.environment.container, 'Criar caso').click(); await flush(); });
+    assert.equal(listQueries.length, 2);
+    assert.deepEqual(listQueries[0], listQueries[1]);
+    assert.equal(listQueries.at(-1)?.status, 'IN_REVIEW');
+    assert.equal(listQueries.at(-1)?.pageSize, 10);
+    assert.equal(listQueries.at(-1)?.sortBy, 'updatedAt');
+    assert.equal(listQueries.at(-1)?.sortDirection, 'asc');
+    assert.equal(detailCalls, 1);
+    const params = new URLSearchParams(harness.environment.window.location.search);
+    assert.equal(params.get('status'), 'IN_REVIEW');
+    assert.equal(params.get('pageSize'), '10');
+    assert.equal(params.get('sortBy'), 'updatedAt');
+    assert.equal(params.get('sortDirection'), 'asc');
+    assert.equal(params.get('caseId'), CASE_ID);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
 test('oferece acesso ao caso existente no conflito 409', async () => {
   const harness = await renderPage({
     initialSearchParams: { create: '1', findingId: FINDING_ID },
@@ -648,6 +691,52 @@ test('troca rápida de detalhes aborta A e nunca apresenta seus dados em B', asy
     assert.match(text, /SRV-SECOND-01/);
     assert.doesNotMatch(text, /SRV-APP-01/);
     assert.match(harness.environment.window.location.search, new RegExp(`caseId=${SECOND_CASE_ID}`));
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('fechar o painel durante GET pendente impede o detalhe tardio de reaparecer', async () => {
+  const pending = deferred<FindingReviewCaseDetail>();
+  let signal: AbortSignal | undefined;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async (_id, options) => {
+      signal = options?.signal;
+      return pending.promise;
+    },
+  });
+  try {
+    await act(async () => { findButton(harness.environment.container, 'Ver detalhe').click(); await flush(); });
+    assert.ok(harness.environment.container.querySelector('#finding-review-case-detail'));
+    await act(async () => { findButton(harness.environment.container, 'Fechar detalhe').click(); await flush(); });
+    assert.equal(signal?.aborted, true);
+    assert.equal(harness.environment.container.querySelector('#finding-review-case-detail'), null);
+    await act(async () => { pending.resolve(detailResponse); await flush(); });
+    assert.equal(harness.environment.container.querySelector('#finding-review-case-detail'), null);
+    assert.equal(harness.environment.window.location.search.includes('caseId='), false);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('deep link inicial carrega detalhe mesmo quando a listagem falha', async () => {
+  const pendingList = deferred<FindingReviewCaseListResponse>();
+  let detailCalls = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => pendingList.promise,
+    loadDetail: async () => {
+      detailCalls += 1;
+      return detailResponse;
+    },
+  });
+  try {
+    assert.equal(detailCalls, 1);
+    assert.match(harness.environment.container.textContent ?? '', /Visualizar snapshot histórico/);
+    await act(async () => { pendingList.reject(new ApiError('Falha da lista', 500)); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', /Falha da lista/);
+    assert.match(harness.environment.container.textContent ?? '', /Visualizar snapshot histórico/);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -895,6 +984,54 @@ test('rerender do mesmo detalhe não agenda nem rouba o foco novamente', async (
     await act(async () => { frames.runAll(); await flush(); });
     assert.equal(focusCalls, 1);
     assert.equal(environment.window.document.activeElement === filterControl, true);
+  } finally {
+    frames.restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('iniciar transição cancela o frame de foco pendente do detalhe', async () => {
+  const environment = createIsolatedTestEnvironment();
+  const frames = controlAnimationFrames(environment);
+  const statusPending = deferred<UpdateFindingReviewCaseStatusResponse>();
+  let statusCalls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    updateStatus: async () => {
+      statusCalls += 1;
+      return statusPending.promise;
+    },
+  }, environment);
+  try {
+    await act(async () => { frames.runAll(); await flush(); });
+    await openFirstCaseDetail(environment.container);
+    const heading = environment.container.querySelector<HTMLHeadingElement>(
+      '#review-case-detail-title',
+    );
+    const status = environment.container.querySelector<HTMLSelectElement>(
+      '#review-case-next-status',
+    );
+    assert.ok(heading && status);
+    let focusCalls = 0;
+    heading.focus = () => { focusCalls += 1; };
+    assert.ok(frames.pendingCount > 0);
+
+    await act(async () => {
+      setControlValue(status, 'IN_REVIEW');
+      await flush();
+    });
+    status.focus();
+    await act(async () => {
+      findButton(environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+
+    assert.equal(statusCalls, 1);
+    assert.equal(heading.isConnected, true);
+    await act(async () => { frames.runAll(); await flush(); });
+    assert.equal(focusCalls, 0);
+    assert.equal(environment.window.document.activeElement === heading, false);
   } finally {
     frames.restore();
     await close(harness.root, environment.cleanup);
@@ -3227,6 +3364,7 @@ test('valida justificativa e apresenta confirmação completa sem POST na primei
   });
   try {
     await openFirstCaseDetail(harness.environment.container);
+    await settleScheduledFocus(harness.environment);
     const textarea = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-reopen-justification');
     assert.ok(textarea);
     await act(async () => {
