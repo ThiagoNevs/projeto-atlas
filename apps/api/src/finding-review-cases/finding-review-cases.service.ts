@@ -710,6 +710,9 @@ function presentSafeEventMetadata(
     'justification',
     'decisionId',
     'identityConclusion',
+    'previousDecisionId',
+    'previousIdentityConclusion',
+    'correctionReason',
   ]) {
     const value = metadata[key];
     if (typeof value === 'string') safe[key] = value;

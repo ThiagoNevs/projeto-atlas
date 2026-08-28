@@ -13,12 +13,14 @@ import {
 } from '@nestjs/common';
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
 import { CreateFindingReviewDecisionDto } from './dto/create-finding-review-decision.dto';
+import { CreateFindingReviewDecisionSupersessionDto } from './dto/create-finding-review-decision-supersession.dto';
 import { CreateFindingReviewCaseResolutionDto } from './dto/create-finding-review-case-resolution.dto';
 import { CreateFindingReviewCaseReopenDto } from './dto/create-finding-review-case-reopen.dto';
 import { QueryFindingReviewCasesDto } from './dto/query-finding-review-cases.dto';
 import { UpdateFindingReviewCaseStatusDto } from './dto/update-finding-review-case-status.dto';
 import { FindingReviewCasesService } from './finding-review-cases.service';
 import { FindingReviewDecisionsService } from './finding-review-decisions.service';
+import { FindingReviewDecisionSupersessionsService } from './finding-review-decision-supersessions.service';
 import { FindingReviewResolutionsService } from './finding-review-resolutions.service';
 import { FindingReviewReopensService } from './finding-review-reopens.service';
 
@@ -36,14 +38,43 @@ const reviewCaseIdPipe = new ParseUUIDPipe({
     }),
 });
 
+const reviewDecisionIdPipe = new ParseUUIDPipe({
+  version: '4',
+  exceptionFactory: () =>
+    new BadRequestException({
+      statusCode: 400,
+      code: 'INVALID_FINDING_REVIEW_DECISION_ID',
+      message: 'O identificador da decisão de revisão é inválido.',
+    }),
+});
+
 @Controller('conflict-review-cases')
 export class FindingReviewCasesController {
   constructor(
     private readonly cases: FindingReviewCasesService,
     private readonly decisions: FindingReviewDecisionsService,
+    private readonly decisionSupersessions: FindingReviewDecisionSupersessionsService,
     private readonly resolutions: FindingReviewResolutionsService,
     private readonly reopens: FindingReviewReopensService,
   ) {}
+
+  @Post(':caseId/decisions/:decisionId/supersessions')
+  async supersedeDecision(
+    @Param('caseId', reviewCaseIdPipe) caseId: string,
+    @Param('decisionId', reviewDecisionIdPipe) decisionId: string,
+    @Body() payload: CreateFindingReviewDecisionSupersessionDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) response: PassthroughResponse,
+  ) {
+    const result = await this.decisionSupersessions.create(
+      caseId,
+      decisionId,
+      payload,
+      idempotencyKey,
+    );
+    response.status(result.idempotentReplay ? 200 : 201);
+    return result;
+  }
 
   @Get()
   findAll(@Query() query: QueryFindingReviewCasesDto) {
