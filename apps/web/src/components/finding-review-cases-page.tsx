@@ -13,7 +13,6 @@ import {
 
 import { ErrorState, LoadingState } from './page-state';
 import {
-  ApiError,
   createFindingReviewCaseReopen,
   createFindingReviewCaseResolution,
   createFindingReviewDecision,
@@ -22,35 +21,25 @@ import {
   getFindingReviewCases,
   updateFindingReviewCaseStatus,
   type ActiveFindingReviewCaseStatus,
-  type CreateFindingReviewCaseResponse,
   type FindingReviewCaseDetail,
-  type FindingReviewCaseListResponse,
   type FindingReviewCaseQuery,
-  type FindingReviewCasesRequestOptions,
   type FindingReviewIdentityConclusion,
 } from '../lib/api';
 import { CONFLICT_FINDING_TYPES, getConflictFindingTypeLabel } from '../lib/conflict-findings';
 import {
-  DEFAULT_FINDING_REVIEW_CASE_QUERY,
   FINDING_REVIEW_CASE_STATUSES,
-  FINDING_REVIEW_SORT_FIELDS,
   FINDING_REVIEW_STALENESSES,
   MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH,
-  createFindingReviewIdempotencyKey,
   getAllowedFindingReviewCaseStatusDestinations,
   getFindingReviewCaseStatusLabel,
   getFindingReviewIdentityConclusionLabel,
   getFindingReviewEventLabel,
   getFindingReviewStalenessLabel,
   isFindingReviewCaseId,
-  isFindingReviewFindingId,
-  isFindingReviewTimestamp,
   requiresFindingReviewCaseWaitingJustification,
-  serializeFindingReviewCaseQuery,
   type FindingReviewCaseSortField,
   type FindingReviewCaseStatus,
   type FindingReviewSortDirection,
-  type FindingReviewStaleness,
 } from '../lib/finding-review-cases';
 import { formatDateTime } from '../lib/format';
 import {
@@ -77,6 +66,31 @@ import {
   type ReviewCaseResolutionCreator,
   type ReviewCaseStatusUpdater,
 } from './finding-review-cases/use-review-case-commands';
+import {
+  buildFindingReviewCaseQueryFromForm,
+  reviewCaseLocationFromParams,
+  reviewCaseLocationFromSearchParams,
+  reviewCaseLocationUrl,
+  type FindingReviewCaseFilterForm,
+} from './finding-review-cases/review-case-location';
+import {
+  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+  createPendingFindingReviewCaseAttempt,
+  parsePendingFindingReviewCaseAttempt,
+  type PendingFindingReviewCaseAttempt,
+} from './finding-review-cases/review-case-creation-pending';
+import {
+  useReviewCaseListController,
+  type ReviewCasesLoader,
+} from './finding-review-cases/use-review-case-list-controller';
+import {
+  useReviewCaseDetailController,
+  type ReviewCaseDetailLoader,
+} from './finding-review-cases/use-review-case-detail-controller';
+import {
+  useReviewCaseCreationCommand,
+  type ReviewCaseCreator,
+} from './finding-review-cases/use-review-case-creation-command';
 
 export {
   MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH,
@@ -91,6 +105,10 @@ export {
   parsePendingFindingReviewDecisionAttempt,
   parsePendingFindingReviewReopenAttempt,
   parsePendingFindingReviewResolutionAttempt,
+  PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+  buildFindingReviewCaseQueryFromForm,
+  createPendingFindingReviewCaseAttempt,
+  parsePendingFindingReviewCaseAttempt,
 };
 export type {
   PendingFindingReviewDecisionAttempt,
@@ -100,21 +118,11 @@ export type {
   ReviewCaseReopenCreator,
   ReviewCaseResolutionCreator,
   ReviewCaseStatusUpdater,
+  FindingReviewCaseFilterForm,
+  PendingFindingReviewCaseAttempt,
 };
 
-export type ReviewCasesLoader = (
-  query: FindingReviewCaseQuery,
-  options?: FindingReviewCasesRequestOptions,
-) => Promise<FindingReviewCaseListResponse>;
-export type ReviewCaseDetailLoader = (
-  id: string,
-  options?: FindingReviewCasesRequestOptions,
-) => Promise<FindingReviewCaseDetail>;
-export type ReviewCaseCreator = (
-  findingId: string,
-  key: string,
-  options?: FindingReviewCasesRequestOptions,
-) => Promise<CreateFindingReviewCaseResponse>;
+export type { ReviewCasesLoader, ReviewCaseDetailLoader, ReviewCaseCreator };
 interface Props {
   initialSearchParams?: Record<string, string | string[] | undefined>;
   loadCases?: ReviewCasesLoader;
@@ -128,380 +136,14 @@ interface Props {
 
 type ReviewCaseCommands = ReturnType<typeof useReviewCaseCommands>;
 
-export interface FindingReviewCaseFilterForm {
-  status: string;
-  staleness: string;
-  findingType: string;
-  findingId: string;
-  createdBy: string;
-  assetId: string;
-  createdFrom: string;
-  createdTo: string;
-  sortBy: FindingReviewCaseSortField;
-  sortDirection: FindingReviewSortDirection;
-  pageSize: string;
-}
-
-interface LocationState {
-  query: FindingReviewCaseQuery;
-  caseId: string | null;
-  requestedFindingId: string | null;
-}
-
 const DETAIL_PANEL_ID = 'finding-review-case-detail';
-const IDEMPOTENCY_STORAGE_PREFIX = 'atlas:pending-review-case:';
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]{1,128}$/;
-export const PENDING_REVIEW_CASE_ATTEMPT_TTL_MS = 15 * 60 * 1000;
-
-export interface PendingFindingReviewCaseAttempt {
-  version: 1;
-  findingId: string;
-  idempotencyKey: string;
-  createdAt: string;
-  expiresAt: string;
-}
-
-type PendingAttemptInspection =
-  | { status: 'valid'; attempt: PendingFindingReviewCaseAttempt }
-  | { status: 'invalid' | 'expired'; attempt: null };
-
-type StoredPendingAttempt = PendingAttemptInspection
-  | { status: 'missing'; attempt: null };
-
-function first(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function positiveInteger(value: string | undefined, fallback: number, maximum?: number): number {
-  if (!value || !/^[1-9][0-9]*$/.test(value)) return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) return fallback;
-  return maximum ? Math.min(parsed, maximum) : parsed;
-}
-
-function queryFromParams(
-  params: Record<string, string | string[] | undefined>,
-): FindingReviewCaseQuery {
-  const status = first(params.status);
-  const staleness = first(params.staleness);
-  const findingType = first(params.findingType);
-  const sortBy = first(params.sortBy);
-  const sortDirection = first(params.sortDirection);
-  const findingId = first(params.findingId);
-  const createdBy = first(params.createdBy)?.trim();
-  const assetId = first(params.assetId);
-  let createdFrom = first(params.createdFrom);
-  let createdTo = first(params.createdTo);
-  if (!isFindingReviewTimestamp(createdFrom)) createdFrom = undefined;
-  if (!isFindingReviewTimestamp(createdTo)) createdTo = undefined;
-  if (createdFrom && createdTo && Date.parse(createdFrom) > Date.parse(createdTo)) {
-    createdFrom = undefined;
-    createdTo = undefined;
-  }
-  return {
-    page: positiveInteger(first(params.page), 1),
-    pageSize: positiveInteger(first(params.pageSize), 25, 100),
-    status: FINDING_REVIEW_CASE_STATUSES.includes(status as FindingReviewCaseStatus)
-      ? status as FindingReviewCaseStatus : undefined,
-    staleness: FINDING_REVIEW_STALENESSES.includes(staleness as FindingReviewStaleness)
-      ? staleness as FindingReviewStaleness : undefined,
-    findingType: CONFLICT_FINDING_TYPES.includes(findingType as never)
-      ? findingType as FindingReviewCaseQuery['findingType'] : undefined,
-    findingId: isFindingReviewFindingId(findingId) ? findingId : undefined,
-    createdBy: createdBy && createdBy.length <= 100 ? createdBy : undefined,
-    assetId: isFindingReviewCaseId(assetId) ? assetId : undefined,
-    createdFrom,
-    createdTo,
-    sortBy: FINDING_REVIEW_SORT_FIELDS.includes(sortBy as FindingReviewCaseSortField)
-      ? sortBy as FindingReviewCaseSortField : 'createdAt',
-    sortDirection: sortDirection === 'asc' ? 'asc' : 'desc',
-  };
-}
-
-function locationFromParams(
-  params: Record<string, string | string[] | undefined>,
-): LocationState {
-  const caseId = first(params.caseId);
-  const requestedFindingId = first(params.create) === '1' ? first(params.findingId) : undefined;
-  return {
-    query: queryFromParams(params),
-    caseId: isFindingReviewCaseId(caseId) ? caseId : null,
-    requestedFindingId: isFindingReviewFindingId(requestedFindingId) ? requestedFindingId : null,
-  };
-}
-
-function browserLocationState(): LocationState {
-  return locationFromParams(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
-}
-
-function formFromQuery(
-  query: FindingReviewCaseQuery,
-  includeBrowserLocalDates = true,
-): FindingReviewCaseFilterForm {
-  return {
-    status: query.status ?? '',
-    staleness: query.staleness ?? '',
-    findingType: query.findingType ?? '',
-    findingId: query.findingId ?? '',
-    createdBy: query.createdBy ?? '',
-    assetId: query.assetId ?? '',
-    createdFrom: includeBrowserLocalDates ? dateTimeLocalValue(query.createdFrom) : '',
-    createdTo: includeBrowserLocalDates ? dateTimeLocalValue(query.createdTo) : '',
-    sortBy: query.sortBy ?? 'createdAt',
-    sortDirection: query.sortDirection ?? 'desc',
-    pageSize: String(query.pageSize ?? 25),
-  };
-}
-
-function dateTimeLocalValue(value: string | undefined): string {
-  if (!value) return '';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
-  const pad = (part: number): string => String(part).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-    + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-function isoFromDateTimeLocal(value: string): string | undefined {
-  if (!value) return undefined;
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(value);
-  if (!match) return undefined;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6] ?? 0);
-  const millisecond = Number((match[7] ?? '').padEnd(3, '0') || 0);
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (
-    year < 1
-    || month < 1
-    || month > 12
-    || day < 1
-    || day > daysInMonth[month - 1]!
-    || hour > 23
-    || minute > 59
-    || second > 59
-  ) {
-    return undefined;
-  }
-  const parsed = new Date(0);
-  parsed.setFullYear(year, month - 1, day);
-  parsed.setHours(hour, minute, second, millisecond);
-  if (
-    parsed.getFullYear() !== year
-    || parsed.getMonth() !== month - 1
-    || parsed.getDate() !== day
-    || parsed.getHours() !== hour
-    || parsed.getMinutes() !== minute
-    || parsed.getSeconds() !== second
-    || parsed.getMilliseconds() !== millisecond
-  ) {
-    return undefined;
-  }
-  return parsed.toISOString();
-}
-
-export function buildFindingReviewCaseQueryFromForm(
-  form: FindingReviewCaseFilterForm,
-): { query: FindingReviewCaseQuery | null; error: string | null } {
-  const createdFrom = isoFromDateTimeLocal(form.createdFrom);
-  const createdTo = isoFromDateTimeLocal(form.createdTo);
-  if ((form.createdFrom && !createdFrom) || (form.createdTo && !createdTo)) {
-    return { query: null, error: 'Informe datas e horários válidos.' };
-  }
-  if (createdFrom && createdTo && Date.parse(createdFrom) > Date.parse(createdTo)) {
-    return { query: null, error: 'A data inicial não pode ser posterior à data final.' };
-  }
-  if (form.assetId && !isFindingReviewCaseId(form.assetId.trim())) {
-    return { query: null, error: 'Informe um ID de ativo UUID válido.' };
-  }
-  if (form.findingId && !isFindingReviewFindingId(form.findingId.trim())) {
-    return { query: null, error: 'Informe um ID de achado válido.' };
-  }
-  return {
-    query: {
-      page: 1,
-      pageSize: Number(form.pageSize),
-      status: form.status as FindingReviewCaseStatus || undefined,
-      staleness: form.staleness as FindingReviewStaleness || undefined,
-      findingType: form.findingType as FindingReviewCaseQuery['findingType'] || undefined,
-      findingId: form.findingId.trim() || undefined,
-      createdBy: form.createdBy.trim() || undefined,
-      assetId: form.assetId.trim() || undefined,
-      createdFrom,
-      createdTo,
-      sortBy: form.sortBy,
-      sortDirection: form.sortDirection,
-    },
-    error: null,
-  };
-}
-
-function locationUrl(
-  query: FindingReviewCaseQuery,
-  caseId: string | null,
-  requestedFindingId: string | null,
-): string {
-  const search = new URLSearchParams(serializeFindingReviewCaseQuery(query));
-  if (caseId) search.set('caseId', caseId);
-  if (requestedFindingId) {
-    search.set('create', '1');
-    search.set('findingId', requestedFindingId);
-  }
-  const serialized = search.toString();
-  return `/conflict-review-cases${serialized ? `?${serialized}` : ''}`;
-}
-
 function pushLocation(
   query: FindingReviewCaseQuery,
   caseId: string | null,
   requestedFindingId: string | null,
 ): void {
-  window.history.pushState(null, '', locationUrl(query, caseId, requestedFindingId));
+  window.history.pushState(null, '', reviewCaseLocationUrl(query, caseId, requestedFindingId));
 }
-
-function displayError(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 503) {
-    return 'O fluxo de casos de revisão está temporariamente indisponível.';
-  }
-  return error instanceof Error ? error.message : fallback;
-}
-
-function isAbort(error: unknown): boolean {
-  return error instanceof Error && (error.name === 'AbortError' || (
-    error instanceof ApiError && error.status === 0 && /cancelada/i.test(error.message)
-  ));
-}
-
-function pendingStorageKey(findingId: string): string {
-  return `${IDEMPOTENCY_STORAGE_PREFIX}${findingId}`;
-}
-
-export function createPendingFindingReviewCaseAttempt(
-  findingId: string,
-  idempotencyKey: string,
-  now = Date.now(),
-): PendingFindingReviewCaseAttempt {
-  return {
-    version: 1,
-    findingId,
-    idempotencyKey,
-    createdAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + PENDING_REVIEW_CASE_ATTEMPT_TTL_MS).toISOString(),
-  };
-}
-
-export function parsePendingFindingReviewCaseAttempt(
-  serialized: string,
-  expectedFindingId: string,
-  now = Date.now(),
-): PendingFindingReviewCaseAttempt | null {
-  const inspected = inspectPendingFindingReviewCaseAttempt(serialized, expectedFindingId, now);
-  return inspected.status === 'valid' ? inspected.attempt : null;
-}
-
-function inspectPendingFindingReviewCaseAttempt(
-  serialized: string,
-  expectedFindingId: string,
-  now = Date.now(),
-): PendingAttemptInspection {
-  try {
-    const value: unknown = JSON.parse(serialized);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return { status: 'invalid', attempt: null };
-    }
-    const candidate = value as Record<string, unknown>;
-    const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'createdAt,expiresAt,findingId,idempotencyKey,version') {
-      return { status: 'invalid', attempt: null };
-    }
-    if (
-      candidate.version !== 1
-      || candidate.findingId !== expectedFindingId
-      || !isFindingReviewFindingId(candidate.findingId)
-      || typeof candidate.idempotencyKey !== 'string'
-      || !IDEMPOTENCY_KEY_PATTERN.test(candidate.idempotencyKey)
-      || typeof candidate.createdAt !== 'string'
-      || typeof candidate.expiresAt !== 'string'
-    ) {
-      return { status: 'invalid', attempt: null };
-    }
-    const createdAt = Date.parse(candidate.createdAt);
-    const expiresAt = Date.parse(candidate.expiresAt);
-    if (
-      !Number.isFinite(createdAt)
-      || !Number.isFinite(expiresAt)
-      || new Date(createdAt).toISOString() !== candidate.createdAt
-      || new Date(expiresAt).toISOString() !== candidate.expiresAt
-      || createdAt > now
-      || expiresAt - createdAt !== PENDING_REVIEW_CASE_ATTEMPT_TTL_MS
-    ) {
-      return { status: 'invalid', attempt: null };
-    }
-    if (expiresAt <= now) return { status: 'expired', attempt: null };
-    return {
-      status: 'valid',
-      attempt: candidate as unknown as PendingFindingReviewCaseAttempt,
-    };
-  } catch {
-    return { status: 'invalid', attempt: null };
-  }
-}
-
-function readPendingFindingReviewCaseAttempt(findingId: string): StoredPendingAttempt {
-  try {
-    const storageKey = pendingStorageKey(findingId);
-    const serialized = window.sessionStorage.getItem(storageKey);
-    if (serialized === null) return { status: 'missing', attempt: null };
-    const inspected = inspectPendingFindingReviewCaseAttempt(serialized, findingId);
-    if (inspected.status !== 'valid') {
-      window.sessionStorage.removeItem(storageKey);
-    }
-    return inspected;
-  } catch {
-    return { status: 'missing', attempt: null };
-  }
-}
-
-function storePendingFindingReviewCaseAttempt(attempt: PendingFindingReviewCaseAttempt): void {
-  try {
-    window.sessionStorage.setItem(
-      pendingStorageKey(attempt.findingId),
-      JSON.stringify(attempt),
-    );
-  } catch {
-    // The complete in-memory attempt still protects its original TTL while this page remains mounted.
-  }
-}
-
-function clearPendingFindingReviewCaseAttempt(
-  findingId: string,
-  expectedAttempt?: PendingFindingReviewCaseAttempt,
-): void {
-  try {
-    const storageKey = pendingStorageKey(findingId);
-    const serialized = window.sessionStorage.getItem(storageKey);
-    if (
-      serialized !== null
-      && (!expectedAttempt || serialized === JSON.stringify(expectedAttempt))
-    ) {
-      window.sessionStorage.removeItem(storageKey);
-    }
-  } catch {
-    // Storage can be unavailable in restrictive browser contexts.
-  }
-}
-
-function pendingAttemptDiscardedMessage(status: 'invalid' | 'expired'): string {
-  if (status === 'expired') {
-    return 'A tentativa anterior expirou e foi descartada. Clique novamente para iniciar uma nova tentativa.';
-  }
-  return 'O registro temporário da tentativa era inválido e foi descartado. Clique novamente para iniciar uma nova tentativa.';
-}
-
 
 export function FindingReviewCasesPage({
   initialSearchParams = {},
@@ -513,30 +155,21 @@ export function FindingReviewCasesPage({
   createResolution = createFindingReviewCaseResolution,
   createReopen = createFindingReviewCaseReopen,
 }: Props) {
-  const firstLocation = useMemo(() => locationFromParams(initialSearchParams), [initialSearchParams]);
-  const [query, setQuery] = useState<FindingReviewCaseQuery>(firstLocation.query);
-  const queryRef = useRef(firstLocation.query);
-  const [form, setForm] = useState<FindingReviewCaseFilterForm>(
-    () => formFromQuery(firstLocation.query, false),
+  const firstLocation = useMemo(
+    () => reviewCaseLocationFromParams(initialSearchParams),
+    [initialSearchParams],
   );
-  const initialDateHydrationSuperseded = useRef(false);
-  const [filterError, setFilterError] = useState<string | null>(null);
-  const [result, setResult] = useState<FindingReviewCaseListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [listReload, setListReload] = useState(0);
+  const commandsRef = useRef<ReviewCaseCommands | null>(null);
+  const listController = useReviewCaseListController({
+    initialQuery: firstLocation.query,
+    loadCases,
+  });
+  const detailController = useReviewCaseDetailController({
+    initialSelectedId: firstLocation.caseId,
+    loadDetail,
+    onDetailLoaded: (value) => commandsRef.current?.restoreForDetail(value),
+  });
   const mounted = useRef(false);
-  const listSequence = useRef(0);
-  const listController = useRef<AbortController | null>(null);
-
-  const [detail, setDetail] = useState<FindingReviewCaseDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(Boolean(firstLocation.caseId));
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(firstLocation.caseId);
-  const expandedIdRef = useRef<string | null>(firstLocation.caseId);
-  const detailSequence = useRef(0);
-  const detailController = useRef<AbortController | null>(null);
-  const [detailReload, setDetailReload] = useState(0);
   const detailHeading = useRef<HTMLHeadingElement | null>(null);
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
   const detailFocusFrame = useRef<number | null>(null);
@@ -545,43 +178,35 @@ export function FindingReviewCasesPage({
   const [requestedFindingId, setRequestedFindingId] = useState<string | null>(
     firstLocation.requestedFindingId,
   );
-  const [creationLoading, setCreationLoading] = useState(false);
-  const [creationResult, setCreationResult] = useState<CreateFindingReviewCaseResponse | null>(null);
-  const [creationError, setCreationError] = useState<string | null>(null);
-  const [existingCaseId, setExistingCaseId] = useState<string | null>(null);
-  const creationInFlight = useRef(false);
-  const creationController = useRef<AbortController | null>(null);
-  const creationSequence = useRef(0);
-  const pendingCreationAttempt = useRef<PendingFindingReviewCaseAttempt | null>(null);
+  const creationController = useReviewCaseCreationCommand({
+    createCase,
+    onSuccess: (created) => {
+      openDetail(created.id);
+      listController.reload();
+    },
+  });
 
   const commands = useReviewCaseCommands({
-    detail,
-    selectedCaseIdRef: expandedIdRef,
+    detail: detailController.detail,
+    selectedCaseIdRef: detailController.selectedIdRef,
     updateStatus,
     createDecision,
     createResolution,
     createReopen,
-    applyDetailUpdate: setDetail,
-    invalidateDetailRequest,
-    loadFreshDetail: (caseId) => loadDetail(caseId),
-    requestDetailReload: () => setDetailReload((value) => value + 1),
-    requestListReload: () => setListReload((value) => value + 1),
+    applyDetailUpdate: detailController.applyLocalUpdate,
+    invalidateDetailRequest: invalidateDetailInteraction,
+    loadFreshDetail: detailController.loadFreshDetail,
+    requestDetailReload: detailController.requestReload,
+    requestListReload: listController.reload,
     retryDetail,
-    retryList,
+    retryList: listController.reload,
   });
-  const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      listSequence.current += 1;
-      detailSequence.current += 1;
-      creationSequence.current += 1;
-      listController.current?.abort();
-      detailController.current?.abort();
-      creationController.current?.abort();
       if (detailFocusFrame.current !== null) {
         window.cancelAnimationFrame(detailFocusFrame.current);
         detailFocusFrame.current = null;
@@ -594,101 +219,28 @@ export function FindingReviewCasesPage({
   }, []);
 
   useEffect(() => {
-    // Keep the server and the first browser render timezone-independent. Local
-    // datetime values are populated only after hydration in the browser.
-    const frame = window.requestAnimationFrame(() => {
-      if (!initialDateHydrationSuperseded.current) setForm(formFromQuery(firstLocation.query));
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [firstLocation.query]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    listController.current = controller;
-    const sequence = ++listSequence.current;
-    const expectedQuery = serializeFindingReviewCaseQuery(query);
-    queryRef.current = query;
-
-    void loadCases(query, { signal: controller.signal })
-      .then((value) => {
-        if (!canCommitList(sequence, controller, expectedQuery)) return;
-        setResult(value);
-      })
-      .catch((cause) => {
-        if (!canCommitList(sequence, controller, expectedQuery) || isAbort(cause)) return;
-        setError(displayError(cause, 'Não foi possível carregar os casos.'));
-      })
-      .finally(() => {
-        if (!canCommitList(sequence, controller, expectedQuery)) return;
-        setLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [listReload, loadCases, query]);
-
-  useEffect(() => {
-    if (!expandedId) return;
-    const requestedId = expandedId;
-    const controller = new AbortController();
-    detailController.current = controller;
-    const sequence = ++detailSequence.current;
-
-    void loadDetail(requestedId, { signal: controller.signal })
-      .then((value) => {
-        if (!canCommitDetail(sequence, controller, requestedId)) return;
-        setDetail(value);
-        commandsRef.current.restoreForDetail(value);
-      })
-      .catch((cause) => {
-        if (!canCommitDetail(sequence, controller, requestedId) || isAbort(cause)) return;
-        setDetailError(displayError(cause, 'Não foi possível carregar o detalhe do caso.'));
-      })
-      .finally(() => {
-        if (!canCommitDetail(sequence, controller, requestedId)) return;
-        setDetailLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [detailReload, expandedId, loadDetail]);
-
-  useEffect(() => {
     const restoreFromUrl = (): void => {
-      const restored = browserLocationState();
+      const restored = reviewCaseLocationFromSearchParams(
+        new URLSearchParams(window.location.search),
+      );
       if (restoreFocusFrame.current !== null) {
         window.cancelAnimationFrame(restoreFocusFrame.current);
         restoreFocusFrame.current = null;
       }
-      initialDateHydrationSuperseded.current = true;
-      invalidateListRequest();
-      queryRef.current = restored.query;
-      setLoading(true);
-      setError(null);
-      setFilterError(null);
-      setForm(formFromQuery(restored.query));
-      setQuery(restored.query);
-      creationSequence.current += 1;
-      creationController.current?.abort();
-      creationController.current = null;
-      pendingCreationAttempt.current = null;
-      creationInFlight.current = false;
-      setCreationLoading(false);
-      setCreationResult(null);
-      setCreationError(null);
-      setExistingCaseId(null);
+      listController.restoreQuery(restored.query);
+      creationController.resetForIntentChange();
       setRequestedFindingId(restored.requestedFindingId);
-      if (restored.caseId !== expandedIdRef.current) {
-        commandsRef.current.invalidateAll();
-        invalidateDetailRequest();
+      if (restored.caseId !== detailController.selectedIdRef.current) {
+        commandsRef.current?.invalidateAll();
+        cancelDetailFocus();
         detailTrigger.current = null;
-        expandedIdRef.current = restored.caseId;
-        setExpandedId(restored.caseId);
-        setDetail(null);
-        setDetailError(null);
-        setDetailLoading(Boolean(restored.caseId));
+        detailController.restoreSelection(restored.caseId);
       }
     };
     window.addEventListener('popstate', restoreFromUrl);
     return () => window.removeEventListener('popstate', restoreFromUrl);
+    // The listener is deliberately installed once and reads current controller refs internally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -697,18 +249,18 @@ export function FindingReviewCasesPage({
       detailFocusFrame.current = null;
     }
     if (
-      !expandedId
-      || detailLoading
-      || (!detail && !detailError)
+      !detailController.selectedId
+      || detailController.loading
+      || (!detailController.detail && !detailController.error)
       || !detailHeading.current
     ) return;
-    const requestedId = expandedId;
+    const requestedId = detailController.selectedId;
     const requestedHeading = detailHeading.current;
     detailFocusFrame.current = window.requestAnimationFrame(() => {
       detailFocusFrame.current = null;
       if (
         mounted.current
-        && expandedIdRef.current === requestedId
+        && detailController.selectedIdRef.current === requestedId
         && detailHeading.current === requestedHeading
       ) {
         requestedHeading.focus();
@@ -720,95 +272,52 @@ export function FindingReviewCasesPage({
         detailFocusFrame.current = null;
       }
     };
-  }, [detail, detailError, detailLoading, expandedId]);
+  }, [
+    detailController.detail,
+    detailController.error,
+    detailController.loading,
+    detailController.selectedId,
+    detailController.selectedIdRef,
+  ]);
 
-  function canCommitList(
-    sequence: number,
-    controller: AbortController,
-    expectedQuery: string,
-  ): boolean {
-    return mounted.current
-      && sequence === listSequence.current
-      && !controller.signal.aborted
-      && expectedQuery === serializeFindingReviewCaseQuery(queryRef.current);
-  }
-
-  function canCommitDetail(
-    sequence: number,
-    controller: AbortController,
-    requestedId: string,
-  ): boolean {
-    return mounted.current
-      && sequence === detailSequence.current
-      && !controller.signal.aborted
-      && expandedIdRef.current === requestedId;
-  }
-
-  function invalidateListRequest(): void {
-    listSequence.current += 1;
-    listController.current?.abort();
-    listController.current = null;
-  }
-
-  function invalidateDetailRequest(): void {
-    detailSequence.current += 1;
-    detailController.current?.abort();
-    detailController.current = null;
+  function cancelDetailFocus(): void {
     if (detailFocusFrame.current !== null) {
       window.cancelAnimationFrame(detailFocusFrame.current);
       detailFocusFrame.current = null;
     }
   }
 
+  function invalidateDetailInteraction(): void {
+    cancelDetailFocus();
+    detailController.invalidateRequest();
+  }
 
   function updateQuery(next: FindingReviewCaseQuery, nextRequestedFindingId = requestedFindingId): void {
-    invalidateListRequest();
-    queryRef.current = next;
-    setLoading(true);
-    setError(null);
-    pushLocation(next, expandedIdRef.current, nextRequestedFindingId);
+    pushLocation(next, detailController.selectedIdRef.current, nextRequestedFindingId);
     updateRequestedFinding(nextRequestedFindingId);
-    setQuery(next);
+    listController.startQuery(next);
   }
 
   function updateRequestedFinding(next: string | null): void {
     if (next === requestedFindingId) return;
-    creationSequence.current += 1;
-    creationController.current?.abort();
-    creationController.current = null;
-    pendingCreationAttempt.current = null;
-    creationInFlight.current = false;
-    setCreationLoading(false);
-    setCreationResult(null);
-    setCreationError(null);
-    setExistingCaseId(null);
+    creationController.resetForIntentChange();
     setRequestedFindingId(next);
   }
 
   function submitFilters(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const parsed = buildFindingReviewCaseQueryFromForm(form);
-    setFilterError(parsed.error);
-    if (parsed.query) updateQuery(parsed.query, null);
+    const next = listController.parseFilters();
+    if (next) updateQuery(next, null);
   }
 
   function clearFilters(): void {
-    const next = { ...DEFAULT_FINDING_REVIEW_CASE_QUERY };
-    setForm(formFromQuery(next));
-    setFilterError(null);
+    const next = listController.resetFilters();
     updateQuery(next, null);
   }
 
-  function retryList(): void {
-    invalidateListRequest();
-    setLoading(true);
-    setError(null);
-    setListReload((value) => value + 1);
-  }
-
   function changePage(page: number): void {
-    if (page < 1 || page === query.page) return;
-    updateQuery({ ...query, page });
+    const next = listController.queryForPage(page);
+    if (next) updateQuery(next);
   }
 
   function openDetail(id: string, trigger?: HTMLButtonElement): void {
@@ -817,31 +326,23 @@ export function FindingReviewCasesPage({
       window.cancelAnimationFrame(restoreFocusFrame.current);
       restoreFocusFrame.current = null;
     }
-    if (expandedIdRef.current === id) {
+    if (detailController.selectedIdRef.current === id) {
       closeDetail(true);
       return;
     }
-    commandsRef.current.invalidateAll();
-    invalidateDetailRequest();
+    commandsRef.current?.invalidateAll();
+    cancelDetailFocus();
     if (trigger) detailTrigger.current = trigger;
     else detailTrigger.current = null;
-    expandedIdRef.current = id;
-    setExpandedId(id);
-    setDetail(null);
-    setDetailError(null);
-    setDetailLoading(true);
-    pushLocation(queryRef.current, id, requestedFindingId);
+    detailController.select(id);
+    pushLocation(listController.queryRef.current, id, requestedFindingId);
   }
 
   function closeDetail(updateHistory: boolean): void {
-    commandsRef.current.invalidateAll();
-    invalidateDetailRequest();
-    expandedIdRef.current = null;
-    setExpandedId(null);
-    setDetail(null);
-    setDetailError(null);
-    setDetailLoading(false);
-    if (updateHistory) pushLocation(queryRef.current, null, requestedFindingId);
+    commandsRef.current?.invalidateAll();
+    cancelDetailFocus();
+    detailController.clear();
+    if (updateHistory) pushLocation(listController.queryRef.current, null, requestedFindingId);
     const trigger = detailTrigger.current;
     detailTrigger.current = null;
     if (restoreFocusFrame.current !== null) {
@@ -849,103 +350,35 @@ export function FindingReviewCasesPage({
     }
     restoreFocusFrame.current = window.requestAnimationFrame(() => {
       restoreFocusFrame.current = null;
-      if (mounted.current && expandedIdRef.current === null) trigger?.focus();
+      if (mounted.current && detailController.selectedIdRef.current === null) trigger?.focus();
     });
   }
 
   function retryDetail(): void {
-    const current = expandedIdRef.current;
-    if (!current) return;
-    invalidateDetailRequest();
-    setDetail(null);
-    setDetailError(null);
-    setDetailLoading(true);
-    setDetailReload((value) => value + 1);
+    cancelDetailFocus();
+    detailController.retry();
   }
 
-
-  async function submitCreation(): Promise<void> {
-    if (!requestedFindingId || creationInFlight.current) return;
-    const creationFindingId = requestedFindingId;
-    let attempt = pendingCreationAttempt.current;
-    if (attempt) {
-      const inspected = inspectPendingFindingReviewCaseAttempt(
-        JSON.stringify(attempt),
-        creationFindingId,
-      );
-      if (inspected.status !== 'valid') {
-        clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
-        pendingCreationAttempt.current = null;
-        setCreationError(pendingAttemptDiscardedMessage(inspected.status));
-        setExistingCaseId(null);
-        return;
-      }
-      attempt = inspected.attempt;
-      pendingCreationAttempt.current = attempt;
-    } else {
-      const stored = readPendingFindingReviewCaseAttempt(creationFindingId);
-      if (stored.status === 'invalid' || stored.status === 'expired') {
-        setCreationError(pendingAttemptDiscardedMessage(stored.status));
-        setExistingCaseId(null);
-        return;
-      }
-      attempt = stored.status === 'valid'
-        ? stored.attempt
-        : createPendingFindingReviewCaseAttempt(
-          creationFindingId,
-          createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
-        );
-      pendingCreationAttempt.current = attempt;
-    }
-    const sequence = ++creationSequence.current;
-    creationInFlight.current = true;
-    const controller = new AbortController();
-    creationController.current = controller;
-    setCreationLoading(true);
-    setCreationError(null);
-    setExistingCaseId(null);
-    try {
-      const created = await createCase(creationFindingId, attempt.idempotencyKey, {
-        signal: controller.signal,
-      });
-      clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
-      if (pendingCreationAttempt.current === attempt) pendingCreationAttempt.current = null;
-      if (!mounted.current || sequence !== creationSequence.current) return;
-      setCreationResult(created);
-      openDetail(created.id);
-      retryList();
-    } catch (cause) {
-      const conclusive = cause instanceof ApiError
-        && [400, 404, 409, 503].includes(cause.status);
-      if (conclusive) {
-        clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
-        if (pendingCreationAttempt.current === attempt) pendingCreationAttempt.current = null;
-      } else {
-        storePendingFindingReviewCaseAttempt(attempt);
-      }
-      if (!mounted.current || sequence !== creationSequence.current) return;
-      if (cause instanceof ApiError && cause.status === 409 && cause.existingCaseId) {
-        setExistingCaseId(cause.existingCaseId);
-        setCreationError('Já existe um caso ativo para este assunto.');
-      } else if (cause instanceof ApiError && cause.status === 409) {
-        setCreationError('A chave da tentativa anterior não pode ser reutilizada. Tente novamente.');
-      } else if (cause instanceof ApiError && cause.status === 503) {
-        setCreationError('A criação de casos está desabilitada neste ambiente. Nenhum dado foi alterado.');
-      } else if (cause instanceof ApiError && cause.status === 404) {
-        setCreationError('O achado não está mais disponível. Atualize a lista de achados antes de tentar novamente.');
-      } else if (cause instanceof ApiError && cause.status === 400) {
-        setCreationError('A solicitação de criação é inválida. Revise o achado selecionado.');
-      } else {
-        setCreationError(
-          'Não foi possível confirmar o resultado. Tente novamente: a mesma chave idempotente será reutilizada.',
-        );
-      }
-    } finally {
-      if (sequence === creationSequence.current) creationInFlight.current = false;
-      if (creationController.current === controller) creationController.current = null;
-      if (mounted.current && sequence === creationSequence.current) setCreationLoading(false);
-    }
-  }
+  const {
+    form,
+    setForm,
+    filterError,
+    result,
+    loading,
+    error,
+  } = listController;
+  const {
+    detail,
+    loading: detailLoading,
+    error: detailError,
+    selectedId: expandedId,
+  } = detailController;
+  const {
+    loading: creationLoading,
+    result: creationResult,
+    error: creationError,
+    existingCaseId,
+  } = creationController;
 
   return (
     <main className="page-shell review-cases-page">
@@ -966,7 +399,7 @@ export function FindingReviewCasesPage({
             <code>{requestedFindingId}</code>
             <p>A criação preserva um snapshot histórico. Ela não decide o achado e não altera ativos.</p>
           </div>
-          <button className="button button-primary" type="button" disabled={creationLoading || Boolean(creationResult)} onClick={() => void submitCreation()}>
+          <button className="button button-primary" type="button" disabled={creationLoading || Boolean(creationResult)} onClick={() => void creationController.submit(requestedFindingId)}>
             {creationLoading ? 'Criando…' : creationResult ? 'Caso registrado' : 'Criar caso'}
           </button>
           {creationResult ? <p className="form-message form-message-success" role="status">{creationResult.idempotentReplay ? 'Caso recuperado por replay idempotente.' : 'Caso criado com sucesso.'}</p> : null}
@@ -994,10 +427,10 @@ export function FindingReviewCasesPage({
       </section>
 
       {loading && !result ? <LoadingState label="Carregando casos…" /> : null}
-      {error && !result ? <ErrorState message={error} retry={retryList} /> : null}
+      {error && !result ? <ErrorState message={error} retry={listController.reload} /> : null}
       {result ? (
         <>
-          {error ? <div className="finding-inline-error" role="alert"><span>{error}</span><button className="button button-secondary" type="button" onClick={retryList}>Tentar novamente</button></div> : null}
+          {error ? <div className="finding-inline-error" role="alert"><span>{error}</span><button className="button button-secondary" type="button" onClick={listController.reload}>Tentar novamente</button></div> : null}
           <div className="table-scroll review-cases-table-wrap">
             <table className="data-table review-cases-table">
               <thead><tr><th>Caso</th><th>Tipo</th><th>Status</th><th>Atualidade</th><th>Versão</th><th>Criado por</th><th>Ativos</th><th>Eventos</th><th>Criado em</th><th>Atualizado em</th><th>Ação</th></tr></thead>
