@@ -201,6 +201,7 @@ jobs:
     timeout-minutes: 30
     env:
       E2E_DATABASE_URL: postgresql://atlas_browser_e2e:atlas_browser_e2e@localhost:5432/atlas_browser_e2e
+      DATABASE_URL: postgresql://atlas_browser_e2e:atlas_browser_e2e@localhost:5432/atlas_browser_e2e
     services:
       postgres:
         image: postgres:17-alpine
@@ -241,8 +242,6 @@ jobs:
         run: corepack pnpm db:generate
 
       - name: Apply migrations
-        env:
-          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
         run: corepack pnpm --filter @atlas/api exec prisma migrate deploy
 
       - name: Install Chromium
