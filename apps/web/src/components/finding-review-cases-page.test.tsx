@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 
+import type { Dispatch, SetStateAction } from 'react';
 import type { Root } from 'react-dom/client';
 
 import { ApiError } from '../lib/api-error.ts';
@@ -9,6 +10,7 @@ import type {
   CreateFindingReviewCaseReopenResponse,
   CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
+  CreateFindingReviewDecisionSupersessionResponse,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
   UpdateFindingReviewCaseStatusResponse,
@@ -27,18 +29,24 @@ const {
   FindingReviewCasesPage,
   PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
   PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
   PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
   PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS,
   buildFindingReviewCaseQueryFromForm,
   createPendingFindingReviewCaseAttempt,
   createPendingFindingReviewDecisionAttempt,
+  createPendingFindingReviewDecisionSupersessionAttempt,
   createPendingFindingReviewResolutionAttempt,
   createPendingFindingReviewReopenAttempt,
   parsePendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewDecisionSupersessionAttempt,
   parsePendingFindingReviewResolutionAttempt,
   parsePendingFindingReviewReopenAttempt,
   parsePendingFindingReviewCaseAttempt,
 } = await import('./finding-review-cases-page.tsx');
+const { useReviewCaseCommands } = await import(
+  './finding-review-cases/use-review-case-commands.ts'
+);
 
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_CASE_ID = '44444444-4444-4444-8444-444444444444';
@@ -188,6 +196,30 @@ const decisionRecordedDetail: FindingReviewCaseDetail = {
   }],
 };
 
+const supersededDecision = {
+  ...decisionResponse.decision,
+  id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  identityConclusion: 'DIFFERENT_ASSETS' as const,
+  justification: 'As evidências confirmam que são ativos distintos.',
+  caseVersion: 4,
+  createdAt: '2026-07-20T12:15:00.000Z',
+};
+
+const supersessionResponse: CreateFindingReviewDecisionSupersessionResponse = {
+  decision: supersededDecision,
+  supersededDecisionId: decisionResponse.decision.id,
+  idempotentReplay: false,
+};
+
+const thirdDecision = {
+  ...supersededDecision,
+  id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  identityConclusion: 'SAME_ASSET' as const,
+  justification: 'Uma revisão posterior confirmou novamente a mesma identidade.',
+  caseVersion: 5,
+  createdAt: '2026-07-20T12:18:00.000Z',
+};
+
 const resolutionResponse: CreateFindingReviewCaseResolutionResponse = {
   idempotentReplay: false,
   resolution: {
@@ -301,6 +333,59 @@ async function renderPage(
     await flush();
   });
   return { environment, root };
+}
+
+async function renderCommandControllerHarness(
+  overrides: Partial<Parameters<typeof useReviewCaseCommands>[0]> = {},
+) {
+  const environment = createIsolatedTestEnvironment();
+  const root: Root = createRoot(environment.container);
+  let detail: FindingReviewCaseDetail | null = overrides.detail ?? decisionRecordedDetail;
+  const selectedCaseIdRef = overrides.selectedCaseIdRef ?? { current: detail.id };
+  let commands: ReturnType<typeof useReviewCaseCommands> | null = null;
+  const applyDetailUpdate: Dispatch<SetStateAction<FindingReviewCaseDetail | null>> = (update) => {
+    detail = typeof update === 'function' ? update(detail) : update;
+  };
+
+  function Harness() {
+    commands = useReviewCaseCommands({
+      detail,
+      selectedCaseIdRef,
+      updateStatus: async () => ({
+        id: CASE_ID,
+        status: 'OPEN',
+        version: 4,
+        updatedAt: '2026-07-20T12:20:00.000Z',
+      }),
+      createDecision: async () => decisionResponse,
+      supersedeDecision: async () => supersessionResponse,
+      createResolution: async () => resolutionResponse,
+      createReopen: async () => reopenResponse,
+      applyDetailUpdate,
+      invalidateDetailRequest: () => undefined,
+      loadFreshDetail: async () => detail ?? decisionRecordedDetail,
+      requestDetailReload: () => undefined,
+      requestListReload: () => undefined,
+      retryDetail: () => undefined,
+      retryList: () => undefined,
+      ...overrides,
+    });
+    return null;
+  }
+
+  await act(async () => {
+    root.render(createElement(Harness));
+    await flush();
+  });
+
+  return {
+    environment,
+    root,
+    get commands() {
+      assert.ok(commands);
+      return commands;
+    },
+  };
 }
 
 function installControlledClock(initialTime: string) {
@@ -435,6 +520,28 @@ async function reviewAndSubmitReopen(
   await act(async () => { setControlValue(textarea, justification); await flush(); });
   await act(async () => { findButton(container, 'Revisar reabertura').click(); await flush(); });
   await act(async () => { findButton(container, 'Reabrir investigação').click(); await flush(); });
+}
+
+async function reviewAndSubmitSupersession(
+  container: HTMLElement,
+  conclusion: 'SAME_ASSET' | 'DIFFERENT_ASSETS' = 'DIFFERENT_ASSETS',
+  justification = supersededDecision.justification,
+  correctionReason = 'A evidência original foi reinterpretada.',
+): Promise<void> {
+  await act(async () => { findButton(container, 'Corrigir decisão').click(); await flush(); });
+  const radio = container.querySelector<HTMLInputElement>(
+    `input[name="supersession-identity-conclusion"][value="${conclusion}"]`,
+  );
+  const justificationField = container.querySelector<HTMLTextAreaElement>(
+    '#review-supersession-justification',
+  );
+  const reasonField = container.querySelector<HTMLTextAreaElement>('#review-supersession-reason');
+  assert.ok(radio && justificationField && reasonField);
+  await act(async () => { radio.click(); await flush(); });
+  await act(async () => { setControlValue(justificationField, justification); await flush(); });
+  await act(async () => { setControlValue(reasonField, correctionReason); await flush(); });
+  await act(async () => { findButton(container, 'Revisar correção').click(); await flush(); });
+  await act(async () => { findButton(container, 'Confirmar correção').click(); await flush(); });
 }
 
 test('lista casos e abre detalhe com snapshot, ativo atual e evento', async () => {
@@ -3893,5 +4000,894 @@ test('mutações ativas e reabertura permanecem mutuamente exclusivas nos estado
     await act(async () => { reopenPending.resolve(reopenResponse); await flush(); });
   } finally {
     await close(reopenHarness.root, reopenHarness.environment.cleanup);
+  }
+});
+
+test('guard imperativo bloqueia mutation concorrente nos dois sentidos antes do rerender', async () => {
+  const supersessionPending = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  let supersessionCalls = 0;
+  let statusCalls = 0;
+  let supersessionRequest!: Promise<void>;
+  let blockedStatusRequest!: Promise<void>;
+  let harness = await renderCommandControllerHarness({
+    supersedeDecision: async () => {
+      supersessionCalls += 1;
+      return supersessionPending.promise;
+    },
+    updateStatus: async () => {
+      statusCalls += 1;
+      return {
+        id: CASE_ID,
+        status: 'OPEN',
+        version: 4,
+        updatedAt: supersededDecision.createdAt,
+      };
+    },
+  });
+  try {
+    await act(async () => {
+      supersessionRequest = harness.commands.supersession.submit(
+        supersededDecision.identityConclusion,
+        supersededDecision.justification,
+        'Motivo auditável.',
+      );
+      blockedStatusRequest = harness.commands.status.submit('OPEN');
+      await flush();
+    });
+    assert.equal(supersessionCalls, 1);
+    assert.equal(statusCalls, 0);
+    await act(async () => {
+      supersessionPending.resolve(supersessionResponse);
+      await Promise.all([supersessionRequest, blockedStatusRequest]);
+      await flush();
+    });
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+
+  const statusPending = deferred<UpdateFindingReviewCaseStatusResponse>();
+  supersessionCalls = 0;
+  statusCalls = 0;
+  let statusRequest!: Promise<void>;
+  let blockedSupersessionRequest!: Promise<void>;
+  harness = await renderCommandControllerHarness({
+    updateStatus: async () => {
+      statusCalls += 1;
+      return statusPending.promise;
+    },
+    supersedeDecision: async () => {
+      supersessionCalls += 1;
+      return supersessionResponse;
+    },
+  });
+  try {
+    await act(async () => {
+      statusRequest = harness.commands.status.submit('OPEN');
+      blockedSupersessionRequest = harness.commands.supersession.submit(
+        supersededDecision.identityConclusion,
+        supersededDecision.justification,
+        'Motivo auditável.',
+      );
+      await flush();
+    });
+    assert.equal(statusCalls, 1);
+    assert.equal(supersessionCalls, 0);
+    await act(async () => {
+      statusPending.resolve({
+        id: CASE_ID,
+        status: 'OPEN',
+        version: 4,
+        updatedAt: supersededDecision.createdAt,
+      });
+      await Promise.all([statusRequest, blockedSupersessionRequest]);
+      await flush();
+    });
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('troca A na confirmação por B descarta intenção local e usa a decisão de B', async () => {
+  const secondDecision = {
+    ...decisionResponse.decision,
+    id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    caseId: SECOND_CASE_ID,
+    identityConclusion: 'DIFFERENT_ASSETS' as const,
+    justification: 'Justificativa exclusiva da decisão do caso B.',
+  };
+  const secondDetail: FindingReviewCaseDetail = {
+    ...decisionRecordedDetail,
+    id: SECOND_CASE_ID,
+    findingId: SECOND_FINDING_ID,
+    currentDecision: secondDecision,
+    decisionHistory: [secondDecision],
+  };
+  const listWithTwo: FindingReviewCaseListResponse = {
+    items: [
+      { ...listResponse.items[0]!, status: 'IN_REVIEW', version: 3 },
+      {
+        ...listResponse.items[0]!,
+        id: SECOND_CASE_ID,
+        findingId: SECOND_FINDING_ID,
+        status: 'IN_REVIEW',
+        version: 3,
+      },
+    ],
+    pagination: { page: 1, pageSize: 25, totalItems: 2, totalPages: 1 },
+  };
+  let supersessionCalls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listWithTwo,
+    loadDetail: async (caseId) => caseId === SECOND_CASE_ID ? secondDetail : decisionRecordedDetail,
+    supersedeDecision: async () => {
+      supersessionCalls += 1;
+      return supersessionResponse;
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await act(async () => {
+      findButton(harness.environment.container, 'Corrigir decisão').click();
+      await flush();
+    });
+    const different = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="DIFFERENT_ASSETS"]',
+    );
+    const justification = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-justification',
+    );
+    const reason = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-reason',
+    );
+    assert.ok(different && justification && reason);
+    await act(async () => {
+      different.click();
+      setControlValue(justification, 'Intenção exclusiva preparada no caso A.');
+      setControlValue(reason, 'Motivo exclusivo preparado no caso A.');
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /Confirmar correção da decisão/);
+    assert.equal(supersessionCalls, 0);
+    assert.equal(harness.environment.window.sessionStorage.getItem(
+      `atlas:pending-review-decision-supersession:${CASE_ID}`,
+    ), null);
+
+    await act(async () => {
+      findButton(harness.environment.container, 'Ver detalhe').click();
+      await flush();
+    });
+    const caseBText = harness.environment.container.textContent ?? '';
+    assert.match(caseBText, new RegExp(SECOND_FINDING_ID));
+    assert.doesNotMatch(caseBText, /Confirmar correção da decisão/);
+    assert.doesNotMatch(caseBText, /Intenção exclusiva preparada no caso A/);
+    assert.doesNotMatch(caseBText, /Motivo exclusivo preparado no caso A/);
+    assert.match(caseBText, /Justificativa exclusiva da decisão do caso B/);
+    assert.equal(harness.environment.container.querySelector('#review-supersession-justification'), null);
+    assert.equal(supersessionCalls, 0);
+
+    await act(async () => {
+      findButton(harness.environment.container, 'Corrigir decisão').click();
+      await flush();
+    });
+    const caseBRadio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="DIFFERENT_ASSETS"]',
+    );
+    const caseBJustification = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-justification',
+    );
+    const caseBReason = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-reason',
+    );
+    assert.ok(caseBRadio && caseBJustification && caseBReason);
+    assert.equal(caseBRadio.checked, true);
+    assert.equal(caseBJustification.value, secondDecision.justification);
+    assert.equal(caseBReason.value, '');
+    assert.equal(supersessionCalls, 0);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('exibe correção somente em análise com decisão atual', async () => {
+  const scenarios: Array<{ detail: FindingReviewCaseDetail; visible: boolean }> = [
+    { detail: decisionRecordedDetail, visible: true },
+    { detail: decisionReadyDetail, visible: false },
+    { detail: { ...decisionRecordedDetail, status: 'OPEN' }, visible: false },
+    { detail: { ...decisionRecordedDetail, status: 'WAITING_FOR_EVIDENCE' }, visible: false },
+    { detail: resolvedDetail, visible: false },
+  ];
+  for (const scenario of scenarios) {
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => scenario.detail,
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      const visible = [...harness.environment.container.querySelectorAll('button')]
+        .some((button) => button.textContent?.trim() === 'Corrigir decisão');
+      assert.equal(visible, scenario.visible);
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+});
+
+test('prefill, valida no-op e textos e apresenta confirmação em duas etapas', async () => {
+  let calls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    supersedeDecision: async () => { calls += 1; return supersessionResponse; },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await settleScheduledFocus(harness.environment);
+    await act(async () => { findButton(harness.environment.container, 'Corrigir decisão').click(); await flush(); });
+    await settleScheduledFocus(harness.environment);
+    const currentRadio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="SAME_ASSET"]',
+    );
+    const differentRadio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="DIFFERENT_ASSETS"]',
+    );
+    const justification = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-justification',
+    );
+    const reason = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-reason',
+    );
+    assert.ok(currentRadio && differentRadio && justification && reason);
+    assert.equal(currentRadio.checked, true);
+    assert.equal(justification.value, decisionResponse.decision.justification);
+    assert.equal(reason.value, '');
+
+    await act(async () => {
+      setControlValue(reason, 'Correção editorial apenas.');
+      await flush();
+    });
+    await act(async () => {
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /Altere a conclusão ou a justificativa da decisão/);
+    const noOpError = harness.environment.container.querySelector<HTMLElement>(
+      '#review-supersession-no-op-error',
+    );
+    assert.ok(noOpError);
+    assert.equal(document.activeElement === justification, true);
+    assert.equal(justification.getAttribute('aria-invalid'), 'true');
+    assert.equal(
+      justification.getAttribute('aria-describedby')?.split(/\s+/).includes(noOpError.id),
+      true,
+    );
+    assert.equal(calls, 0);
+
+    await act(async () => {
+      differentRadio.click();
+      setControlValue(justification, '  Ativos  distintos\nconfirmados.  ');
+      setControlValue(reason, '  Evidência  adicional\nrecebida.  ');
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    const confirmation = harness.environment.container.textContent ?? '';
+    assert.match(confirmation, /Confirmar correção da decisão/);
+    assert.match(confirmation, /Decisão atual/);
+    assert.match(confirmation, /Nova decisão/);
+    assert.match(confirmation, /Ativos  distintos\s+confirmados/);
+    assert.match(confirmation, /Evidência  adicional\s+recebida/);
+    assert.match(confirmation, /decisão anterior será preservada no histórico/i);
+    assert.equal(calls, 0);
+
+    await act(async () => { findButton(harness.environment.container, 'Voltar').click(); await flush(); });
+    await settleScheduledFocus(harness.environment);
+    const restoredFirstRadio = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="SAME_ASSET"]',
+    );
+    assert.ok(restoredFirstRadio);
+    assert.equal(document.activeElement === restoredFirstRadio, true);
+
+    const restoredReason = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-reason',
+    );
+    assert.ok(restoredReason);
+    await act(async () => {
+      setControlValue(restoredReason, 'x'.repeat(1001));
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    assert.match(harness.environment.container.textContent ?? '', /motivo da correção deve ter no máximo 1000 caracteres/i);
+    const correctionReasonError = harness.environment.container.querySelector<HTMLElement>(
+      '#review-supersession-correction-reason-error',
+    );
+    assert.ok(correctionReasonError);
+    assert.equal(document.activeElement === restoredReason, true);
+    assert.equal(restoredReason.getAttribute('aria-invalid'), 'true');
+    assert.equal(
+      restoredReason.getAttribute('aria-describedby')?.split(/\s+/).includes(correctionReasonError.id),
+      true,
+    );
+
+    const restoredJustification = harness.environment.container.querySelector<HTMLTextAreaElement>(
+      '#review-supersession-justification',
+    );
+    assert.ok(restoredJustification);
+    await act(async () => {
+      setControlValue(restoredReason, 'Motivo válido.');
+      setControlValue(restoredJustification, '   ');
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    const justificationError = harness.environment.container.querySelector<HTMLElement>(
+      '#review-supersession-justification-error',
+    );
+    assert.ok(justificationError);
+    assert.equal(document.activeElement === restoredJustification, true);
+    assert.equal(restoredJustification.getAttribute('aria-invalid'), 'true');
+    assert.equal(
+      restoredJustification.getAttribute('aria-describedby')?.split(/\s+/).includes(justificationError.id),
+      true,
+    );
+    assert.equal(calls, 0);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('201 captura payload uma vez, preserva D1 e promove D2 sem timeline otimista', async () => {
+  const post = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  const fresh = deferred<FindingReviewCaseDetail>();
+  const calls: Array<{
+    caseId: string;
+    decisionId: string;
+    conclusion: string;
+    justification: string;
+    reason: string;
+    version: number;
+    key: string;
+  }> = [];
+  let detailLoads = 0;
+  let listLoads = 0;
+  const harness = await renderPage({
+    loadCases: async () => { listLoads += 1; return listResponse; },
+    loadDetail: async () => {
+      detailLoads += 1;
+      return detailLoads === 1 ? decisionRecordedDetail : fresh.promise;
+    },
+    supersedeDecision: async (caseId, decisionId, conclusion, justification, reason, version, key) => {
+      calls.push({ caseId, decisionId, conclusion, justification, reason, version, key });
+      return post.promise;
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    const baselineListLoads = listLoads;
+    await act(async () => { findButton(harness.environment.container, 'Corrigir decisão').click(); await flush(); });
+    const different = harness.environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="DIFFERENT_ASSETS"]',
+    );
+    const justification = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-supersession-justification');
+    const reason = harness.environment.container.querySelector<HTMLTextAreaElement>('#review-supersession-reason');
+    assert.ok(different && justification && reason);
+    await act(async () => {
+      different.click();
+      setControlValue(justification, `  ${supersededDecision.justification}\n  `);
+      setControlValue(reason, '  Evidência  revisada.  ');
+      findButton(harness.environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    await act(async () => {
+      const button = findButton(harness.environment.container, 'Confirmar correção');
+      button.click();
+      button.click();
+      await flush();
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual({ ...calls[0], key: undefined }, {
+      caseId: CASE_ID,
+      decisionId: decisionResponse.decision.id,
+      conclusion: 'DIFFERENT_ASSETS',
+      justification: supersededDecision.justification,
+      reason: 'Evidência  revisada.',
+      version: 3,
+      key: undefined,
+    });
+    assert.match(calls[0]?.key ?? '', /^atlas-ui-/);
+    await act(async () => { post.resolve(supersessionResponse); await flush(); });
+    const localText = harness.environment.container.textContent ?? '';
+    assert.match(localText, /Decisão corrigida\./);
+    assert.match(localText, /Mesma identidade/);
+    assert.match(localText, /Ativos diferentes/);
+    const localHistory = harness.environment.container.querySelectorAll('.review-decision-history li');
+    assert.equal(localHistory.length, 2);
+    assert.equal([...localHistory].filter((item) => item.textContent?.includes('Atual')).length, 1);
+    assert.equal([...localHistory].filter((item) => item.textContent?.includes('Substituída')).length, 1);
+    assert.doesNotMatch(localText, /Decisão de identidade corrigida/);
+    assert.equal(listLoads - baselineListLoads, 1);
+
+    const refreshed: FindingReviewCaseDetail = {
+      ...decisionRecordedDetail,
+      version: 4,
+      currentDecision: supersededDecision,
+      decisionHistory: [decisionResponse.decision, supersededDecision],
+      events: [...decisionRecordedDetail.events, {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        eventType: 'CASE_DECISION_SUPERSEDED',
+        versionBefore: 3,
+        versionAfter: 4,
+        actor: 'atlas-mvp-user',
+        metadata: {
+          supersededDecisionId: decisionResponse.decision.id,
+          decisionId: supersededDecision.id,
+          previousIdentityConclusion: 'SAME_ASSET',
+          identityConclusion: 'DIFFERENT_ASSETS',
+          correctionReason: 'Evidência  revisada.',
+        },
+        createdAt: supersededDecision.createdAt,
+      }],
+    };
+    await act(async () => { fresh.resolve(refreshed); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', /Decisão de identidade corrigida/);
+    assert.equal(listLoads - baselineListLoads, 1);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('replay histórico D1→D2 não regride current D3 nem a versão e não duplica decisões', async () => {
+  const historicalDetail: FindingReviewCaseDetail = {
+    ...decisionRecordedDetail,
+    version: 5,
+    currentDecision: thirdDecision,
+    decisionHistory: [decisionResponse.decision, supersededDecision, thirdDecision],
+  };
+  const clock = installControlledClock('2026-07-20T12:20:00.000Z');
+  const environment = createIsolatedTestEnvironment();
+  const attempt = createPendingFindingReviewDecisionSupersessionAttempt(
+    CASE_ID,
+    decisionResponse.decision.id,
+    supersededDecision.identityConclusion,
+    supersededDecision.justification,
+    'A primeira decisão precisava ser corrigida.',
+    3,
+    'atlas-ui-historical-replay',
+    clock.now,
+  );
+  environment.window.sessionStorage.setItem(
+    `atlas:pending-review-decision-supersession:${CASE_ID}`,
+    JSON.stringify(attempt),
+  );
+  const calls: Array<Record<string, unknown>> = [];
+  let listLoads = 0;
+  const harness = await renderPage({
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => { listLoads += 1; return listResponse; },
+    loadDetail: async () => historicalDetail,
+    supersedeDecision: async (caseId, decisionId, conclusion, justification, reason, version, key) => {
+      calls.push({ caseId, decisionId, conclusion, justification, reason, version, key });
+      return { ...supersessionResponse, idempotentReplay: true };
+    },
+  }, environment);
+  try {
+    assert.equal(calls.length, 0);
+    const baselineListLoads = listLoads;
+    assert.ok(findButton(environment.container, 'Tentar novamente'));
+    await act(async () => { findButton(environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      caseId: CASE_ID,
+      decisionId: decisionResponse.decision.id,
+      conclusion: supersededDecision.identityConclusion,
+      justification: supersededDecision.justification,
+      reason: attempt.correctionReason,
+      version: 3,
+      key: attempt.idempotencyKey,
+    });
+    const text = environment.container.textContent ?? '';
+    assert.match(text, /recuperada com segurança/);
+    const historyItems = environment.container.querySelectorAll('.review-decision-history li');
+    assert.equal(historyItems.length, 3);
+    assert.equal(
+      [...historyItems].filter((item) => item.textContent?.includes(supersededDecision.justification)).length,
+      1,
+    );
+    assert.equal([...historyItems].filter((item) => item.textContent?.includes('Atual')).length, 1);
+    assert.match(
+      environment.container.querySelector('.review-decision-card')?.textContent ?? '',
+      /Uma revisão posterior confirmou novamente/,
+    );
+    assert.match(text, /versão 5/i);
+    assert.equal(environment.window.sessionStorage.getItem(
+      `atlas:pending-review-decision-supersession:${CASE_ID}`,
+    ), null);
+    assert.equal(listLoads - baselineListLoads, 1);
+  } finally {
+    clock.restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('envelope da correção valida TTL, vínculo, versão e conteúdo sem renovar', () => {
+  const now = Date.parse('2026-07-20T12:00:00.000Z');
+  const attempt = createPendingFindingReviewDecisionSupersessionAttempt(
+    CASE_ID,
+    decisionResponse.decision.id,
+    'DIFFERENT_ASSETS',
+    'Justificativa\ninterna preservada.',
+    'Motivo\ninterno preservado.',
+    3,
+    'atlas-ui-supersession-key',
+    now,
+  );
+  assert.equal(
+    Date.parse(attempt.expiresAt) - Date.parse(attempt.createdAt),
+    PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
+  );
+  assert.deepEqual(
+    parsePendingFindingReviewDecisionSupersessionAttempt(JSON.stringify(attempt), CASE_ID, now + 1),
+    attempt,
+  );
+  assert.equal(
+    parsePendingFindingReviewDecisionSupersessionAttempt(
+      JSON.stringify(attempt),
+      CASE_ID,
+      now + PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
+    ),
+    null,
+  );
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt('{invalid', CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
+    JSON.stringify({ ...attempt, version: 2 }), CASE_ID, now,
+  ), null);
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
+    JSON.stringify(attempt), SECOND_CASE_ID, now,
+  ), null);
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
+    JSON.stringify({ ...attempt, supersededDecisionId: 'invalid' }), CASE_ID, now,
+  ), null);
+});
+
+test('resultado incerto restaura e retry reutiliza exatamente envelope sem auto POST ou renovação', async () => {
+  const clock = installControlledClock('2026-07-20T12:00:00.000Z');
+  const first = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  const calls: Array<{
+    decisionId: string;
+    conclusion: string;
+    justification: string;
+    reason: string;
+    version: number;
+    key: string;
+  }> = [];
+  const props: Parameters<typeof FindingReviewCasesPage>[0] = {
+    initialSearchParams: { caseId: CASE_ID },
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    supersedeDecision: async (_caseId, decisionId, conclusion, justification, reason, version, key) => {
+      calls.push({ decisionId, conclusion, justification, reason, version, key });
+      if (calls.length === 1) return first.promise;
+      return { ...supersessionResponse, idempotentReplay: true };
+    },
+  };
+  const environment = createIsolatedTestEnvironment();
+  let harness = await renderPage(props, environment);
+  try {
+    await reviewAndSubmitSupersession(environment.container);
+    assert.equal(calls.length, 1);
+    await act(async () => { first.reject(new ApiError('rede', 0)); await flush(); });
+    const storageKey = `atlas:pending-review-decision-supersession:${CASE_ID}`;
+    const raw = environment.window.sessionStorage.getItem(storageKey);
+    assert.ok(raw);
+    const persisted = parsePendingFindingReviewDecisionSupersessionAttempt(raw, CASE_ID, clock.now);
+    assert.ok(persisted);
+    const expiresAt = persisted.expiresAt;
+
+    await act(async () => harness.root.unmount());
+    environment.container.replaceChildren();
+    const remountedRoot = createRoot(environment.container);
+    harness = { environment, root: remountedRoot };
+    await act(async () => { remountedRoot.render(createElement(FindingReviewCasesPage, props)); await flush(); });
+    assert.equal(calls.length, 1);
+    clock.advanceBy(5 * 60 * 1000);
+    await act(async () => { findButton(environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1], calls[0]);
+    assert.equal(persisted.expiresAt, expiresAt);
+    assert.equal(environment.window.sessionStorage.getItem(storageKey), null);
+  } finally {
+    clock.restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('cleanup condicional da tentativa A não remove envelope B mais novo', async () => {
+  const retry = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  let calls = 0;
+  const environment = createIsolatedTestEnvironment();
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    supersedeDecision: async () => {
+      calls += 1;
+      if (calls === 1) throw new ApiError('rede', 0);
+      return retry.promise;
+    },
+  }, environment);
+  try {
+    await openFirstCaseDetail(environment.container);
+    await reviewAndSubmitSupersession(environment.container);
+    const storageKey = `atlas:pending-review-decision-supersession:${CASE_ID}`;
+    const pendingA = environment.window.sessionStorage.getItem(storageKey);
+    assert.ok(pendingA);
+    await act(async () => { findButton(environment.container, 'Tentar novamente').click(); await flush(); });
+    assert.equal(calls, 2);
+    const attemptB = createPendingFindingReviewDecisionSupersessionAttempt(
+      CASE_ID,
+      decisionResponse.decision.id,
+      'DIFFERENT_ASSETS',
+      'Outra justificativa.',
+      'Outro motivo.',
+      3,
+      'atlas-ui-attempt-b',
+    );
+    environment.window.sessionStorage.setItem(storageKey, JSON.stringify(attemptB));
+    await act(async () => { retry.resolve({ ...supersessionResponse, idempotentReplay: true }); await flush(); });
+    assert.deepEqual(JSON.parse(environment.window.sessionStorage.getItem(storageKey) ?? ''), attemptB);
+  } finally {
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('POST confirmado permanece local quando GET fresco falha e não recria pending', async () => {
+  let detailLoads = 0;
+  let listLoads = 0;
+  const harness = await renderPage({
+    loadCases: async () => { listLoads += 1; return listResponse; },
+    loadDetail: async () => {
+      detailLoads += 1;
+      if (detailLoads > 1) throw new ApiError('refresh falhou', 0);
+      return decisionRecordedDetail;
+    },
+    supersedeDecision: async () => supersessionResponse,
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    const baselineListLoads = listLoads;
+    await reviewAndSubmitSupersession(harness.environment.container);
+    await act(async () => { await flush(); });
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Decisão corrigida\./);
+    assert.match(text, /Ativos diferentes/);
+    assert.match(text, /correção foi confirmada, mas não foi possível atualizar/i);
+    assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+    assert.equal(harness.environment.window.sessionStorage.getItem(
+      `atlas:pending-review-decision-supersession:${CASE_ID}`,
+    ), null);
+    assert.equal(listLoads - baselineListLoads, 1);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('erros de campos da correção possuem ARIA e foco no campo correto', async () => {
+  for (const scenario of [
+    {
+      code: 'INVALID_FINDING_REVIEW_DECISION_JUSTIFICATION',
+      message: 'A justificativa da nova decisão é inválida.',
+      field: '#review-supersession-justification',
+    },
+    {
+      code: 'INVALID_FINDING_REVIEW_DECISION_CORRECTION_REASON',
+      message: 'O motivo da correção é inválido.',
+      field: '#review-supersession-reason',
+    },
+  ]) {
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => decisionRecordedDetail,
+      supersedeDecision: async () => { throw new ApiError(scenario.message, 400, scenario.code); },
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      await settleScheduledFocus(harness.environment);
+      await reviewAndSubmitSupersession(harness.environment.container);
+      await settleScheduledFocus(harness.environment);
+      const field = harness.environment.container.querySelector<HTMLTextAreaElement>(scenario.field);
+      const serverError = harness.environment.container.querySelector<HTMLElement>(
+        '#review-supersession-server-error',
+      );
+      assert.ok(field && serverError);
+      assert.equal(document.activeElement === field, true);
+      assert.equal(field.getAttribute('aria-invalid'), 'true');
+      assert.equal(field.getAttribute('aria-describedby')?.split(/\s+/).includes(serverError.id), true);
+      assert.equal(serverError.getAttribute('role'), 'alert');
+      assert.equal(harness.environment.window.sessionStorage.getItem(
+        `atlas:pending-review-decision-supersession:${CASE_ID}`,
+      ), null);
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+});
+
+test('conflitos conclusivos da correção limpam pending e exigem recarga', async () => {
+  for (const scenario of [
+    { code: 'FINDING_REVIEW_CASE_VERSION_CONFLICT', message: /caso foi alterado/ },
+    { code: 'FINDING_REVIEW_DECISION_NOT_CURRENT', message: /não é mais a decisão atual/ },
+    { code: 'IDEMPOTENCY_KEY_REUSED', message: /não corresponde à correção original/ },
+    { code: 'FINDING_REVIEW_DECISION_SUPERSESSION_NOT_ALLOWED', status: 422, message: /não é mais permitida/ },
+    { code: 'FINDING_REVIEW_CASE_DECISION_REQUIRED', status: 422, message: /não é mais permitida/ },
+    { code: 'FINDING_REVIEW_CASE_SNAPSHOT_INCOMPATIBLE', status: 422, message: /não é mais permitida/ },
+    { code: 'FINDING_REVIEW_IDENTITY_CONCLUSION_NOT_ALLOWED', status: 422, message: /não é mais permitida/ },
+  ]) {
+    let calls = 0;
+    const harness = await renderPage({
+      loadCases: async () => listResponse,
+      loadDetail: async () => decisionRecordedDetail,
+      supersedeDecision: async () => {
+        calls += 1;
+        throw new ApiError('controlado', scenario.status ?? 409, scenario.code);
+      },
+    });
+    try {
+      await openFirstCaseDetail(harness.environment.container);
+      await reviewAndSubmitSupersession(harness.environment.container);
+      assert.equal(calls, 1);
+      assert.match(harness.environment.container.textContent ?? '', scenario.message);
+      assert.ok(findButton(harness.environment.container, 'Recarregar caso'));
+      assert.equal(harness.environment.window.sessionStorage.getItem(
+        `atlas:pending-review-decision-supersession:${CASE_ID}`,
+      ), null);
+    } finally {
+      await close(harness.root, harness.environment.cleanup);
+    }
+  }
+});
+
+test('resposta tardia da correção de A não altera decisão, sucesso ou foco de B', async () => {
+  const pending = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  const secondDetail: FindingReviewCaseDetail = {
+    ...decisionRecordedDetail,
+    id: SECOND_CASE_ID,
+    findingId: SECOND_FINDING_ID,
+    currentDecision: { ...decisionResponse.decision, id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', caseId: SECOND_CASE_ID },
+    decisionHistory: [{ ...decisionResponse.decision, id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', caseId: SECOND_CASE_ID }],
+  };
+  const listWithTwo: FindingReviewCaseListResponse = {
+    items: [listResponse.items[0]!, { ...listResponse.items[0]!, id: SECOND_CASE_ID, findingId: SECOND_FINDING_ID }],
+    pagination: { page: 1, pageSize: 25, totalItems: 2, totalPages: 1 },
+  };
+  const harness = await renderPage({
+    loadCases: async () => listWithTwo,
+    loadDetail: async (id) => id === SECOND_CASE_ID ? secondDetail : decisionRecordedDetail,
+    supersedeDecision: async () => pending.promise,
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await reviewAndSubmitSupersession(harness.environment.container);
+    await act(async () => { findButton(harness.environment.container, 'Ver detalhe').click(); await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', new RegExp(SECOND_FINDING_ID));
+    const heading = harness.environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
+    heading?.focus();
+    await act(async () => { pending.resolve(supersessionResponse); await flush(); });
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, new RegExp(SECOND_FINDING_ID));
+    assert.doesNotMatch(text, /Decisão corrigida\./);
+    assert.doesNotMatch(text, /Ativos distintos/);
+    assert.equal(document.activeElement === heading, true);
+    assert.equal(harness.environment.window.sessionStorage.getItem(
+      `atlas:pending-review-decision-supersession:${CASE_ID}`,
+    ), null);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('iniciar superseding cancela detail-heading rAF e bloqueia mutações compartilhadas', async () => {
+  const environment = createIsolatedTestEnvironment();
+  const frames = controlAnimationFrames(environment);
+  const pending = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  let supersessionCalls = 0;
+  let statusCalls = 0;
+  let resolutionCalls = 0;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    updateStatus: async () => { statusCalls += 1; return { id: CASE_ID, status: 'OPEN', version: 4, updatedAt: supersededDecision.createdAt }; },
+    supersedeDecision: async () => { supersessionCalls += 1; return pending.promise; },
+    createResolution: async () => { resolutionCalls += 1; return resolutionResponse; },
+  }, environment);
+  try {
+    await act(async () => { frames.runAll(); await flush(); });
+    await openFirstCaseDetail(environment.container);
+    const heading = environment.container.querySelector<HTMLHeadingElement>('#review-case-detail-title');
+    assert.ok(heading);
+    let focusCalls = 0;
+    heading.focus = () => { focusCalls += 1; };
+    assert.ok(frames.pendingCount > 0);
+
+    await act(async () => { findButton(environment.container, 'Corrigir decisão').click(); await flush(); });
+    const different = environment.container.querySelector<HTMLInputElement>(
+      'input[name="supersession-identity-conclusion"][value="DIFFERENT_ASSETS"]',
+    );
+    const justification = environment.container.querySelector<HTMLTextAreaElement>('#review-supersession-justification');
+    const reason = environment.container.querySelector<HTMLTextAreaElement>('#review-supersession-reason');
+    assert.ok(different && justification && reason);
+    await act(async () => {
+      different.click();
+      setControlValue(justification, supersededDecision.justification);
+      setControlValue(reason, 'Motivo auditável.');
+      findButton(environment.container, 'Revisar correção').click();
+      await flush();
+    });
+    await act(async () => { findButton(environment.container, 'Confirmar correção').click(); await flush(); });
+    assert.equal(supersessionCalls, 1);
+    const status = environment.container.querySelector<HTMLSelectElement>('#review-case-next-status');
+    const resolution = environment.container.querySelector<HTMLTextAreaElement>('#review-resolution-justification');
+    assert.equal(status?.disabled, true);
+    assert.equal(resolution?.disabled, true);
+    assert.equal(findButton(environment.container, 'Corrigindo…').disabled, true);
+    await act(async () => { frames.runAll(); await flush(); });
+    assert.equal(focusCalls, 0);
+    assert.deepEqual([statusCalls, resolutionCalls], [0, 0]);
+    await act(async () => { pending.resolve(supersessionResponse); await flush(); });
+  } finally {
+    frames.restore();
+    await close(harness.root, environment.cleanup);
+  }
+});
+
+test('unmount durante resultado incerto preserva tentativa sem atualizar React', async () => {
+  const post = deferred<CreateFindingReviewDecisionSupersessionResponse>();
+  const environment = createIsolatedTestEnvironment();
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => decisionRecordedDetail,
+    supersedeDecision: async () => post.promise,
+  }, environment);
+  await openFirstCaseDetail(environment.container);
+  await reviewAndSubmitSupersession(environment.container);
+  const storageKey = `atlas:pending-review-decision-supersession:${CASE_ID}`;
+  await act(async () => harness.root.unmount());
+  assert.ok(environment.window.sessionStorage.getItem(storageKey));
+  await act(async () => { post.reject(new ApiError('rede', 0)); await flush(); });
+  assert.ok(environment.window.sessionStorage.getItem(storageKey));
+  environment.cleanup();
+});
+
+test('GET antigo invalidado não apaga D2 depois do POST confirmado', async () => {
+  const oldGet = deferred<FindingReviewCaseDetail>();
+  let detailLoads = 0;
+  const freshDetail: FindingReviewCaseDetail = {
+    ...decisionRecordedDetail,
+    version: 4,
+    currentDecision: supersededDecision,
+    decisionHistory: [decisionResponse.decision, supersededDecision],
+  };
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => {
+      detailLoads += 1;
+      if (detailLoads === 1) return decisionReadyDetail;
+      if (detailLoads === 2) return oldGet.promise;
+      return freshDetail;
+    },
+    createDecision: async () => decisionResponse,
+    supersedeDecision: async () => supersessionResponse,
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    await submitEligibleDecision(harness.environment.container);
+    assert.equal(detailLoads, 2);
+    await reviewAndSubmitSupersession(harness.environment.container);
+    await act(async () => { await flush(); });
+    assert.match(harness.environment.container.textContent ?? '', /Ativos diferentes/);
+    await act(async () => { oldGet.resolve(decisionRecordedDetail); await flush(); });
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Ativos diferentes/);
+    const historyItems = harness.environment.container.querySelectorAll('.review-decision-history li');
+    assert.equal(historyItems.length, 2);
+    assert.equal([...historyItems].filter((item) => item.textContent?.includes('Atual')).length, 1);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
   }
 });

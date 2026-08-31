@@ -2,12 +2,15 @@ import type { FindingReviewIdentityConclusion } from '../../lib/api';
 import { isFindingReviewCaseId } from '../../lib/finding-review-cases';
 
 const DECISION_STORAGE_PREFIX = 'atlas:pending-review-decision:';
+const DECISION_SUPERSESSION_STORAGE_PREFIX = 'atlas:pending-review-decision-supersession:';
 const RESOLUTION_STORAGE_PREFIX = 'atlas:pending-review-resolution:';
 const REOPEN_STORAGE_PREFIX = 'atlas:pending-review-reopen:';
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]{1,128}$/;
 
 export const PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 export const MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH = 1000;
+export const PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+export const MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH = 1000;
 export const PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 export const MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH = 1000;
 export const PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS = 15 * 60 * 1000;
@@ -34,6 +37,19 @@ export interface PendingFindingReviewResolutionAttempt {
   expiresAt: string;
 }
 
+export interface PendingFindingReviewDecisionSupersessionAttempt {
+  version: 1;
+  caseId: string;
+  supersededDecisionId: string;
+  identityConclusion: FindingReviewIdentityConclusion;
+  justification: string;
+  correctionReason: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface PendingFindingReviewReopenAttempt {
   version: 1;
   caseId: string;
@@ -50,6 +66,10 @@ export type PendingDecisionInspection =
 
 export type PendingResolutionInspection =
   | { status: 'valid'; attempt: PendingFindingReviewResolutionAttempt }
+  | { status: 'invalid' | 'expired'; attempt: null };
+
+export type PendingDecisionSupersessionInspection =
+  | { status: 'valid'; attempt: PendingFindingReviewDecisionSupersessionAttempt }
   | { status: 'invalid' | 'expired'; attempt: null };
 
 export type PendingReopenInspection =
@@ -211,6 +231,124 @@ export function clearPendingFindingReviewDecisionAttempt(
   expectedAttempt?: PendingFindingReviewDecisionAttempt,
 ): void {
   clearAttempt(decisionStorageKey(caseId), expectedAttempt);
+}
+
+function decisionSupersessionStorageKey(caseId: string): string {
+  return `${DECISION_SUPERSESSION_STORAGE_PREFIX}${caseId}`;
+}
+
+export function createPendingFindingReviewDecisionSupersessionAttempt(
+  caseId: string,
+  supersededDecisionId: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  correctionReason: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+  now = Date.now(),
+): PendingFindingReviewDecisionSupersessionAttempt {
+  return {
+    version: 1,
+    caseId,
+    supersededDecisionId,
+    identityConclusion,
+    justification,
+    correctionReason,
+    expectedVersion,
+    idempotencyKey,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(
+      now + PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
+    ).toISOString(),
+  };
+}
+
+export function parsePendingFindingReviewDecisionSupersessionAttempt(
+  serialized: string,
+  expectedCaseId: string,
+  now = Date.now(),
+): PendingFindingReviewDecisionSupersessionAttempt | null {
+  const inspected = inspectPendingFindingReviewDecisionSupersessionAttempt(
+    serialized,
+    expectedCaseId,
+    now,
+  );
+  return inspected.status === 'valid' ? inspected.attempt : null;
+}
+
+export function inspectPendingFindingReviewDecisionSupersessionAttempt(
+  serialized: string,
+  expectedCaseId: string,
+  now = Date.now(),
+): PendingDecisionSupersessionInspection {
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { status: 'invalid', attempt: null };
+    }
+    const candidate = value as Record<string, unknown>;
+    const keys = Object.keys(candidate).sort();
+    if (keys.join(',') !== 'caseId,correctionReason,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,supersededDecisionId,version') {
+      return { status: 'invalid', attempt: null };
+    }
+    if (
+      candidate.version !== 1
+      || candidate.caseId !== expectedCaseId
+      || !isFindingReviewCaseId(candidate.caseId)
+      || !isFindingReviewCaseId(candidate.supersededDecisionId)
+      || (candidate.identityConclusion !== 'SAME_ASSET'
+        && candidate.identityConclusion !== 'DIFFERENT_ASSETS')
+      || typeof candidate.justification !== 'string'
+      || candidate.justification.length < 1
+      || candidate.justification.length > MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH
+      || candidate.justification !== candidate.justification.trim()
+      || typeof candidate.correctionReason !== 'string'
+      || candidate.correctionReason.length < 1
+      || candidate.correctionReason.length > MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH
+      || candidate.correctionReason !== candidate.correctionReason.trim()
+      || !Number.isSafeInteger(candidate.expectedVersion)
+      || Number(candidate.expectedVersion) < 1
+      || typeof candidate.idempotencyKey !== 'string'
+      || !IDEMPOTENCY_KEY_PATTERN.test(candidate.idempotencyKey)
+    ) return { status: 'invalid', attempt: null };
+    const timestampStatus = timestampsAreValid(
+      candidate.createdAt,
+      candidate.expiresAt,
+      PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
+      now,
+    );
+    if (timestampStatus === false) return { status: 'invalid', attempt: null };
+    if (timestampStatus === 'expired') return { status: 'expired', attempt: null };
+    return {
+      status: 'valid',
+      attempt: candidate as unknown as PendingFindingReviewDecisionSupersessionAttempt,
+    };
+  } catch {
+    return { status: 'invalid', attempt: null };
+  }
+}
+
+export function readPendingFindingReviewDecisionSupersessionAttempt(
+  caseId: string,
+): PendingDecisionSupersessionInspection | MissingInspection {
+  return readStoredAttempt(
+    decisionSupersessionStorageKey(caseId),
+    (serialized) => inspectPendingFindingReviewDecisionSupersessionAttempt(serialized, caseId),
+    (inspection) => inspection.status === 'valid',
+  );
+}
+
+export function storePendingFindingReviewDecisionSupersessionAttempt(
+  attempt: PendingFindingReviewDecisionSupersessionAttempt,
+): void {
+  storeAttempt(decisionSupersessionStorageKey(attempt.caseId), attempt);
+}
+
+export function clearPendingFindingReviewDecisionSupersessionAttempt(
+  caseId: string,
+  expectedAttempt?: PendingFindingReviewDecisionSupersessionAttempt,
+): void {
+  clearAttempt(decisionSupersessionStorageKey(caseId), expectedAttempt);
 }
 
 function resolutionStorageKey(caseId: string): string {

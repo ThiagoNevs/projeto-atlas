@@ -137,6 +137,12 @@ export interface CreateFindingReviewDecisionResponse {
   idempotentReplay: boolean;
 }
 
+export interface CreateFindingReviewDecisionSupersessionResponse {
+  decision: FindingReviewDecision;
+  supersededDecisionId: string;
+  idempotentReplay: boolean;
+}
+
 export interface FindingReviewCaseResolutionResult {
   eventId: string;
   caseId: string;
@@ -218,6 +224,7 @@ export function getFindingReviewEventLabel(value: string): string {
   if (value === 'CASE_CREATED') return 'Caso criado';
   if (value === 'CASE_STATUS_CHANGED') return 'Status do caso alterado';
   if (value === 'CASE_DECISION_RECORDED') return 'Decisão de identidade registrada';
+  if (value === 'CASE_DECISION_SUPERSEDED') return 'Decisão de identidade corrigida';
   if (value === 'CASE_RESOLVED') return 'Investigação concluída';
   if (value === 'CASE_REOPENED') return 'Investigação reaberta';
   return 'Evento do caso';
@@ -361,6 +368,22 @@ export function parseCreateFindingReviewDecisionResponse(
   if (!isRecord(value) || typeof value.idempotentReplay !== 'boolean') return null;
   const decision = parseDecision(value.decision);
   return decision ? { decision, idempotentReplay: value.idempotentReplay } : null;
+}
+
+export function parseCreateFindingReviewDecisionSupersessionResponse(
+  value: unknown,
+): CreateFindingReviewDecisionSupersessionResponse | null {
+  if (
+    !isRecord(value)
+    || typeof value.idempotentReplay !== 'boolean'
+    || !isFindingReviewCaseId(value.supersededDecisionId)
+  ) return null;
+  const decision = parseDecision(value.decision);
+  return decision ? {
+    decision,
+    supersededDecisionId: value.supersededDecisionId,
+    idempotentReplay: value.idempotentReplay,
+  } : null;
 }
 
 export function parseCreateFindingReviewCaseResolutionResponse(

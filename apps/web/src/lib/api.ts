@@ -16,6 +16,7 @@ import type {
   CreateFindingReviewCaseReopenResponse,
   CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
+  CreateFindingReviewDecisionSupersessionResponse,
   CreateFindingReviewCaseResponse,
   FindingReviewIdentityConclusion,
   FindingReviewCaseDetail,
@@ -28,6 +29,7 @@ import {
   parseCreateFindingReviewCaseReopenResponse,
   parseCreateFindingReviewCaseResolutionResponse,
   parseCreateFindingReviewDecisionResponse,
+  parseCreateFindingReviewDecisionSupersessionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
   parseUpdateFindingReviewCaseStatusResponse,
@@ -75,6 +77,7 @@ export type {
   CreateFindingReviewCaseReopenResponse,
   CreateFindingReviewCaseResolutionResponse,
   CreateFindingReviewDecisionResponse,
+  CreateFindingReviewDecisionSupersessionResponse,
   CreateFindingReviewCaseResponse,
   FindingReviewCaseAsset,
   FindingReviewCaseDetail,
@@ -1019,6 +1022,37 @@ export async function createFindingReviewDecision(
     },
     parseCreateFindingReviewDecisionResponse,
     'A API retornou uma decisão de identidade inválida.',
+    options,
+  );
+}
+
+export async function supersedeFindingReviewDecision(
+  caseId: string,
+  supersededDecisionId: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  correctionReason: string,
+  expectedVersion: number,
+  idempotencyKey: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<CreateFindingReviewDecisionSupersessionResponse> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(caseId)}/decisions/${encodeURIComponent(supersededDecisionId)}/supersessions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        expectedVersion,
+        identityConclusion,
+        justification: justification.trim(),
+        correctionReason: correctionReason.trim(),
+      }),
+    },
+    parseCreateFindingReviewDecisionSupersessionResponse,
+    'A API retornou uma correção de decisão inválida.',
     options,
   );
 }
