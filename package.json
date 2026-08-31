@@ -15,6 +15,7 @@
     "build": "corepack pnpm --recursive --if-present build",
     "lint": "corepack pnpm --recursive --if-present lint",
     "test": "corepack pnpm --recursive --if-present test",
+    "test:e2e:browser": "playwright test",
     "typecheck": "corepack pnpm --recursive --if-present typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -29,6 +30,7 @@
     "db:studio": "corepack pnpm --filter @atlas/api prisma:studio"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3"
   }

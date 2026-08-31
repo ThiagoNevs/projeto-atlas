@@ -194,3 +194,69 @@ jobs:
             printf '%s\n' "${tracked_changes}"
             exit 1
           fi
+
+  browser-e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      E2E_DATABASE_URL: postgresql://atlas_browser_e2e:atlas_browser_e2e@localhost:5432/atlas_browser_e2e
+      DATABASE_URL: postgresql://atlas_browser_e2e:atlas_browser_e2e@localhost:5432/atlas_browser_e2e
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: atlas_browser_e2e
+          POSTGRES_USER: atlas_browser_e2e
+          POSTGRES_PASSWORD: atlas_browser_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas_browser_e2e -d atlas_browser_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: corepack pnpm db:generate
+
+      - name: Apply migrations
+        run: corepack pnpm --filter @atlas/api exec prisma migrate deploy
+
+      - name: Install Chromium
+        run: corepack pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser smoke
+        env:
+          CI: true
+        run: corepack pnpm test:e2e:browser
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-failure-${{ github.run_id }}
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7

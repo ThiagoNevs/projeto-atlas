@@ -8,6 +8,7 @@ dist/
 next-env.d.ts
 apps/api/src/generated/prisma/
 coverage/
+test-results/
 *.tsbuildinfo
 
 # Environment and local state
