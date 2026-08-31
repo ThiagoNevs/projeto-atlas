@@ -16,6 +16,7 @@ import {
   createFindingReviewCaseReopen,
   createFindingReviewCaseResolution,
   createFindingReviewDecision,
+  supersedeFindingReviewDecision,
   createFindingReviewCase,
   getFindingReviewCase,
   getFindingReviewCases,
@@ -44,24 +45,30 @@ import {
 import { formatDateTime } from '../lib/format';
 import {
   MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH,
+  MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH,
   MAX_FINDING_REVIEW_REOPEN_JUSTIFICATION_LENGTH,
   MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH,
   PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
   PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS,
   PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
   createPendingFindingReviewDecisionAttempt,
+  createPendingFindingReviewDecisionSupersessionAttempt,
   createPendingFindingReviewReopenAttempt,
   createPendingFindingReviewResolutionAttempt,
   parsePendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewDecisionSupersessionAttempt,
   parsePendingFindingReviewReopenAttempt,
   parsePendingFindingReviewResolutionAttempt,
   type PendingFindingReviewDecisionAttempt,
+  type PendingFindingReviewDecisionSupersessionAttempt,
   type PendingFindingReviewReopenAttempt,
   type PendingFindingReviewResolutionAttempt,
 } from './finding-review-cases/review-case-command-pending';
 import {
   useReviewCaseCommands,
   type ReviewCaseDecisionCreator,
+  type ReviewCaseDecisionSuperseder,
   type ReviewCaseReopenCreator,
   type ReviewCaseResolutionCreator,
   type ReviewCaseStatusUpdater,
@@ -94,15 +101,19 @@ import {
 
 export {
   MAX_FINDING_REVIEW_DECISION_JUSTIFICATION_LENGTH,
+  MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH,
   MAX_FINDING_REVIEW_REOPEN_JUSTIFICATION_LENGTH,
   MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH,
   PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+  PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
   PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS,
   PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
   createPendingFindingReviewDecisionAttempt,
+  createPendingFindingReviewDecisionSupersessionAttempt,
   createPendingFindingReviewReopenAttempt,
   createPendingFindingReviewResolutionAttempt,
   parsePendingFindingReviewDecisionAttempt,
+  parsePendingFindingReviewDecisionSupersessionAttempt,
   parsePendingFindingReviewReopenAttempt,
   parsePendingFindingReviewResolutionAttempt,
   PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
@@ -112,9 +123,11 @@ export {
 };
 export type {
   PendingFindingReviewDecisionAttempt,
+  PendingFindingReviewDecisionSupersessionAttempt,
   PendingFindingReviewReopenAttempt,
   PendingFindingReviewResolutionAttempt,
   ReviewCaseDecisionCreator,
+  ReviewCaseDecisionSuperseder,
   ReviewCaseReopenCreator,
   ReviewCaseResolutionCreator,
   ReviewCaseStatusUpdater,
@@ -130,6 +143,7 @@ interface Props {
   createCase?: ReviewCaseCreator;
   updateStatus?: ReviewCaseStatusUpdater;
   createDecision?: ReviewCaseDecisionCreator;
+  supersedeDecision?: ReviewCaseDecisionSuperseder;
   createResolution?: ReviewCaseResolutionCreator;
   createReopen?: ReviewCaseReopenCreator;
 }
@@ -152,6 +166,7 @@ export function FindingReviewCasesPage({
   createCase = createFindingReviewCase,
   updateStatus = updateFindingReviewCaseStatus,
   createDecision = createFindingReviewDecision,
+  supersedeDecision = supersedeFindingReviewDecision,
   createResolution = createFindingReviewCaseResolution,
   createReopen = createFindingReviewCaseReopen,
 }: Props) {
@@ -191,6 +206,7 @@ export function FindingReviewCasesPage({
     selectedCaseIdRef: detailController.selectedIdRef,
     updateStatus,
     createDecision,
+    supersedeDecision,
     createResolution,
     createReopen,
     applyDetailUpdate: detailController.applyLocalUpdate,
@@ -507,6 +523,23 @@ function ReviewCaseDetail({
         submit={commands.decision.submit}
         reload={commands.decision.reload}
       />
+      <DecisionSupersessionControl
+        key={`supersession:${detail.id}:${detail.version}:${detail.currentDecision?.id ?? 'none'}`}
+        detail={detail}
+        loading={commands.supersession.loading}
+        mutationBlocked={commands.supersession.mutationBlocked}
+        error={commands.supersession.error}
+        fieldError={commands.supersession.fieldError}
+        success={commands.supersession.success}
+        uncertain={commands.supersession.uncertain}
+        reloadRequired={commands.supersession.reloadRequired}
+        pendingAttempt={commands.supersession.pendingAttempt?.caseId === detail.id
+          ? commands.supersession.pendingAttempt
+          : null}
+        submit={commands.supersession.submit}
+        reload={commands.supersession.reload}
+        clearError={commands.supersession.clearError}
+      />
       <ResolutionControl
         key={`resolution:${detail.id}:${detail.status}:${detail.version}:${detail.currentDecision?.id ?? 'none'}`}
         detail={detail}
@@ -625,7 +658,10 @@ function IdentityDecisionControl({
           <small>{formatDateTime(detail.currentDecision.createdAt)} · {detail.currentDecision.createdBy} · versão {detail.currentDecision.caseVersion}</small>
           <p>Esta decisão não alterou automaticamente o inventário.</p>
         </article>
-        <DecisionHistory decisions={detail.decisionHistory} />
+        <DecisionHistory
+          decisions={detail.decisionHistory}
+          currentDecisionId={detail.currentDecision.id}
+        />
         {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
       </section>
     );
@@ -729,13 +765,227 @@ function IdentityDecisionControl({
   );
 }
 
-function DecisionHistory({ decisions }: { decisions: FindingReviewCaseDetail['decisionHistory'] }) {
+function DecisionHistory({
+  decisions,
+  currentDecisionId,
+}: {
+  decisions: FindingReviewCaseDetail['decisionHistory'];
+  currentDecisionId: string;
+}) {
   if (decisions.length === 0) return null;
   return (
     <details className="review-decision-history">
       <summary>Histórico de decisões ({decisions.length})</summary>
-      <ol>{decisions.map((decision) => <li key={decision.id}><strong>{getFindingReviewIdentityConclusionLabel(decision.identityConclusion)}</strong><p className="review-decision-justification">{decision.justification}</p><small>{formatDateTime(decision.createdAt)} · {decision.createdBy} · versão {decision.caseVersion}</small></li>)}</ol>
+      <ol>{decisions.map((decision) => <li key={decision.id}><div className="review-decision-history-heading"><strong>{getFindingReviewIdentityConclusionLabel(decision.identityConclusion)}</strong><span className="status-badge">{decision.id === currentDecisionId ? 'Atual' : 'Substituída'}</span></div><p className="review-decision-justification">{decision.justification}</p><small>{formatDateTime(decision.createdAt)} · {decision.createdBy} · versão {decision.caseVersion}</small></li>)}</ol>
     </details>
+  );
+}
+
+function DecisionSupersessionControl({
+  detail,
+  loading,
+  mutationBlocked,
+  error,
+  fieldError,
+  success,
+  uncertain,
+  reloadRequired,
+  pendingAttempt,
+  submit,
+  reload,
+  clearError,
+}: {
+  detail: FindingReviewCaseDetail;
+  loading: boolean;
+  mutationBlocked: boolean;
+  error: string | null;
+  fieldError: 'justification' | 'correctionReason' | null;
+  success: string | null;
+  uncertain: boolean;
+  reloadRequired: boolean;
+  pendingAttempt: PendingFindingReviewDecisionSupersessionAttempt | null;
+  submit: (
+    identityConclusion?: FindingReviewIdentityConclusion,
+    justification?: string,
+    correctionReason?: string,
+  ) => Promise<void>;
+  reload: () => void;
+  clearError: () => void;
+}) {
+  const currentDecision = detail.currentDecision;
+  const eligible = detail.status === 'IN_REVIEW' && currentDecision !== null;
+  const [editing, setEditing] = useState(false);
+  const [confirmation, setConfirmation] = useState(false);
+  const [conclusion, setConclusion] = useState<FindingReviewIdentityConclusion | ''>(
+    pendingAttempt?.identityConclusion ?? currentDecision?.identityConclusion ?? '',
+  );
+  const [justification, setJustification] = useState(
+    pendingAttempt?.justification ?? currentDecision?.justification ?? '',
+  );
+  const [correctionReason, setCorrectionReason] = useState(
+    pendingAttempt?.correctionReason ?? '',
+  );
+  const [conclusionError, setConclusionError] = useState<string | null>(null);
+  const [justificationError, setJustificationError] = useState<string | null>(null);
+  const [correctionReasonError, setCorrectionReasonError] = useState<string | null>(null);
+  const [noOpError, setNoOpError] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const firstRadio = useRef<HTMLInputElement | null>(null);
+  const justificationField = useRef<HTMLTextAreaElement | null>(null);
+  const correctionReasonField = useRef<HTMLTextAreaElement | null>(null);
+  const confirmationHeading = useRef<HTMLHeadingElement | null>(null);
+  const focusFrame = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (focusFrame.current !== null) window.cancelAnimationFrame(focusFrame.current);
+  }, []);
+
+  useEffect(() => {
+    if (confirmation) confirmationHeading.current?.focus();
+  }, [confirmation]);
+
+  useEffect(() => {
+    if (!fieldError) return;
+    focusFrame.current = window.requestAnimationFrame(() => {
+      focusFrame.current = null;
+      if (fieldError === 'justification') justificationField.current?.focus();
+      else correctionReasonField.current?.focus();
+    });
+  }, [fieldError]);
+
+  if (!eligible && !uncertain && !success && !error) return null;
+
+  const normalizedJustification = justification.trim();
+  const normalizedCorrectionReason = correctionReason.trim();
+  const locked = loading || mutationBlocked || uncertain || reloadRequired;
+  const showingConfirmation = confirmation && fieldError === null;
+
+  function scheduleFocus(control: 'trigger' | 'first'): void {
+    if (focusFrame.current !== null) window.cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = window.requestAnimationFrame(() => {
+      focusFrame.current = null;
+      if (control === 'trigger') trigger.current?.focus();
+      else firstRadio.current?.focus();
+    });
+  }
+
+  function startEditing(): void {
+    if (!currentDecision) return;
+    setConclusion(currentDecision.identityConclusion);
+    setJustification(currentDecision.justification);
+    setCorrectionReason('');
+    setConclusionError(null);
+    setJustificationError(null);
+    setCorrectionReasonError(null);
+    setNoOpError(null);
+    clearError();
+    setEditing(true);
+    scheduleFocus('first');
+  }
+
+  function cancelEditing(): void {
+    setEditing(false);
+    setConfirmation(false);
+    clearError();
+    scheduleFocus('trigger');
+  }
+
+  function reviewCorrection(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!currentDecision) return;
+    let firstInvalid: 'conclusion' | 'justification' | 'correctionReason' | null = null;
+    if (!conclusion) {
+      setConclusionError('Selecione uma nova conclusão.');
+      firstInvalid = 'conclusion';
+    }
+    if (normalizedJustification.length < 1) {
+      setJustificationError('Informe a nova justificativa.');
+      firstInvalid ??= 'justification';
+    } else if (normalizedJustification.length > MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH) {
+      setJustificationError('A nova justificativa deve ter no máximo 1000 caracteres.');
+      firstInvalid ??= 'justification';
+    }
+    if (normalizedCorrectionReason.length < 1) {
+      setCorrectionReasonError('Informe o motivo da correção.');
+      firstInvalid ??= 'correctionReason';
+    } else if (normalizedCorrectionReason.length > MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH) {
+      setCorrectionReasonError('O motivo da correção deve ter no máximo 1000 caracteres.');
+      firstInvalid ??= 'correctionReason';
+    }
+    const noOp = conclusion === currentDecision.identityConclusion
+      && normalizedJustification === currentDecision.justification.trim();
+    if (noOp) {
+      setNoOpError('Altere a conclusão ou a justificativa da decisão.');
+      firstInvalid ??= 'justification';
+    }
+    if (firstInvalid) {
+      if (firstInvalid === 'conclusion') firstRadio.current?.focus();
+      else if (firstInvalid === 'justification') justificationField.current?.focus();
+      else correctionReasonField.current?.focus();
+      return;
+    }
+    setConclusionError(null);
+    setJustificationError(null);
+    setCorrectionReasonError(null);
+    setNoOpError(null);
+    setConfirmation(true);
+  }
+
+  return (
+    <section className="review-decision-control" aria-labelledby="review-decision-supersession-title">
+      <div>
+        <p className="section-kicker">Correção auditável</p>
+        <h3 id="review-decision-supersession-title">Correção da decisão</h3>
+        <p>A decisão anterior será preservada no histórico.</p>
+      </div>
+      {uncertain && pendingAttempt ? (
+        <div className="review-decision-uncertain" role="alert">
+          <strong>Resultado incerto</strong>
+          <p>Não foi possível confirmar a correção. Tente novamente para consultar o mesmo resultado com a mesma chave de segurança.</p>
+          <button className="button button-primary" type="button" disabled={loading || mutationBlocked} onClick={() => void submit()}>{loading ? 'Tentando novamente…' : 'Tentar novamente'}</button>
+        </div>
+      ) : eligible && !editing && !mutationBlocked ? (
+        <button ref={trigger} className="button button-secondary" type="button" onClick={startEditing}>Corrigir decisão</button>
+      ) : eligible && editing && !showingConfirmation ? (
+        <form className="review-decision-form" onSubmit={reviewCorrection}>
+          <fieldset disabled={locked} aria-invalid={conclusionError !== null} aria-describedby={conclusionError ? 'review-supersession-conclusion-error' : undefined}>
+            <legend>Nova conclusão</legend>
+            {(['SAME_ASSET', 'DIFFERENT_ASSETS'] as const).map((option, index) => (
+              <label className="review-decision-option" key={option}>
+                <input ref={index === 0 ? firstRadio : undefined} type="radio" name="supersession-identity-conclusion" value={option} checked={conclusion === option} onChange={() => { setConclusion(option); setConclusionError(null); setNoOpError(null); setConfirmation(false); clearError(); }} />
+                <span><strong>{getFindingReviewIdentityConclusionLabel(option)}</strong></span>
+              </label>
+            ))}
+          </fieldset>
+          {conclusionError ? <p id="review-supersession-conclusion-error" className="form-message form-message-error" role="alert">{conclusionError}</p> : null}
+          <label htmlFor="review-supersession-justification">Nova justificativa</label>
+          <textarea id="review-supersession-justification" ref={justificationField} value={justification} maxLength={MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH + 1} disabled={locked} aria-invalid={justificationError !== null || noOpError !== null || fieldError === 'justification'} aria-describedby={`review-supersession-justification-help review-supersession-justification-counter${justificationError ? ' review-supersession-justification-error' : ''}${noOpError ? ' review-supersession-no-op-error' : ''}${fieldError === 'justification' ? ' review-supersession-server-error' : ''}`} onInput={(event) => { setJustification(event.currentTarget.value); setJustificationError(null); setNoOpError(null); setConfirmation(false); clearError(); }} />
+          <small id="review-supersession-justification-help">Espaços externos serão desconsiderados; quebras internas serão preservadas.</small>
+          <span id="review-supersession-justification-counter" className="review-decision-counter">{justification.length} / {MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH}</span>
+          {justificationError ? <p id="review-supersession-justification-error" className="form-message form-message-error" role="alert">{justificationError}</p> : null}
+          <label htmlFor="review-supersession-reason">Motivo da correção</label>
+          <textarea id="review-supersession-reason" ref={correctionReasonField} value={correctionReason} maxLength={MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH + 1} disabled={locked} aria-invalid={correctionReasonError !== null || fieldError === 'correctionReason'} aria-describedby={`review-supersession-reason-help review-supersession-reason-counter${correctionReasonError ? ' review-supersession-correction-reason-error' : ''}${fieldError === 'correctionReason' ? ' review-supersession-server-error' : ''}`} onInput={(event) => { setCorrectionReason(event.currentTarget.value); setCorrectionReasonError(null); setConfirmation(false); clearError(); }} />
+          <small id="review-supersession-reason-help">Explique por que a decisão precisa ser corrigida. Não inclua dados sensíveis.</small>
+          <span id="review-supersession-reason-counter" className="review-decision-counter">{correctionReason.length} / {MAX_FINDING_REVIEW_DECISION_SUPERSESSION_TEXT_LENGTH}</span>
+          {correctionReasonError ? <p id="review-supersession-correction-reason-error" className="form-message form-message-error" role="alert">{correctionReasonError}</p> : null}
+          {noOpError ? <p id="review-supersession-no-op-error" className="form-message form-message-error" role="alert">{noOpError}</p> : null}
+          <div className="review-decision-actions"><button className="button button-primary" type="submit" disabled={locked}>Revisar correção</button><button className="button button-secondary" type="button" disabled={loading} onClick={cancelEditing}>Cancelar</button></div>
+        </form>
+      ) : eligible && editing ? (
+        <div className="review-decision-confirmation">
+          <h4 ref={confirmationHeading} tabIndex={-1}>Confirmar correção da decisão</h4>
+          <h5>Decisão atual</h5>
+          <dl><div><dt>Conclusão</dt><dd>{getFindingReviewIdentityConclusionLabel(currentDecision!.identityConclusion)}</dd></div><div><dt>Justificativa</dt><dd className="review-decision-justification">{currentDecision!.justification}</dd></div></dl>
+          <h5>Nova decisão</h5>
+          <dl><div><dt>Conclusão</dt><dd>{getFindingReviewIdentityConclusionLabel(conclusion as FindingReviewIdentityConclusion)}</dd></div><div><dt>Justificativa</dt><dd className="review-decision-justification">{normalizedJustification}</dd></div><div><dt>Motivo da correção</dt><dd className="review-decision-justification">{normalizedCorrectionReason}</dd></div></dl>
+          <p>A decisão anterior será preservada no histórico. A correção não altera automaticamente o inventário.</p>
+          <div className="review-decision-actions"><button className="button button-primary" type="button" disabled={loading || mutationBlocked} onClick={() => void submit(conclusion as FindingReviewIdentityConclusion, normalizedJustification, normalizedCorrectionReason)}>{loading ? 'Corrigindo…' : 'Confirmar correção'}</button><button className="button button-secondary" type="button" disabled={loading} onClick={() => { setConfirmation(false); scheduleFocus('first'); }}>Voltar</button></div>
+        </div>
+      ) : null}
+      {success ? <p className="form-message form-message-success" role="status" aria-live="polite">{success}</p> : null}
+      {error ? <div id="review-supersession-server-error" className="form-message form-message-error" role="alert">{error}{reloadRequired ? <button className="table-link-button" type="button" onClick={reload}> Recarregar caso</button> : null}</div> : null}
+      {loading ? <p className="form-message" role="status" aria-live="polite">Corrigindo a decisão…</p> : null}
+    </section>
   );
 }
 
@@ -1126,6 +1376,21 @@ function formatTransitionJustification(metadata: Record<string, string> | null) 
 }
 
 function formatDecisionEvent(eventType: string, metadata: Record<string, string> | null) {
+  if (eventType === 'CASE_DECISION_SUPERSEDED') {
+    const previous = metadata?.previousIdentityConclusion;
+    const next = metadata?.identityConclusion;
+    const correctionReason = metadata?.correctionReason;
+    return (
+      <>
+        {(
+          previous === 'SAME_ASSET' || previous === 'DIFFERENT_ASSETS'
+        ) && (
+          next === 'SAME_ASSET' || next === 'DIFFERENT_ASSETS'
+        ) ? <span>{getFindingReviewIdentityConclusionLabel(previous)} → {getFindingReviewIdentityConclusionLabel(next)}</span> : null}
+        {correctionReason ? <span className="review-event-justification"><b>Motivo da correção:</b> {correctionReason}</span> : null}
+      </>
+    );
+  }
   if (eventType !== 'CASE_DECISION_RECORDED') return null;
   const conclusion = metadata?.identityConclusion;
   if (conclusion !== 'SAME_ASSET' && conclusion !== 'DIFFERENT_ASSETS') return null;

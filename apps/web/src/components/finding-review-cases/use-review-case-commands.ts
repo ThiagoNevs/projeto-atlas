@@ -15,8 +15,10 @@ import {
   type CreateFindingReviewCaseReopenResponse,
   type CreateFindingReviewCaseResolutionResponse,
   type CreateFindingReviewDecisionResponse,
+  type CreateFindingReviewDecisionSupersessionResponse,
   type FindingReviewCaseDetail,
   type FindingReviewCasesRequestOptions,
+  type FindingReviewDecision,
   type FindingReviewIdentityConclusion,
   type UpdateFindingReviewCaseStatusResponse,
 } from '../../lib/api';
@@ -30,21 +32,27 @@ import {
   MAX_FINDING_REVIEW_REOPEN_JUSTIFICATION_LENGTH,
   MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH,
   clearPendingFindingReviewDecisionAttempt,
+  clearPendingFindingReviewDecisionSupersessionAttempt,
   clearPendingFindingReviewReopenAttempt,
   clearPendingFindingReviewResolutionAttempt,
   createPendingFindingReviewDecisionAttempt,
+  createPendingFindingReviewDecisionSupersessionAttempt,
   createPendingFindingReviewReopenAttempt,
   createPendingFindingReviewResolutionAttempt,
   inspectPendingFindingReviewDecisionAttempt,
+  inspectPendingFindingReviewDecisionSupersessionAttempt,
   inspectPendingFindingReviewReopenAttempt,
   inspectPendingFindingReviewResolutionAttempt,
   readPendingFindingReviewDecisionAttempt,
+  readPendingFindingReviewDecisionSupersessionAttempt,
   readPendingFindingReviewReopenAttempt,
   readPendingFindingReviewResolutionAttempt,
   storePendingFindingReviewDecisionAttempt,
+  storePendingFindingReviewDecisionSupersessionAttempt,
   storePendingFindingReviewReopenAttempt,
   storePendingFindingReviewResolutionAttempt,
   type PendingFindingReviewDecisionAttempt,
+  type PendingFindingReviewDecisionSupersessionAttempt,
   type PendingFindingReviewReopenAttempt,
   type PendingFindingReviewResolutionAttempt,
 } from './review-case-command-pending';
@@ -74,6 +82,17 @@ export type ReviewCaseResolutionCreator = (
   options?: FindingReviewCasesRequestOptions,
 ) => Promise<CreateFindingReviewCaseResolutionResponse>;
 
+export type ReviewCaseDecisionSuperseder = (
+  caseId: string,
+  supersededDecisionId: string,
+  identityConclusion: FindingReviewIdentityConclusion,
+  justification: string,
+  correctionReason: string,
+  expectedVersion: number,
+  key: string,
+  options?: FindingReviewCasesRequestOptions,
+) => Promise<CreateFindingReviewDecisionSupersessionResponse>;
+
 export type ReviewCaseReopenCreator = (
   id: string,
   expectedVersion: number,
@@ -87,6 +106,7 @@ interface UseReviewCaseCommandsOptions {
   selectedCaseIdRef: RefObject<string | null>;
   updateStatus: ReviewCaseStatusUpdater;
   createDecision: ReviewCaseDecisionCreator;
+  supersedeDecision: ReviewCaseDecisionSuperseder;
   createResolution: ReviewCaseResolutionCreator;
   createReopen: ReviewCaseReopenCreator;
   applyDetailUpdate: Dispatch<SetStateAction<FindingReviewCaseDetail | null>>;
@@ -110,7 +130,7 @@ function isAbort(error: unknown): boolean {
 
 function mergeDecisionHistory(
   history: FindingReviewCaseDetail['decisionHistory'],
-  decision: CreateFindingReviewDecisionResponse['decision'],
+  decision: FindingReviewDecision,
 ): FindingReviewCaseDetail['decisionHistory'] {
   return [...history.filter((item) => item.id !== decision.id), decision]
     .sort((left, right) => {
@@ -119,6 +139,46 @@ function mergeDecisionHistory(
       if (left.id === right.id) return 0;
       return left.id < right.id ? -1 : 1;
     });
+}
+
+function latestKnownDecision(
+  history: FindingReviewCaseDetail['decisionHistory'],
+): FindingReviewDecision | null {
+  return history.reduce<FindingReviewDecision | null>((latest, decision) => {
+    if (!latest) return decision;
+    if (decision.caseVersion !== latest.caseVersion) {
+      return decision.caseVersion > latest.caseVersion ? decision : latest;
+    }
+    if (decision.createdAt !== latest.createdAt) {
+      return decision.createdAt > latest.createdAt ? decision : latest;
+    }
+    return decision.id > latest.id ? decision : latest;
+  }, null);
+}
+
+function reconcileDecisionDetail(
+  current: FindingReviewCaseDetail,
+  refreshed: FindingReviewCaseDetail,
+): FindingReviewCaseDetail {
+  const mergedHistory = current.decisionHistory.reduce(
+    (history, decision) => mergeDecisionHistory(history, decision),
+    refreshed.decisionHistory,
+  );
+  const currentDecision = latestKnownDecision(mergedHistory);
+  if (refreshed.version < current.version) {
+    return {
+      ...current,
+      currentDecision,
+      decisionHistory: mergedHistory,
+      version: Math.max(current.version, currentDecision?.caseVersion ?? 0),
+    };
+  }
+  return {
+    ...refreshed,
+    currentDecision,
+    decisionHistory: mergedHistory,
+    version: Math.max(refreshed.version, current.version, currentDecision?.caseVersion ?? 0),
+  };
 }
 
 function mergeResolutionEvent(
@@ -151,6 +211,7 @@ export function useReviewCaseCommands({
   selectedCaseIdRef,
   updateStatus,
   createDecision,
+  supersedeDecision,
   createResolution,
   createReopen,
   applyDetailUpdate,
@@ -182,6 +243,24 @@ export function useReviewCaseCommands({
   const pendingDecisionAttempt = useRef<PendingFindingReviewDecisionAttempt | null>(null);
   const [renderedDecisionAttempt, setRenderedDecisionAttempt] = useState<
     PendingFindingReviewDecisionAttempt | null
+  >(null);
+
+  const [supersessionLoading, setSupersessionLoading] = useState(false);
+  const [supersessionError, setSupersessionError] = useState<string | null>(null);
+  const [supersessionFieldError, setSupersessionFieldError] = useState<
+    'justification' | 'correctionReason' | null
+  >(null);
+  const [supersessionSuccess, setSupersessionSuccess] = useState<string | null>(null);
+  const [supersessionUncertain, setSupersessionUncertain] = useState(false);
+  const [supersessionReloadRequired, setSupersessionReloadRequired] = useState(false);
+  const supersessionInFlight = useRef(false);
+  const supersessionController = useRef<AbortController | null>(null);
+  const supersessionSequence = useRef(0);
+  const pendingSupersessionAttempt = useRef<
+    PendingFindingReviewDecisionSupersessionAttempt | null
+  >(null);
+  const [renderedSupersessionAttempt, setRenderedSupersessionAttempt] = useState<
+    PendingFindingReviewDecisionSupersessionAttempt | null
   >(null);
 
   const [resolutionLoading, setResolutionLoading] = useState(false);
@@ -216,6 +295,13 @@ export function useReviewCaseCommands({
     setRenderedDecisionAttempt(attempt);
   }
 
+  function assignSupersessionAttempt(
+    attempt: PendingFindingReviewDecisionSupersessionAttempt | null,
+  ): void {
+    pendingSupersessionAttempt.current = attempt;
+    setRenderedSupersessionAttempt(attempt);
+  }
+
   function assignResolutionAttempt(attempt: PendingFindingReviewResolutionAttempt | null): void {
     pendingResolutionAttempt.current = attempt;
     setRenderedResolutionAttempt(attempt);
@@ -237,6 +323,11 @@ export function useReviewCaseCommands({
       }
       decisionSequence.current += 1;
       decisionController.current?.abort();
+      if (supersessionInFlight.current && pendingSupersessionAttempt.current) {
+        storePendingFindingReviewDecisionSupersessionAttempt(pendingSupersessionAttempt.current);
+      }
+      supersessionSequence.current += 1;
+      supersessionController.current?.abort();
       if (resolutionInFlight.current && pendingResolutionAttempt.current) {
         storePendingFindingReviewResolutionAttempt(pendingResolutionAttempt.current);
       }
@@ -296,6 +387,38 @@ export function useReviewCaseCommands({
     setDecisionUncertain(false);
     setDecisionReloadRequired(false);
     assignDecisionAttempt(null);
+  }
+
+  function restorePendingSupersessionForDetail(value: FindingReviewCaseDetail): void {
+    const stored = readPendingFindingReviewDecisionSupersessionAttempt(value.id);
+    if (stored.status === 'valid') {
+      assignSupersessionAttempt(stored.attempt);
+      setSupersessionUncertain(true);
+      setSupersessionError(null);
+    } else if (stored.status === 'invalid' || stored.status === 'expired') {
+      assignSupersessionAttempt(null);
+      setSupersessionUncertain(false);
+      setSupersessionError(stored.status === 'expired'
+        ? 'A tentativa incerta de correção expirou e foi descartada.'
+        : 'A tentativa incerta de correção era inválida e foi descartada.');
+    }
+  }
+
+  function invalidateSupersessionRequest(persistUncertain = true): void {
+    if (persistUncertain && supersessionInFlight.current && pendingSupersessionAttempt.current) {
+      storePendingFindingReviewDecisionSupersessionAttempt(pendingSupersessionAttempt.current);
+    }
+    supersessionSequence.current += 1;
+    supersessionController.current?.abort();
+    supersessionController.current = null;
+    supersessionInFlight.current = false;
+    setSupersessionLoading(false);
+    setSupersessionError(null);
+    setSupersessionFieldError(null);
+    setSupersessionSuccess(null);
+    setSupersessionUncertain(false);
+    setSupersessionReloadRequired(false);
+    assignSupersessionAttempt(null);
   }
 
   function restorePendingResolutionForDetail(value: FindingReviewCaseDetail): void {
@@ -375,6 +498,7 @@ export function useReviewCaseCommands({
 
   function invalidateAll(): void {
     invalidateDecisionRequest();
+    invalidateSupersessionRequest();
     invalidateResolutionRequest();
     invalidateReopenRequest();
     invalidateStatusRequest();
@@ -382,6 +506,7 @@ export function useReviewCaseCommands({
 
   function restoreForDetail(value: FindingReviewCaseDetail): void {
     restorePendingDecisionForDetail(value);
+    restorePendingSupersessionForDetail(value);
     restorePendingResolutionForDetail(value);
     restorePendingReopenForDetail(value);
   }
@@ -407,6 +532,10 @@ export function useReviewCaseCommands({
       || selectedCaseIdRef.current !== current.id
       || statusInFlight.current
       || decisionInFlight.current
+      || supersessionInFlight.current
+      || supersessionUncertain
+      || supersessionReloadRequired
+      || statusConflict
       || resolutionInFlight.current
       || resolutionUncertain
       || resolutionReloadRequired
@@ -538,6 +667,9 @@ export function useReviewCaseCommands({
       || selectedCaseIdRef.current !== current.id
       || decisionInFlight.current
       || statusInFlight.current
+      || supersessionInFlight.current
+      || supersessionUncertain
+      || supersessionReloadRequired
       || resolutionInFlight.current
       || resolutionUncertain
       || resolutionReloadRequired
@@ -672,6 +804,231 @@ export function useReviewCaseCommands({
     retryList();
   }
 
+  function canCommitSupersession(
+    sequence: number,
+    controller: AbortController,
+    expectedId: string,
+  ): boolean {
+    return mounted.current
+      && sequence === supersessionSequence.current
+      && !controller.signal.aborted
+      && selectedCaseIdRef.current === expectedId;
+  }
+
+  async function refreshSupersessionDetail(
+    caseId: string,
+    expectedSequence = supersessionSequence.current,
+  ): Promise<void> {
+    try {
+      const refreshed = await loadFreshDetail(caseId);
+      if (
+        !mounted.current
+        || selectedCaseIdRef.current !== caseId
+        || supersessionSequence.current !== expectedSequence
+      ) return;
+      applyDetailUpdate((current) => current?.id === caseId
+        ? reconcileDecisionDetail(current, refreshed)
+        : current);
+      setSupersessionReloadRequired(false);
+    } catch {
+      if (
+        !mounted.current
+        || selectedCaseIdRef.current !== caseId
+        || supersessionSequence.current !== expectedSequence
+      ) return;
+      setSupersessionReloadRequired(true);
+      setSupersessionError((value) => value
+        ?? 'A correção foi confirmada, mas não foi possível atualizar todo o histórico do caso.');
+    }
+  }
+
+  async function submitSupersession(
+    identityConclusion?: FindingReviewIdentityConclusion,
+    justification?: string,
+    correctionReason?: string,
+  ): Promise<void> {
+    const current = detail;
+    if (
+      !current
+      || selectedCaseIdRef.current !== current.id
+      || supersessionInFlight.current
+      || statusInFlight.current
+      || statusConflict
+      || decisionInFlight.current
+      || decisionUncertain
+      || decisionReloadRequired
+      || resolutionInFlight.current
+      || resolutionUncertain
+      || resolutionReloadRequired
+      || reopenInFlight.current
+      || reopenUncertain
+      || reopenReloadRequired
+    ) return;
+
+    let attempt = pendingSupersessionAttempt.current;
+    if (attempt) {
+      const inspected = inspectPendingFindingReviewDecisionSupersessionAttempt(
+        JSON.stringify(attempt),
+        current.id,
+      );
+      if (inspected.status !== 'valid') {
+        clearPendingFindingReviewDecisionSupersessionAttempt(current.id, attempt);
+        assignSupersessionAttempt(null);
+        setSupersessionUncertain(false);
+        setSupersessionReloadRequired(true);
+        setSupersessionError(inspected.status === 'expired'
+          ? 'A tentativa incerta expirou. Revise a correção antes de iniciar uma nova tentativa.'
+          : 'A tentativa incerta era inválida e foi descartada. Revise a correção novamente.');
+        return;
+      }
+      attempt = inspected.attempt;
+    } else {
+      const currentDecision = current.currentDecision;
+      const normalizedJustification = justification?.trim() ?? '';
+      const normalizedCorrectionReason = correctionReason?.trim() ?? '';
+      if (
+        !currentDecision
+        || current.status !== 'IN_REVIEW'
+        || !identityConclusion
+        || normalizedJustification.length < 1
+        || normalizedCorrectionReason.length < 1
+      ) return;
+      attempt = createPendingFindingReviewDecisionSupersessionAttempt(
+        current.id,
+        currentDecision.id,
+        identityConclusion,
+        normalizedJustification,
+        normalizedCorrectionReason,
+        current.version,
+        createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
+      );
+      assignSupersessionAttempt(attempt);
+    }
+
+    // A completed idempotent command may still have a fresh detail GET in flight.
+    // Superseding starts a new authoritative mutation and must make those older
+    // command refreshes unable to commit after its local success.
+    decisionSequence.current += 1;
+    resolutionSequence.current += 1;
+    reopenSequence.current += 1;
+    invalidateDetailRequest();
+    const controller = new AbortController();
+    const sequence = ++supersessionSequence.current;
+    const expectedId = attempt.caseId;
+    supersessionController.current = controller;
+    supersessionInFlight.current = true;
+    setSupersessionLoading(true);
+    setSupersessionError(null);
+    setSupersessionFieldError(null);
+    setSupersessionSuccess(null);
+    setSupersessionReloadRequired(false);
+
+    try {
+      const created = await supersedeDecision(
+        attempt.caseId,
+        attempt.supersededDecisionId,
+        attempt.identityConclusion,
+        attempt.justification,
+        attempt.correctionReason,
+        attempt.expectedVersion,
+        attempt.idempotencyKey,
+        { signal: controller.signal },
+      );
+      if (
+        created.decision.caseId !== expectedId
+        || created.supersededDecisionId !== attempt.supersededDecisionId
+        || created.decision.identityConclusion !== attempt.identityConclusion
+        || created.decision.justification !== attempt.justification
+        || created.decision.caseVersion !== attempt.expectedVersion + 1
+      ) throw new ApiError('A API retornou uma correção incompatível com a solicitação.', 502);
+
+      clearPendingFindingReviewDecisionSupersessionAttempt(expectedId, attempt);
+      if (pendingSupersessionAttempt.current === attempt) assignSupersessionAttempt(null);
+      if (!canCommitSupersession(sequence, controller, expectedId)) return;
+      setSupersessionUncertain(false);
+      applyDetailUpdate((value) => {
+        if (value?.id !== expectedId) return value;
+        const decisionHistory = mergeDecisionHistory(value.decisionHistory, created.decision);
+        const currentDecision = latestKnownDecision(decisionHistory);
+        return {
+          ...value,
+          currentDecision,
+          decisionHistory,
+          version: Math.max(value.version, created.decision.caseVersion),
+        };
+      });
+      setSupersessionSuccess(created.idempotentReplay
+        ? 'Decisão corrigida anteriormente, recuperada com segurança.'
+        : 'Decisão corrigida.');
+      requestListReload();
+      void refreshSupersessionDetail(expectedId, sequence);
+    } catch (cause) {
+      const conclusive = cause instanceof ApiError
+        && [400, 404, 409, 422, 503].includes(cause.status);
+      if (conclusive) {
+        clearPendingFindingReviewDecisionSupersessionAttempt(expectedId, attempt);
+        if (pendingSupersessionAttempt.current === attempt) assignSupersessionAttempt(null);
+      } else {
+        storePendingFindingReviewDecisionSupersessionAttempt(attempt);
+      }
+      if (!canCommitSupersession(sequence, controller, expectedId)) return;
+      if (!conclusive) {
+        setSupersessionUncertain(true);
+        setSupersessionError('Não foi possível confirmar se a decisão foi corrigida. Tente novamente para consultar o mesmo resultado com segurança.');
+      } else if (cause instanceof ApiError && (
+        cause.code === 'INVALID_FINDING_REVIEW_DECISION_JUSTIFICATION'
+        || cause.code === 'FINDING_REVIEW_DECISION_JUSTIFICATION_REQUIRED'
+      )) {
+        setSupersessionFieldError('justification');
+        setSupersessionError(cause.message);
+      } else if (cause instanceof ApiError && (
+        cause.code === 'INVALID_FINDING_REVIEW_DECISION_CORRECTION_REASON'
+        || cause.code === 'FINDING_REVIEW_DECISION_CORRECTION_REASON_REQUIRED'
+      )) {
+        setSupersessionFieldError('correctionReason');
+        setSupersessionError(cause.message);
+      } else if (cause instanceof ApiError && cause.code === 'FINDING_REVIEW_DECISION_SUPERSESSION_NO_CHANGE') {
+        setSupersessionError('Altere a conclusão ou a justificativa da decisão.');
+      } else if (cause instanceof ApiError && cause.code === 'FINDING_REVIEW_CASE_VERSION_CONFLICT') {
+        setSupersessionReloadRequired(true);
+        setSupersessionError('O caso foi alterado desde que você iniciou esta correção.');
+      } else if (cause instanceof ApiError && cause.code === 'FINDING_REVIEW_DECISION_NOT_CURRENT') {
+        setSupersessionReloadRequired(true);
+        setSupersessionError('Esta decisão não é mais a decisão atual. Atualize o caso.');
+      } else if (cause instanceof ApiError && cause.code === 'IDEMPOTENCY_KEY_REUSED') {
+        setSupersessionReloadRequired(true);
+        setSupersessionError('Esta tentativa não corresponde à correção original. Recarregue o caso.');
+      } else if (cause instanceof ApiError && cause.status === 422) {
+        setSupersessionReloadRequired(true);
+        setSupersessionError('A correção não é mais permitida para o estado ou snapshot atual do caso.');
+      } else if (cause instanceof ApiError && cause.status === 404) {
+        setSupersessionReloadRequired(true);
+        setSupersessionError('O caso não foi encontrado. Recarregue a lista para confirmar sua situação.');
+      } else if (cause instanceof ApiError && cause.status === 503) {
+        setSupersessionError('A correção de decisões está indisponível neste ambiente. Nenhum dado foi alterado.');
+      } else {
+        setSupersessionError(displayError(cause, 'Não foi possível corrigir a decisão.'));
+      }
+    } finally {
+      if (sequence === supersessionSequence.current) supersessionInFlight.current = false;
+      if (supersessionController.current === controller) supersessionController.current = null;
+      if (mounted.current && sequence === supersessionSequence.current) {
+        setSupersessionLoading(false);
+      }
+    }
+  }
+
+  function reloadSupersession(): void {
+    assignSupersessionAttempt(null);
+    setSupersessionUncertain(false);
+    setSupersessionError(null);
+    setSupersessionFieldError(null);
+    setSupersessionSuccess(null);
+    setSupersessionReloadRequired(false);
+    retryDetail();
+    retryList();
+  }
+
   function canCommitResolution(
     sequence: number,
     controller: AbortController,
@@ -721,6 +1078,9 @@ export function useReviewCaseCommands({
       || resolutionInFlight.current
       || decisionInFlight.current
       || statusInFlight.current
+      || supersessionInFlight.current
+      || supersessionUncertain
+      || supersessionReloadRequired
       || reopenInFlight.current
       || reopenUncertain
       || reopenReloadRequired
@@ -921,6 +1281,9 @@ export function useReviewCaseCommands({
       || statusInFlight.current
       || decisionInFlight.current
       || resolutionInFlight.current
+      || supersessionInFlight.current
+      || supersessionUncertain
+      || supersessionReloadRequired
       || resolutionUncertain
       || resolutionReloadRequired
       || decisionUncertain
@@ -1089,6 +1452,26 @@ export function useReviewCaseCommands({
       reload: reloadDecision,
       mutationBlocked: statusLoading || statusConflict || resolutionLoading
         || resolutionUncertain || resolutionReloadRequired || reopenLoading
+        || reopenUncertain || reopenReloadRequired || supersessionLoading
+        || supersessionUncertain || supersessionReloadRequired,
+    },
+    supersession: {
+      loading: supersessionLoading,
+      error: supersessionError,
+      fieldError: supersessionFieldError,
+      success: supersessionSuccess,
+      uncertain: supersessionUncertain,
+      reloadRequired: supersessionReloadRequired,
+      pendingAttempt: renderedSupersessionAttempt,
+      submit: submitSupersession,
+      reload: reloadSupersession,
+      clearError: () => {
+        setSupersessionError(null);
+        setSupersessionFieldError(null);
+      },
+      mutationBlocked: statusLoading || statusConflict || decisionLoading
+        || decisionUncertain || decisionReloadRequired || resolutionLoading
+        || resolutionUncertain || resolutionReloadRequired || reopenLoading
         || reopenUncertain || reopenReloadRequired,
     },
     resolution: {
@@ -1102,7 +1485,8 @@ export function useReviewCaseCommands({
       reload: reloadResolution,
       mutationBlocked: statusLoading || statusConflict || decisionLoading
         || decisionUncertain || decisionReloadRequired || reopenLoading
-        || reopenUncertain || reopenReloadRequired,
+        || reopenUncertain || reopenReloadRequired || supersessionLoading
+        || supersessionUncertain || supersessionReloadRequired,
     },
     reopen: {
       loading: reopenLoading,
@@ -1117,11 +1501,13 @@ export function useReviewCaseCommands({
       clearError: () => setReopenError(null),
       mutationBlocked: statusLoading || statusConflict || decisionLoading
         || decisionUncertain || decisionReloadRequired || resolutionLoading
-        || resolutionUncertain || resolutionReloadRequired,
+        || resolutionUncertain || resolutionReloadRequired || supersessionLoading
+        || supersessionUncertain || supersessionReloadRequired,
     },
     statusMutationBlocked: decisionLoading || decisionUncertain || decisionReloadRequired
       || resolutionLoading || resolutionUncertain || resolutionReloadRequired
-      || reopenLoading || reopenUncertain || reopenReloadRequired,
+      || reopenLoading || reopenUncertain || reopenReloadRequired || supersessionLoading
+      || supersessionUncertain || supersessionReloadRequired,
     restoreForDetail,
     invalidateAll,
   };

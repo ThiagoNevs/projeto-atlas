@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   createFindingReviewDecision,
+  supersedeFindingReviewDecision,
   createFindingReviewCaseResolution,
   createFindingReviewCaseReopen,
   createFindingReviewCase,
@@ -23,6 +24,7 @@ import {
   parseCreateFindingReviewCaseResolutionResponse,
   parseCreateFindingReviewCaseReopenResponse,
   parseCreateFindingReviewDecisionResponse,
+  parseCreateFindingReviewDecisionSupersessionResponse,
   parseFindingReviewCaseDetail,
   parseFindingReviewCaseListResponse,
   parseUpdateFindingReviewCaseStatusResponse,
@@ -35,6 +37,7 @@ const SECOND_CASE_ID = '55555555-5555-4555-8555-555555555555';
 const ASSET_ID = '22222222-2222-4222-8222-222222222222';
 const EVENT_ID = '33333333-3333-4333-8333-333333333333';
 const DECISION_ID = '44444444-4444-4444-8444-444444444444';
+const SUPERSESSION_DECISION_ID = '66666666-6666-4666-8666-666666666666';
 const FINDING_ID = 'finding_0123456789abcdef01234567';
 const NOW = '2026-07-20T12:00:00.000Z';
 
@@ -107,6 +110,7 @@ test('traduz status, atualidade e eventos sem exibir enums técnicos', () => {
   assert.equal(getFindingReviewEventLabel('CASE_CREATED'), 'Caso criado');
   assert.equal(getFindingReviewEventLabel('CASE_STATUS_CHANGED'), 'Status do caso alterado');
   assert.equal(getFindingReviewEventLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getFindingReviewEventLabel('CASE_DECISION_SUPERSEDED'), 'Decisão de identidade corrigida');
   assert.equal(getFindingReviewEventLabel('CASE_RESOLVED'), 'Investigação concluída');
   assert.equal(getFindingReviewEventLabel('CASE_REOPENED'), 'Investigação reaberta');
   assert.equal(getFindingReviewIdentityConclusionLabel('SAME_ASSET'), 'Mesmo ativo');
@@ -195,6 +199,35 @@ test('parser de criação de decisão aceita 201/200 e descarta campos externos'
   const parsed = parseCreateFindingReviewDecisionResponse({ decision, idempotentReplay: false });
   assert.equal(parsed?.decision.identityConclusion, 'SAME_ASSET');
   assert.equal('requestFingerprint' in (parsed?.decision as unknown as object), false);
+});
+
+test('parser da correção de decisão valida decisão, ID substituído e replay', () => {
+  const value = {
+    decision: {
+      id: SUPERSESSION_DECISION_ID,
+      caseId: CASE_ID,
+      identityConclusion: 'DIFFERENT_ASSETS',
+      justification: 'Ativos distintos confirmados.',
+      caseVersion: 3,
+      createdBy: 'atlas-mvp-user',
+      createdAt: NOW,
+      requestFingerprint: 'não expor',
+    },
+    supersededDecisionId: DECISION_ID,
+    idempotentReplay: true,
+  };
+  const parsed = parseCreateFindingReviewDecisionSupersessionResponse(value);
+  assert.equal(parsed?.supersededDecisionId, DECISION_ID);
+  assert.equal(parsed?.idempotentReplay, true);
+  assert.equal('requestFingerprint' in (parsed?.decision as unknown as object), false);
+  assert.equal(parseCreateFindingReviewDecisionSupersessionResponse({
+    ...value,
+    supersededDecisionId: 'inválido',
+  }), null);
+  assert.equal(parseCreateFindingReviewDecisionSupersessionResponse({
+    ...value,
+    decision: { ...value.decision, caseVersion: 0 },
+  }), null);
 });
 
 test('parser da resolução aceita somente o resultado mínimo e coerente', () => {
@@ -530,6 +563,84 @@ test('cliente de decisão envia contrato técnico, chave opaca e interpreta repl
     expectedVersion: 1,
   });
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/decisions$`));
+});
+
+test('cliente de correção envia contrato, chave, signal e interpreta replay', async () => {
+  const calls: Array<{ input: string; init: RequestInit }> = [];
+  const externalController = new AbortController();
+  const fetchImplementation = async (input: string, init: RequestInit): Promise<Response> => {
+    calls.push({ input, init });
+    return Response.json({
+      decision: {
+        id: SUPERSESSION_DECISION_ID,
+        caseId: CASE_ID,
+        identityConclusion: 'DIFFERENT_ASSETS',
+        justification: 'Nova justificativa.\nCom contexto.',
+        caseVersion: 3,
+        createdBy: 'atlas-mvp-user',
+        createdAt: NOW,
+      },
+      supersededDecisionId: DECISION_ID,
+      idempotentReplay: true,
+    }, { status: 200 });
+  };
+  const result = await supersedeFindingReviewDecision(
+    CASE_ID,
+    DECISION_ID,
+    'DIFFERENT_ASSETS',
+    '  Nova justificativa.\nCom contexto.  ',
+    '  Evidência revisada.\nCorreção necessária.  ',
+    2,
+    'atlas-ui-supersession-key',
+    { fetchImplementation, signal: externalController.signal },
+  );
+  assert.equal(result.idempotentReplay, true);
+  assert.equal(result.supersededDecisionId, DECISION_ID);
+  assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/decisions/${DECISION_ID}/supersessions$`));
+  assert.equal(calls[0]?.init.method, 'POST');
+  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-supersession-key');
+  assert.ok(calls[0]?.init.signal instanceof AbortSignal);
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
+    expectedVersion: 2,
+    identityConclusion: 'DIFFERENT_ASSETS',
+    justification: 'Nova justificativa.\nCom contexto.',
+    correctionReason: 'Evidência revisada.\nCorreção necessária.',
+  });
+});
+
+test('cliente de correção rejeita resposta malformada e preserva código HTTP', async () => {
+  await assert.rejects(
+    supersedeFindingReviewDecision(
+      CASE_ID,
+      DECISION_ID,
+      'SAME_ASSET',
+      'Justificativa.',
+      'Motivo.',
+      2,
+      'atlas-ui-supersession-key',
+      { fetchImplementation: async () => Response.json({ idempotentReplay: false }) },
+    ),
+    (error: unknown) => error instanceof ApiError && error.status === 502,
+  );
+  await assert.rejects(
+    supersedeFindingReviewDecision(
+      CASE_ID,
+      DECISION_ID,
+      'SAME_ASSET',
+      'Justificativa.',
+      'Motivo.',
+      2,
+      'atlas-ui-supersession-key',
+      { fetchImplementation: async () => Response.json({
+        statusCode: 409,
+        code: 'FINDING_REVIEW_DECISION_NOT_CURRENT',
+        message: 'A decisão mudou.',
+      }, { status: 409 }) },
+    ),
+    (error: unknown) => error instanceof ApiError
+      && error.status === 409
+      && error.code === 'FINDING_REVIEW_DECISION_NOT_CURRENT',
+  );
 });
 
 test('cliente de resolução envia versão, justificativa canônica e interpreta replay 200', async () => {

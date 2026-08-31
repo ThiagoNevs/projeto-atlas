@@ -95,6 +95,7 @@ test('traduz ações, entidade e todos os estados dos casos de revisão', () => 
   assert.equal(getAuditActionLabel('CASE_CREATED'), 'Caso de revisão criado');
   assert.equal(getAuditActionLabel('CASE_STATUS_CHANGED'), 'Status do caso de revisão alterado');
   assert.equal(getAuditActionLabel('CASE_DECISION_RECORDED'), 'Decisão de identidade registrada');
+  assert.equal(getAuditActionLabel('CASE_DECISION_SUPERSEDED'), 'Decisão de identidade corrigida');
   assert.equal(getAuditActionLabel('CASE_RESOLVED'), 'Investigação concluída');
   assert.equal(getAuditActionLabel('CASE_REOPENED'), 'Investigação reaberta');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'SAME_ASSET'), 'Mesmo ativo');
@@ -213,6 +214,44 @@ test('apresenta decisão de identidade sem UUID na linha principal e mantém dee
   }
 });
 
+test('apresenta correção da decisão, motivo, conclusões e filtro técnico', async () => {
+  const queries: Parameters<AuditLogsLoader>[0][] = [];
+  const harness = await renderPage(async (query) => {
+    queries.push(query);
+    return response([auditLog({
+      action: 'CASE_DECISION_SUPERSEDED',
+      before: { version: 5, identityConclusion: 'SAME_ASSET' },
+      after: { version: 6, identityConclusion: 'DIFFERENT_ASSETS' },
+      metadata: {
+        eventType: 'CASE_DECISION_SUPERSEDED',
+        correctionReason: 'A evidência foi reinterpretada.',
+      },
+    })]);
+  });
+  try {
+    const text = harness.environment.container.textContent ?? '';
+    assert.match(text, /Decisão de identidade corrigida/);
+    assert.match(text, /Mesmo ativo/);
+    assert.match(text, /Ativos diferentes/);
+    assert.match(text, /Motivo da correção: A evidência foi reinterpretada/);
+    assert.equal(
+      harness.environment.container.querySelector<HTMLAnchorElement>('a.table-link-button')?.getAttribute('href'),
+      `/conflict-review-cases?caseId=${CASE_ID}`,
+    );
+    const action = harness.environment.container.querySelectorAll('select').item(0);
+    const form = harness.environment.container.querySelector('form');
+    assert.ok(form);
+    await act(async () => {
+      setControlValue(action, 'CASE_DECISION_SUPERSEDED');
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+    });
+    assert.equal(queries.at(-1)?.action, 'CASE_DECISION_SUPERSEDED');
+  } finally {
+    await close(harness.root, harness.environment);
+  }
+});
+
 test('gera deep link somente para caso de revisão com identificador válido', () => {
   assert.equal(
     getAuditEntityHref('FindingReviewCase', CASE_ID),
@@ -296,6 +335,7 @@ test('filtros apresentam labels e enviam valores técnicos inalterados', async (
     assert.match(action.textContent ?? '', /Caso de revisão criado/);
     assert.match(action.textContent ?? '', /Status do caso de revisão alterado/);
     assert.match(action.textContent ?? '', /Decisão de identidade registrada/);
+    assert.match(action.textContent ?? '', /Decisão de identidade corrigida/);
     assert.match(action.textContent ?? '', /Investigação reaberta/);
     assert.match(entityType.textContent ?? '', /Caso de revisão/);
 

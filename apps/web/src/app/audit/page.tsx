@@ -24,6 +24,7 @@ const actions = [
   'CASE_CREATED',
   'CASE_STATUS_CHANGED',
   'CASE_DECISION_RECORDED',
+  'CASE_DECISION_SUPERSEDED',
   'CASE_RESOLVED',
   'CASE_REOPENED',
   'ADMIN_STATUS_CHANGED',
@@ -129,7 +130,11 @@ function metadataText(metadata: unknown): string {
     && metadata.justification.trim().length > 0
     ? `Justificativa: ${metadata.justification}`
     : null;
-  return [reason, comment, justification].filter(Boolean).join(' · ') || 'Não informado';
+  const correctionReason = typeof metadata.correctionReason === 'string'
+    && metadata.correctionReason.trim().length > 0
+    ? `Motivo da correção: ${metadata.correctionReason}`
+    : null;
+  return [reason, comment, justification, correctionReason].filter(Boolean).join(' · ') || 'Não informado';
 }
 
 export function getAuditEntityHref(entityType: string, entityId: unknown): string | null {
