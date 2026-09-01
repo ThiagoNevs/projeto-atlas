@@ -133,19 +133,24 @@ final `snapshotVersion: 1` usa comparação binária com `<` e `>`, normaliza ex
 arrays tratados como conjuntos, preserva listas semanticamente ordenadas e calcula SHA-256 hexadecimal.
 A versão provisória com `localeCompare` permaneceu apenas no draft e não integrou a `main`, portanto
 não exige uma versão 2. O nome do header é case-insensitive, o valor é case-sensitive e duplicidades
-são rejeitadas; refresh e revalidação continuam fora do escopo.
+são rejeitadas. A comparação somente leitura do snapshot original com o contexto atual está disponível;
+a adoção persistente de um novo snapshot por refresh continua fora do escopo.
 
 A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
 `atlas-mvp-user` é provisório e não fornece autenticação, isolamento entre usuários ou RBAC; por isso a
 feature deve permanecer desabilitada fora da validação local controlada.
 
-Agora existem consultas somente leitura em `GET /conflict-review-cases` e
-`GET /conflict-review-cases/:id`. A listagem é paginada, filtrável e usa ordenação estável com contagens
+Agora existem consultas somente leitura em `GET /conflict-review-cases`,
+`GET /conflict-review-cases/:id` e `GET /conflict-review-cases/:id/context-comparison`. A listagem é
+paginada, filtrável e usa ordenação estável com contagens
 relacionais sem N+1; ela não carrega snapshots. O detalhe apresenta exatamente o snapshot e o hash
 persistidos, ativos históricos e atuais e eventos com metadata explicitamente filtrada. O filtro por
 ativo usa `assetIdAtCreation`, preservando casos mesmo após a remoção do vínculo atual. Nenhuma leitura
-recalcula findings, atualiza `updatedAt`, cria evento ou `AuditLog`, ou altera o inventário.
+comum recalcula findings. A comparação explícita deriva o inventário uma vez, localiza o assunto pela
+`reviewSubjectKey` e retorna `CURRENT`, `CHANGED`, `NO_LONGER_DETECTED`, `ASSET_UNAVAILABLE`,
+`POLICY_VERSION_CHANGED` ou `REQUIRES_REFRESH`, com razões e diff determinísticos. Ela não persiste o
+resultado, não atualiza `updatedAt`, não cria evento ou `AuditLog` e não altera decisões ou inventário.
 
 Os filtros temporais exigem timestamps completos com timezone explícito e aplicam limites inclusivos
 ao instante UTC. A paginação aceita somente decimais canônicos positivos e protege tanto os valores

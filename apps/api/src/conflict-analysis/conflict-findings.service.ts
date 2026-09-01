@@ -46,6 +46,24 @@ export class ConflictFindingsService {
     };
   }
 
+  async findAllCurrent() {
+    const assets = await this.loadAssets();
+    const snapshots = assets.map((asset) => buildAssetIdentitySnapshot(asset));
+    const assetNames = new Map(assets.map((asset) => [asset.id, asset.name]));
+
+    return {
+      findings: this.inventory.findAllCurrent(snapshots).map((finding) => ({
+        finding,
+        affectedAssets: finding.affectedAssetIds.map((assetId) => ({
+          assetId,
+          name: assetNames.get(assetId) ?? null,
+        })),
+      })),
+      policyVersion: IDENTITY_NETWORK_CONFLICT_POLICY_VERSION,
+      generatedAt: this.inventory.generatedAtFor(snapshots),
+    };
+  }
+
   private async loadAssets(): Promise<AssetIdentityProjection[]> {
     return this.prisma.asset.findMany({
       select: ASSET_IDENTITY_SELECT,

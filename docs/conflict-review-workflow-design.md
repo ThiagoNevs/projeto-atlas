@@ -14,7 +14,8 @@
 | Reabertura lógica | Implementado |
 | Atribuição | Planejado |
 | Comentários | Planejado |
-| Refresh e revalidação de staleness | Planejado |
+| Comparação read-only de contexto/staleness | Implementado |
+| Refresh persistente de contexto | Planejado |
 | Correção ou superseding de decisão | Planejado |
 | Remediation e merge de ativos | Planejado |
 
@@ -288,7 +289,9 @@ de uma condição ocorrer, recomenda-se a precedência:
 4. `CHANGED`;
 5. `CURRENT`.
 
-`REQUIRES_REFRESH` representa ausência ou falha de comparação, não um resultado material.
+`REQUIRES_REFRESH` representa ausência ou falha de comparação, não um resultado material. A comparação
+somente leitura implementada deriva esses estados sob demanda; o campo `staleness` persistido ainda não
+é recalculado nem tratado como verdade atual.
 
 ### 7.2 Ação “Atualizar análise”
 
@@ -595,9 +598,9 @@ ser aceito como identidade produtiva.
 
 ## 14. Contratos de API
 
-Os contratos de criação, leitura, transição operacional ativa, primeira decisão, resolução e
-reabertura foram implementados sob o prefixo `/conflict-review-cases`. Comentários, atribuição,
-refresh e correção ou superseding de decisão permanecem propostos e fora do MVP atual.
+Os contratos de criação, leitura, comparação de contexto, transição operacional ativa, decisão,
+resolução, reabertura e superseding foram implementados sob o prefixo `/conflict-review-cases`.
+Comentários, atribuição e adoção persistente de contexto por refresh permanecem propostos.
 
 ### 14.1 `POST /conflict-review-cases` — implementado
 
@@ -624,7 +627,19 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
 - **Erros:** `400`, `404` e `503` controlados.
 - **Efeitos:** nenhum; não recalcula implicitamente se isso alterar histórico.
 
-### 14.4 `PATCH /conflict-review-cases/:id/status` — implementado para estados ativos
+### 14.4 `GET /conflict-review-cases/:id/context-comparison` — implementado
+
+- **Objetivo:** comparar explicitamente o snapshot original com o finding atual do mesmo
+  `reviewSubjectKey`.
+- **Response:** baseline original, snapshot atual quando localizado, hashes, staleness derivado, razões
+  técnicas e diff material determinístico.
+- **Semântica:** `findingId` não é identidade do assunto; zero correspondências produz
+  `NO_LONGER_DETECTED`, uma permite comparação e múltiplas produzem `REQUIRES_REFRESH`.
+- **Efeitos:** nenhum. O endpoint não persiste staleness, snapshot ou `comparedAt`, não incrementa versão
+  e não cria evento, auditoria, decisão ou alteração no inventário.
+- **Limite:** não adota o contexto atual. Um comando de refresh persistente permanece futuro.
+
+### 14.5 `PATCH /conflict-review-cases/:id/status` — implementado para estados ativos
 
 - **Request:** somente `status` e `expectedVersion`.
 - **Matriz atual:** as seis transições distintas entre `OPEN`, `IN_REVIEW` e
@@ -637,7 +652,7 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
 - **Limitações:** ator `atlas-mvp-user` provisório; autenticação e RBAC ainda não existem. `RESOLVED`
   possui comando de domínio próprio; `DISMISSED` e `CANCELLED` continuam futuros.
 
-### 14.5 `PATCH /conflict-review-cases/:id/assignment` — proposto
+### 14.6 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
 - **Request:** `assignedTo`, `reason` e `expectedVersion`.
 - **Autorização:** assumir o próprio caso exige permissão de revisão; atribuir a terceiros exige
@@ -647,7 +662,7 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
 - **Concorrência:** update condicional por versão e `409` em divergência.
 - **Efeitos:** altera apenas o responsável, incrementa versão e cria evento/AuditLog.
 
-### 14.6 `POST /conflict-review-cases/:id/comments` — proposto
+### 14.7 `POST /conflict-review-cases/:id/comments` — proposto
 
 - **Request:** `kind`, `comment`, referências técnicas opcionais e `expectedVersion`.
 - **Tipos:** `REVIEW_COMMENT`, `HUMAN_PROVIDED_CONTEXT` ou
@@ -655,7 +670,7 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
 - **Validações:** texto não vazio, limites, referência autorizada e conteúdo seguro.
 - **Efeitos:** comentário append-only e auditoria; não cria `AssetEvidence`.
 
-### 14.7 `POST /conflict-review-cases/:id/decisions` — implementado para a primeira decisão
+### 14.8 `POST /conflict-review-cases/:id/decisions` — implementado para a primeira decisão
 
 - **Request:** `identityConclusion`, justificativa e `expectedVersion`, com `Idempotency-Key`
   obrigatória. A rota plural representa a criação de um recurso append-only, não um upsert.
@@ -678,7 +693,7 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
 - **Limites atuais:** não existem componentes de decisão, correção ou superseding. Embora
   o schema seja 1:N, uma segunda decisão nova é rejeitada até existir fluxo explícito futuro.
 
-### 14.8 `POST /conflict-review-cases/:id/resolutions` — implementado para resolução lógica
+### 14.9 `POST /conflict-review-cases/:id/resolutions` — implementado para resolução lógica
 
 - **Request:** `expectedVersion` e justificativa obrigatória de 1 a 1.000 caracteres, com
   `Idempotency-Key` obrigatória.
@@ -700,7 +715,7 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
   da mutação é aplicada localmente antes do refresh, e a apresentação histórica é derivada do evento
   `CASE_RESOLVED`, sem modelar uma entidade de resolução inexistente.
 
-### 14.9 `POST /conflict-review-cases/:id/reopens` — implementado para reabertura lógica
+### 14.10 `POST /conflict-review-cases/:id/reopens` — implementado para reabertura lógica
 
 - **Request:** `expectedVersion` e justificativa obrigatória de 1 a 1.000 caracteres, com
   `Idempotency-Key` obrigatória.
@@ -712,14 +727,14 @@ refresh e correção ou superseding de decisão permanecem propostos e fora do M
   `sessionStorage`. A resposta confirmada atualiza status e versão antes do refresh, sem inventar um
   evento otimista. A resolução anterior e a decisão atual permanecem visíveis no histórico.
 
-### 14.10 `POST /conflict-review-cases/:id/refresh` — proposto
+### 14.11 `POST /conflict-review-cases/:id/refresh` — proposto
 
 - **Objetivo:** recalcular e comparar o finding.
 - **Request:** `expectedVersion`.
 - **Response:** staleness, snapshot atual e diff estruturado.
 - **Efeitos:** preserva original, salva comparação, evento e auditoria; não muda decisão/status.
 
-### 14.11 Regras transversais dos contratos
+### 14.12 Regras transversais dos contratos
 
 #### Contrato implementado atualmente
 
@@ -729,7 +744,7 @@ O MVP ainda não possui autenticação ou RBAC; todos os comandos usam o ator pr
 | Endpoint | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- |
 | criar caso | header obrigatório | constraint por assunto ativo | `CASE_CREATED` e `AuditLog` |
-| listar/detalhar | não aplicável | `version` na resposta, sem ETag | leitura não auditada por padrão |
+| listar/detalhar/comparar | não aplicável | `version` na resposta, sem ETag | leitura não auditada por padrão |
 | mudar status ativo | não usa chave idempotente | `expectedVersion` no body | `CASE_STATUS_CHANGED` e `AuditLog` |
 | decidir | header obrigatório | `expectedVersion` no body | `CASE_DECISION_RECORDED` e `AuditLog` |
 | resolver | header obrigatório | `expectedVersion` no body | `CASE_RESOLVED` e `AuditLog` |
@@ -743,11 +758,11 @@ mudança técnica do ativo.
 
 Permissões como `case:create` e `case:read`, respostas `401`/`403` por autenticação ou RBAC e o uso de
 ETag/`If-Match` fizeram parte do desenho original, mas não integram o contrato atual. Atribuição,
-comentários e refresh continuam planejados e exigirão contratos próprios antes da implementação.
+comentários e refresh persistente continuam planejados e exigirão contratos próprios antes da implementação.
 
 ## 15. Comparação entre snapshots
 
-O contrato de comparação proposto deverá conter:
+O contrato de comparação read-only implementado contém:
 
 - ativos adicionados e removidos;
 - observações adicionadas e removidas;
@@ -759,8 +774,11 @@ O contrato de comparação proposto deverá conter:
 - finding não localizado;
 - limitações novas e removidas.
 
-O diff deverá usar conjuntos ordenados e hashes canônicos para ser determinístico. O backend será a
-única fonte dessa comparação; o frontend não deverá recalcular regras.
+O diff usa conjuntos ordenados e serialização canônica binária para ser determinístico. `findingId`,
+`generatedAt`, nome de apresentação do ativo, ordem de conjuntos, valor raw cuja normalização permaneceu
+igual e explicações derivadas não causam mudança isoladamente. O backend é a única fonte dessa
+comparação; o frontend não deverá recalcular regras. Persistir ou adotar o contexto atual continua fora
+do contrato.
 
 ## 16. Comentários e contexto humano
 

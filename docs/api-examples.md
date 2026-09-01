@@ -744,9 +744,10 @@ A funcionalidade está desabilitada por padrão e ainda não possui autenticaç�
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
 `atlas-mvp-user` é somente uma identificação provisória do MVP.
 
-A flag controla todo o fluxo implementado de Finding Review: criação, listagem, detalhe, transições,
-decisão, resolução, reabertura e respectivos replays retornam HTTP 503 quando ela estiver ausente,
-desabilitada ou inválida. Ao reabilitar a flag, os casos existentes voltam a ficar acessíveis.
+A flag controla todo o fluxo implementado de Finding Review: criação, listagem, detalhe, comparação de
+contexto, transições, decisão, resolução, reabertura e respectivos replays retornam HTTP 503 quando ela
+estiver ausente, desabilitada ou inválida. Ao reabilitar a flag, os casos existentes voltam a ficar
+acessíveis.
 
 ### Listar casos
 
@@ -816,6 +817,52 @@ O detalhe retorna o snapshot original e o hash exatamente como persistidos, rela
 ID. A metadata é filtrada por whitelist e não inclui fingerprint, chave idempotente ou identificadores
 internos do assunto. A leitura não recalcula o finding, não compara o snapshot com o estado atual, não
 altera staleness, não cria `AuditLog` e não atualiza o inventário.
+
+### Comparar contexto histórico e atual
+
+```powershell
+curl.exe http://localhost:3001/conflict-review-cases/CASE_UUID/context-comparison
+```
+
+A comparação é explícita e somente leitura. O backend deriva os findings atuais uma vez e procura o
+mesmo assunto pela `reviewSubjectKey`, portanto um `findingId` diferente ainda pode representar o mesmo
+caso. A resposta contém `caseId`, `caseVersion`, `comparedAt`, metadados do baseline original, o snapshot
+atual e seu hash quando localizado, além de `result.staleness`, `result.reasons` e `result.diff`.
+
+Os resultados possíveis são `CURRENT`, `CHANGED`, `NO_LONGER_DETECTED`, `ASSET_UNAVAILABLE`,
+`POLICY_VERSION_CHANGED` e `REQUIRES_REFRESH`. Finding ausente retorna HTTP 200 com `current: null`;
+versão de snapshot não suportada e correspondência atual ambígua retornam `REQUIRES_REFRESH`. ID inválido
+retorna 400, caso inexistente retorna 404 e feature desabilitada retorna 503.
+
+Sem mudança material, `result` é:
+
+```json
+{ "staleness": "CURRENT", "reasons": [], "diff": {} }
+```
+
+```json
+{
+  "caseId": "CASE_UUID",
+  "caseVersion": 1,
+  "comparedAt": "2026-08-31T12:00:00.000Z",
+  "baseline": {
+    "kind": "ORIGINAL",
+    "findingId": "finding_0123456789abcdef01234567",
+    "policyVersion": "2026-07-conflict-v1",
+    "snapshotHash": "SNAPSHOT_SHA256"
+  },
+  "current": null,
+  "result": {
+    "staleness": "NO_LONGER_DETECTED",
+    "reasons": ["FINDING_NO_LONGER_DETECTED"],
+    "diff": {}
+  }
+}
+```
+
+`comparedAt` e o resultado não são persistidos. A chamada não modifica a versão, o `updatedAt`, o
+`staleness` armazenado, o snapshot original, eventos, auditoria, decisões, inventário ou `Conflict`.
+A adoção persistente de contexto por refresh permanece futura.
 
 ### Alterar estado operacional do caso
 

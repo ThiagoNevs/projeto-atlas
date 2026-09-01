@@ -23,6 +23,7 @@ import { FindingReviewDecisionsService } from './finding-review-decisions.servic
 import { FindingReviewDecisionSupersessionsService } from './finding-review-decision-supersessions.service';
 import { FindingReviewResolutionsService } from './finding-review-resolutions.service';
 import { FindingReviewReopensService } from './finding-review-reopens.service';
+import { FindingReviewCaseContextsService } from './finding-review-case-contexts.service';
 
 interface PassthroughResponse {
   status(code: number): PassthroughResponse;
@@ -56,6 +57,7 @@ export class FindingReviewCasesController {
     private readonly decisionSupersessions: FindingReviewDecisionSupersessionsService,
     private readonly resolutions: FindingReviewResolutionsService,
     private readonly reopens: FindingReviewReopensService,
+    private readonly contexts: FindingReviewCaseContextsService,
   ) {}
 
   @Post(':caseId/decisions/:decisionId/supersessions')
@@ -84,6 +86,11 @@ export class FindingReviewCasesController {
   @Get(':id')
   findOne(@Param('id', reviewCaseIdPipe) id: string) {
     return this.cases.findOne(id);
+  }
+
+  @Get(':id/context-comparison')
+  compareContext(@Param('id', reviewCaseIdPipe) id: string) {
+    return this.contexts.compare(id);
   }
 
   @Patch(':id/status')
