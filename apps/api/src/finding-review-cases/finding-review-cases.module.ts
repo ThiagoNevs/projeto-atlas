@@ -8,6 +8,7 @@ import { FindingReviewDecisionsService } from './finding-review-decisions.servic
 import { FindingReviewDecisionSupersessionsService } from './finding-review-decision-supersessions.service';
 import { FindingReviewResolutionsService } from './finding-review-resolutions.service';
 import { FindingReviewReopensService } from './finding-review-reopens.service';
+import { FindingReviewCaseContextsService } from './finding-review-case-contexts.service';
 
 @Module({
   imports: [ConflictAnalysisModule],
@@ -19,6 +20,7 @@ import { FindingReviewReopensService } from './finding-review-reopens.service';
     FindingReviewDecisionSupersessionsService,
     FindingReviewResolutionsService,
     FindingReviewReopensService,
+    FindingReviewCaseContextsService,
   ],
 })
 export class FindingReviewCasesModule {}

@@ -105,6 +105,15 @@ export class ConflictFindingsInventoryBuilder {
     return this.collectFindings(orderedSnapshots).get(findingId) ?? null;
   }
 
+  findAllCurrent(snapshots: AssetIdentitySnapshot[]): ConflictFinding[] {
+    const orderedSnapshots = [...snapshots].sort((left, right) => {
+      if (left.assetId < right.assetId) return -1;
+      if (left.assetId > right.assetId) return 1;
+      return 0;
+    });
+    return [...this.collectFindings(orderedSnapshots).values()];
+  }
+
   generatedAtFor(snapshots: AssetIdentitySnapshot[]): string {
     return this.generatedAt(snapshots);
   }
