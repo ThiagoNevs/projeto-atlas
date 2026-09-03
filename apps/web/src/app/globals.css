@@ -4460,6 +4460,177 @@ input {
   color: var(--text);
 }
 
+.review-case-metadata dd small {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.review-context-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: rgba(7, 16, 29, 0.42);
+}
+
+.review-context-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.review-context-heading h3,
+.review-context-heading p,
+.review-context-card h4,
+.review-context-card p,
+.review-context-result h4,
+.review-context-result p {
+  margin: 0;
+}
+
+.review-context-heading > div > p:last-child,
+.review-context-card > p,
+.review-context-note {
+  margin-top: 0.35rem;
+  color: var(--muted);
+}
+
+.review-context-card,
+.review-context-result {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.review-context-result-attention {
+  border-color: rgba(244, 199, 108, 0.48);
+}
+
+.review-context-result-heading {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.review-context-result-heading small,
+.review-context-note,
+.review-context-observations span,
+.review-context-technical-reasons {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.review-context-summary,
+.review-context-technical,
+.review-context-diff-group dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.review-context-summary div,
+.review-context-technical div,
+.review-context-diff-group dl div {
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.review-context-summary dt,
+.review-context-technical dt,
+.review-context-diff-group dt {
+  color: var(--faint);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.review-context-summary dd,
+.review-context-technical dd,
+.review-context-diff-group dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.review-context-details {
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.review-context-details summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.review-context-details > :not(summary) {
+  margin-top: 0.75rem;
+}
+
+.review-context-observations,
+.review-context-reasons {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.review-context-observations li {
+  padding-left: 0.2rem;
+}
+
+.review-context-observations strong,
+.review-context-observations span {
+  display: block;
+}
+
+.review-context-diff {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.review-context-diff-group {
+  padding: 0.8rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.review-context-diff-group h5 {
+  margin: 0 0 0.6rem;
+}
+
+.review-context-diff-group > div + div {
+  margin-top: 0.65rem;
+}
+
+.review-context-diff-group ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.review-context-error {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.review-context-error .button {
+  justify-self: start;
+}
+
+.review-detail-grid-single {
+  grid-template-columns: 1fr;
+}
+
 .review-status-control {
   display: grid;
   gap: 0.9rem;
@@ -4797,9 +4968,20 @@ input {
   }
 
   .review-detail-toolbar,
-  .review-detail-toolbar > div:last-child {
+  .review-detail-toolbar > div:last-child,
+  .review-context-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .review-context-heading .button {
+    width: 100%;
+  }
+
+  .review-context-summary,
+  .review-context-technical,
+  .review-context-diff-group dl {
+    grid-template-columns: 1fr;
   }
 
   .review-status-control form {

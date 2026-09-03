@@ -13,6 +13,7 @@ import type {
   CreateFindingReviewDecisionSupersessionResponse,
   FindingReviewCaseDetail,
   FindingReviewCaseListResponse,
+  FindingReviewContextComparisonResponse,
   UpdateFindingReviewCaseStatusResponse,
 } from '../lib/api.ts';
 import {
@@ -556,9 +557,58 @@ test('lista casos e abre detalhe com snapshot, ativo atual e evento', async () =
     assert.ok(button);
     await act(async () => { (button as HTMLButtonElement).click(); await flush(); });
     const text = harness.environment.container.textContent ?? '';
-    assert.match(text, /Visualizar snapshot histórico/);
+    assert.match(text, /Detalhes técnicos do snapshot histórico/);
     assert.match(text, /Ver vínculo atual: SRV-APP-01/);
     assert.match(text, /Caso criado/);
+  } finally {
+    await close(harness.root, harness.environment.cleanup);
+  }
+});
+
+test('comparação é manual, não adquire mutation lock e é abortada quando uma transição começa', async () => {
+  const comparison = deferred<FindingReviewContextComparisonResponse>();
+  const transition = deferred<UpdateFindingReviewCaseStatusResponse>();
+  let comparisonCalls = 0;
+  let transitionCalls = 0;
+  let comparisonSignal: AbortSignal | undefined;
+  const harness = await renderPage({
+    loadCases: async () => listResponse,
+    loadDetail: async () => detailResponse,
+    loadContextComparison: async (_id, options) => {
+      comparisonCalls += 1;
+      comparisonSignal = options?.signal;
+      return comparison.promise;
+    },
+    updateStatus: async () => {
+      transitionCalls += 1;
+      return transition.promise;
+    },
+  });
+  try {
+    await openFirstCaseDetail(harness.environment.container);
+    assert.equal(comparisonCalls, 0);
+    await act(async () => {
+      findButton(harness.environment.container, 'Verificar contexto atual').click();
+      await flush();
+    });
+    assert.equal(comparisonCalls, 1);
+    const statusSelect = harness.environment.container.querySelector<HTMLSelectElement>(
+      '#review-case-next-status',
+    );
+    assert.ok(statusSelect);
+    assert.equal(statusSelect.disabled, false);
+    await act(async () => {
+      setControlValue(statusSelect, 'IN_REVIEW');
+      await flush();
+    });
+    assert.equal(findButton(harness.environment.container, 'Confirmar alteração').disabled, false);
+    await act(async () => {
+      findButton(harness.environment.container, 'Confirmar alteração').click();
+      await flush();
+    });
+    assert.equal(transitionCalls, 1);
+    assert.equal(comparisonSignal?.aborted, true);
+    assert.equal(findButton(harness.environment.container, 'Verificar contexto atual').disabled, true);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }
@@ -840,10 +890,10 @@ test('deep link inicial carrega detalhe mesmo quando a listagem falha', async ()
   });
   try {
     assert.equal(detailCalls, 1);
-    assert.match(harness.environment.container.textContent ?? '', /Visualizar snapshot histórico/);
+    assert.match(harness.environment.container.textContent ?? '', /Detalhes técnicos do snapshot histórico/);
     await act(async () => { pendingList.reject(new ApiError('Falha da lista', 500)); await flush(); });
     assert.match(harness.environment.container.textContent ?? '', /Falha da lista/);
-    assert.match(harness.environment.container.textContent ?? '', /Visualizar snapshot histórico/);
+    assert.match(harness.environment.container.textContent ?? '', /Detalhes técnicos do snapshot histórico/);
   } finally {
     await close(harness.root, harness.environment.cleanup);
   }

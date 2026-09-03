@@ -25,6 +25,10 @@ import type {
   UpdateFindingReviewCaseStatusResponse,
 } from './finding-review-cases.ts';
 import {
+  parseFindingReviewCaseContextComparison,
+  type FindingReviewContextComparisonResponse,
+} from './finding-review-case-context-comparison.ts';
+import {
   parseCreateFindingReviewCaseResponse,
   parseCreateFindingReviewCaseReopenResponse,
   parseCreateFindingReviewCaseResolutionResponse,
@@ -93,6 +97,15 @@ export type {
   FindingReviewStaleness,
   UpdateFindingReviewCaseStatusResponse,
 } from './finding-review-cases';
+export type {
+  FindingReviewContextComparisonReason,
+  FindingReviewContextComparisonResponse,
+  FindingReviewContextDiff,
+  FindingReviewMaterialObservation,
+  FindingReviewSetDiff,
+  FindingReviewSnapshot,
+  FindingReviewValueDiff,
+} from './finding-review-case-context-comparison';
 
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -953,6 +966,20 @@ export function getFindingReviewCase(
   );
 }
 
+export function getFindingReviewCaseContextComparison(
+  id: string,
+  options: FindingReviewCasesRequestOptions = {},
+): Promise<FindingReviewContextComparisonResponse> {
+  return fetchParsedFindingReviewCase(
+    `/conflict-review-cases/${encodeURIComponent(id)}/context-comparison`,
+    {},
+    parseFindingReviewCaseContextComparison,
+    'A API retornou uma comparação de contexto inválida.',
+    options,
+    'A verificação demorou mais que o esperado. Tente novamente.',
+  );
+}
+
 export async function createFindingReviewCase(
   findingId: string,
   idempotencyKey: string,
@@ -1115,6 +1142,7 @@ async function fetchParsedFindingReviewCase<T>(
   parser: (value: unknown) => T | null,
   invalidResponseMessage: string,
   options: FindingReviewCasesRequestOptions,
+  timeoutMessage = 'A solicitação demorou mais que o esperado. O resultado pode ser incerto; tente novamente.',
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? FINDING_REVIEW_CASES_TIMEOUT_MS;
@@ -1148,10 +1176,7 @@ async function fetchParsedFindingReviewCase<T>(
     return parsed;
   } catch (error) {
     if (timedOut) {
-      throw new ApiError(
-        'A solicitação demorou mais que o esperado. O resultado pode ser incerto; tente novamente.',
-        408,
-      );
+      throw new ApiError(timeoutMessage, 408);
     }
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ApiError('A solicitação foi cancelada.', 0);
