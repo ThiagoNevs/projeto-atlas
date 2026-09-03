@@ -165,7 +165,12 @@ chamadas; cursor pagination permanece uma evolução futura e nenhuma fotografia
 
 O frontend agora disponibiliza `/conflict-review-cases` com listagem, filtros, paginação e detalhe sob
 demanda. O detalhe apresenta snapshot histórico, hash, ativos na criação, vínculos atuais disponíveis e
-eventos. Em `/conflict-findings`, o usuário pode iniciar explicitamente a criação de um caso. A interface
+eventos. A seção “Contexto da investigação” preserva uma visão humana do snapshot original e permite
+verificar o contexto atual somente por gesto explícito. O resultado temporário apresenta os seis estados
+de comparação, razões e diferenças materiais em linguagem humana, sem atualizar o indicador persistido,
+a versão, o snapshot, os eventos, a auditoria ou o inventário; troca de caso, mudança de versão e início
+de mutação invalidam comparações obsoletas. Em `/conflict-findings`, o usuário pode iniciar explicitamente
+a criação de um caso. A interface
 trata criação, replay idempotente, caso ativo existente, indisponibilidade da feature e achado que deixou
 de existir. Nenhum caso é criado automaticamente e nenhuma dessas ações altera o inventário.
 

@@ -19,6 +19,7 @@ import {
   supersedeFindingReviewDecision,
   createFindingReviewCase,
   getFindingReviewCase,
+  getFindingReviewCaseContextComparison,
   getFindingReviewCases,
   updateFindingReviewCaseStatus,
   type ActiveFindingReviewCaseStatus,
@@ -95,6 +96,12 @@ import {
   type ReviewCaseDetailLoader,
 } from './finding-review-cases/use-review-case-detail-controller';
 import {
+  ReviewCaseContextSection,
+} from './finding-review-cases/review-case-context-section';
+import type {
+  ReviewCaseContextComparisonLoader,
+} from './finding-review-cases/use-review-case-context-comparison';
+import {
   useReviewCaseCreationCommand,
   type ReviewCaseCreator,
 } from './finding-review-cases/use-review-case-creation-command';
@@ -140,6 +147,7 @@ interface Props {
   initialSearchParams?: Record<string, string | string[] | undefined>;
   loadCases?: ReviewCasesLoader;
   loadDetail?: ReviewCaseDetailLoader;
+  loadContextComparison?: ReviewCaseContextComparisonLoader;
   createCase?: ReviewCaseCreator;
   updateStatus?: ReviewCaseStatusUpdater;
   createDecision?: ReviewCaseDecisionCreator;
@@ -163,6 +171,7 @@ export function FindingReviewCasesPage({
   initialSearchParams = {},
   loadCases = getFindingReviewCases,
   loadDetail = getFindingReviewCase,
+  loadContextComparison = getFindingReviewCaseContextComparison,
   createCase = createFindingReviewCase,
   updateStatus = updateFindingReviewCaseStatus,
   createDecision = createFindingReviewDecision,
@@ -427,14 +436,14 @@ export function FindingReviewCasesPage({
         <div className="filter-card-heading"><div><p className="section-kicker">Refine a fila</p><h2 id="review-filter-title">Filtros e ordenação</h2></div></div>
         <form className="filter-grid review-case-filter-grid" onSubmit={submitFilters}>
           <label>Status<select value={form.status} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="">Todos</option>{FINDING_REVIEW_CASE_STATUSES.map((value) => <option key={value} value={value}>{getFindingReviewCaseStatusLabel(value)}</option>)}</select></label>
-          <label>Atualidade<select value={form.staleness} onChange={(event) => setForm((current) => ({ ...current, staleness: event.target.value }))}><option value="">Todas</option>{FINDING_REVIEW_STALENESSES.map((value) => <option key={value} value={value}>{getFindingReviewStalenessLabel(value)}</option>)}</select></label>
+          <label>Indicador registrado<select value={form.staleness} onChange={(event) => setForm((current) => ({ ...current, staleness: event.target.value }))}><option value="">Todos</option>{FINDING_REVIEW_STALENESSES.map((value) => <option key={value} value={value}>{getFindingReviewStalenessLabel(value)}</option>)}</select></label>
           <label>Tipo de achado<select value={form.findingType} onChange={(event) => setForm((current) => ({ ...current, findingType: event.target.value }))}><option value="">Todos</option>{CONFLICT_FINDING_TYPES.map((value) => <option key={value} value={value}>{getConflictFindingTypeLabel(value)}</option>)}</select></label>
           <label>ID do achado<input value={form.findingId} onChange={(event) => setForm((current) => ({ ...current, findingId: event.target.value }))} /></label>
           <label>Criado por<input maxLength={100} value={form.createdBy} onChange={(event) => setForm((current) => ({ ...current, createdBy: event.target.value }))} /></label>
           <label>ID do ativo<input placeholder="UUID do ativo" value={form.assetId} onChange={(event) => setForm((current) => ({ ...current, assetId: event.target.value }))} /></label>
           <label>Criado a partir de<input type="datetime-local" step="1" value={form.createdFrom} onChange={(event) => setForm((current) => ({ ...current, createdFrom: event.target.value }))} /><small>Horário local do navegador</small></label>
           <label>Criado até<input type="datetime-local" step="1" value={form.createdTo} onChange={(event) => setForm((current) => ({ ...current, createdTo: event.target.value }))} /><small>Horário local do navegador</small></label>
-          <label>Ordenar por<select value={form.sortBy} onChange={(event) => setForm((current) => ({ ...current, sortBy: event.target.value as FindingReviewCaseSortField }))}><option value="createdAt">Criação</option><option value="updatedAt">Atualização</option><option value="status">Status</option><option value="staleness">Atualidade</option></select></label>
+          <label>Ordenar por<select value={form.sortBy} onChange={(event) => setForm((current) => ({ ...current, sortBy: event.target.value as FindingReviewCaseSortField }))}><option value="createdAt">Criação</option><option value="updatedAt">Atualização</option><option value="status">Status</option><option value="staleness">Indicador registrado</option></select></label>
           <label>Direção<select value={form.sortDirection} onChange={(event) => setForm((current) => ({ ...current, sortDirection: event.target.value as FindingReviewSortDirection }))}><option value="desc">Decrescente</option><option value="asc">Crescente</option></select></label>
           <label>Itens por página<select value={form.pageSize} onChange={(event) => setForm((current) => ({ ...current, pageSize: event.target.value }))}>{[10, 25, 50, 100].map((value) => <option key={value}>{value}</option>)}</select></label>
           <div className="filter-actions"><button className="button button-primary" type="submit">Aplicar filtros</button><button className="button button-secondary" type="button" onClick={clearFilters}>Limpar filtros</button></div>
@@ -449,7 +458,7 @@ export function FindingReviewCasesPage({
           {error ? <div className="finding-inline-error" role="alert"><span>{error}</span><button className="button button-secondary" type="button" onClick={listController.reload}>Tentar novamente</button></div> : null}
           <div className="table-scroll review-cases-table-wrap">
             <table className="data-table review-cases-table">
-              <thead><tr><th>Caso</th><th>Tipo</th><th>Status</th><th>Atualidade</th><th>Versão</th><th>Criado por</th><th>Ativos</th><th>Eventos</th><th>Criado em</th><th>Atualizado em</th><th>Ação</th></tr></thead>
+              <thead><tr><th>Caso</th><th>Tipo</th><th>Status</th><th>Indicador registrado</th><th>Versão</th><th>Criado por</th><th>Ativos</th><th>Eventos</th><th>Criado em</th><th>Atualizado em</th><th>Ação</th></tr></thead>
               <tbody>{result.items.map((item) => (
                 <tr key={item.id}>
                   <td><strong>{item.id.slice(0, 8)}</strong><small title={item.findingId}>{item.findingId}</small></td>
@@ -477,6 +486,7 @@ export function FindingReviewCasesPage({
             close={() => closeDetail(true)}
             headingRef={detailHeading}
             commands={commands}
+            loadContextComparison={loadContextComparison}
           />
         </section>
       ) : null}
@@ -492,6 +502,7 @@ function ReviewCaseDetail({
   close,
   headingRef,
   commands,
+  loadContextComparison,
 }: {
   detail: FindingReviewCaseDetail | null;
   loading: boolean;
@@ -500,6 +511,7 @@ function ReviewCaseDetail({
   close: () => void;
   headingRef: RefObject<HTMLHeadingElement | null>;
   commands: ReviewCaseCommands;
+  loadContextComparison: ReviewCaseContextComparisonLoader;
 }) {
   if (loading) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><LoadingState label="Carregando detalhe do caso…" /></>;
   if (error) return <><div className="review-detail-toolbar"><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div><ErrorState message={error} retry={retry} /></>;
@@ -507,7 +519,17 @@ function ReviewCaseDetail({
   return (
     <>
       <div className="finding-section-heading review-detail-toolbar"><div><p className="section-kicker">Registro histórico</p><h2 id="review-case-detail-title" ref={headingRef} tabIndex={-1}>Detalhe do caso</h2></div><div><span className="status-badge">{getFindingReviewCaseStatusLabel(detail.status)}</span><button className="button button-secondary" type="button" onClick={close}>Fechar detalhe</button></div></div>
-      <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Atualidade</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}</dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
+      <dl className="review-case-metadata"><div><dt>ID</dt><dd>{detail.id}</dd></div><div><dt>Achado</dt><dd>{detail.findingId}</dd></div><div><dt>Política</dt><dd>{detail.policyVersion}</dd></div><div><dt>Indicador registrado</dt><dd>{getFindingReviewStalenessLabel(detail.staleness)}<small>Valor persistido no caso. A verificação abaixo é calculada sob demanda e não substitui este indicador.</small></dd></div><div><dt>Criado por</dt><dd>{detail.createdBy}</dd></div><div><dt>Versão</dt><dd>{detail.version}</dd></div></dl>
+      <ReviewCaseContextSection
+        detail={detail}
+        loadComparison={loadContextComparison}
+        mutationBlocked={commands.status.loading || commands.status.conflict
+          || commands.decision.loading || commands.decision.uncertain || commands.decision.reloadRequired
+          || commands.supersession.loading || commands.supersession.uncertain || commands.supersession.reloadRequired
+          || commands.resolution.loading || commands.resolution.uncertain || commands.resolution.reloadRequired
+          || commands.reopen.loading || commands.reopen.uncertain || commands.reopen.reloadRequired}
+        reloadDetail={retry}
+      />
       <IdentityDecisionControl
         key={`decision:${detail.id}:${detail.version}:${detail.currentDecision?.id ?? 'none'}`}
         detail={detail}
@@ -583,11 +605,10 @@ function ReviewCaseDetail({
         reload={commands.status.reload}
         mutationBlocked={commands.statusMutationBlocked}
       />
-      <div className="review-detail-grid">
-        <article><h3>Ativos históricos e vínculos atuais</h3>{detail.assets.map((asset) => <div className="review-asset-record" key={asset.assetIdAtCreation}><strong>{asset.assetNameAtCreation}</strong><small>Na criação: {asset.assetIdAtCreation}</small><span>{asset.role}</span>{asset.currentAssetAvailable && asset.currentAssetId ? <Link href={`/assets/${encodeURIComponent(asset.currentAssetId)}`}>Ver vínculo atual: {asset.currentAssetName}</Link> : <em>Ativo atual não disponível. O vínculo histórico foi preservado.</em>}</div>)}</article>
+      <div className="review-detail-grid review-detail-grid-single">
         <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}{formatDecisionEvent(event.eventType, event.metadata)}{formatResolutionEvent(event.eventType, event.metadata)}{formatReopenEvent(event.eventType)}{formatTransitionJustification(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>
-      <details className="review-snapshot"><summary>Visualizar snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
+      <details className="review-snapshot"><summary>Detalhes técnicos do snapshot histórico</summary><p>Hash: <code>{detail.originalSnapshotHash}</code></p><pre>{JSON.stringify(detail.originalSnapshot, null, 2)}</pre></details>
     </>
   );
 }

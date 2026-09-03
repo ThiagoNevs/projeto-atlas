@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "node --test --experimental-loader ./test/typescript-loader.mjs --disable-warning=ExperimentalWarning src/lib/evidence-provenance.test.ts src/lib/conflict-findings.test.ts src/lib/finding-review-cases.test.ts src/components/evidence-provenance-section.test.tsx src/components/conflict-findings-page.test.tsx src/components/finding-review-cases-page.test.tsx src/app/audit/page.test.tsx",
+    "test": "node --test --experimental-loader ./test/typescript-loader.mjs --disable-warning=ExperimentalWarning src/lib/evidence-provenance.test.ts src/lib/conflict-findings.test.ts src/lib/finding-review-cases.test.ts src/lib/finding-review-case-context-comparison.test.ts src/components/evidence-provenance-section.test.tsx src/components/conflict-findings-page.test.tsx src/components/finding-review-cases-page.test.tsx src/components/finding-review-case-context-comparison.test.tsx src/app/audit/page.test.tsx",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
