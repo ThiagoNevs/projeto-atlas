@@ -9,10 +9,12 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./permissions.json": "./permissions.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "permissions.json"
   ],
   "scripts": {
     "dev": "tsc --watch --preserveWatchOutput",
