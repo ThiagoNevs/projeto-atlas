@@ -1,6 +1,5 @@
 import {
   canonicalSerialize,
-  FINDING_REVIEW_ACTOR_ID,
   sha256,
 } from './finding-review-case-creation';
 
@@ -21,13 +20,14 @@ export interface PersistedFindingReviewResolutionRequest {
 }
 
 export function resolutionRequestFingerprint(
+  actorId: string,
   caseId: string,
   idempotencyKey: string,
 ): string {
   return sha256(
     canonicalSerialize({
       operation: FINDING_REVIEW_CASE_RESOLUTION_OPERATION,
-      actorId: FINDING_REVIEW_ACTOR_ID,
+      actorId,
       caseId,
       idempotencyKey,
     }),

@@ -11,6 +11,8 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
+import { CurrentActor as Actor } from '../auth/current-actor.decorator';
+import type { CurrentActor } from '../auth/auth.types';
 import { CreateFindingReviewCaseDto } from './dto/create-finding-review-case.dto';
 import { CreateFindingReviewDecisionDto } from './dto/create-finding-review-decision.dto';
 import { CreateFindingReviewDecisionSupersessionDto } from './dto/create-finding-review-decision-supersession.dto';
@@ -66,6 +68,7 @@ export class FindingReviewCasesController {
     @Param('decisionId', reviewDecisionIdPipe) decisionId: string,
     @Body() payload: CreateFindingReviewDecisionSupersessionDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Actor() actor: CurrentActor,
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
     const result = await this.decisionSupersessions.create(
@@ -73,6 +76,7 @@ export class FindingReviewCasesController {
       decisionId,
       payload,
       idempotencyKey,
+      actor,
     );
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
@@ -97,8 +101,9 @@ export class FindingReviewCasesController {
   updateStatus(
     @Param('id', reviewCaseIdPipe) id: string,
     @Body() payload: UpdateFindingReviewCaseStatusDto,
+    @Actor() actor: CurrentActor,
   ) {
-    return this.cases.updateStatus(id, payload);
+    return this.cases.updateStatus(id, payload, actor);
   }
 
   @Post(':id/decisions')
@@ -106,9 +111,10 @@ export class FindingReviewCasesController {
     @Param('id', reviewCaseIdPipe) id: string,
     @Body() payload: CreateFindingReviewDecisionDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Actor() actor: CurrentActor,
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
-    const result = await this.decisions.create(id, payload, idempotencyKey);
+    const result = await this.decisions.create(id, payload, idempotencyKey, actor);
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
   }
@@ -118,9 +124,10 @@ export class FindingReviewCasesController {
     @Param('id', reviewCaseIdPipe) id: string,
     @Body() payload: CreateFindingReviewCaseResolutionDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Actor() actor: CurrentActor,
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
-    const result = await this.resolutions.create(id, payload, idempotencyKey);
+    const result = await this.resolutions.create(id, payload, idempotencyKey, actor);
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
   }
@@ -130,9 +137,10 @@ export class FindingReviewCasesController {
     @Param('id', reviewCaseIdPipe) id: string,
     @Body() payload: CreateFindingReviewCaseReopenDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Actor() actor: CurrentActor,
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
-    const result = await this.reopens.create(id, payload, idempotencyKey);
+    const result = await this.reopens.create(id, payload, idempotencyKey, actor);
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
   }
@@ -141,9 +149,10 @@ export class FindingReviewCasesController {
   async create(
     @Body() payload: CreateFindingReviewCaseDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Actor() actor: CurrentActor,
     @Res({ passthrough: true }) response: PassthroughResponse,
   ) {
-    const result = await this.cases.create(payload, idempotencyKey);
+    const result = await this.cases.create(payload, idempotencyKey, actor);
     response.status(result.idempotentReplay ? 200 : 201);
     return result;
   }

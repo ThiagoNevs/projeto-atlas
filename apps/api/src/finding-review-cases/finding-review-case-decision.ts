@@ -1,7 +1,6 @@
 import type { FindingReviewIdentityConclusion } from '../generated/prisma/enums';
 import {
   canonicalSerialize,
-  FINDING_REVIEW_ACTOR_ID,
   sha256,
 } from './finding-review-case-creation';
 
@@ -23,11 +22,11 @@ export interface PersistedFindingReviewDecisionRequest {
   caseVersion: number;
 }
 
-export function decisionRequestFingerprint(idempotencyKey: string): string {
+export function decisionRequestFingerprint(actorId: string, idempotencyKey: string): string {
   return sha256(
     canonicalSerialize({
       operation: FINDING_REVIEW_DECISION_OPERATION,
-      actorId: FINDING_REVIEW_ACTOR_ID,
+      actorId,
       idempotencyKey,
     }),
   );

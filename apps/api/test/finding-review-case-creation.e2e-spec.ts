@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
@@ -9,6 +8,8 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { oidcActorId } from '../src/auth/actor-id';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import type { ConflictFinding } from '../src/conflict-analysis/types/conflict-analysis';
 import type { Prisma } from '../src/generated/prisma/client';
 import {
@@ -29,6 +30,8 @@ import {
 import { PrismaService } from '../src/prisma/prisma.service';
 
 const NOW = '2026-07-19T12:00:00.000Z';
+
+const TEST_ACTOR_ID = 'human:oidc:test:actor';
 
 type TransactionFailureStep = 'relations' | 'event' | 'audit';
 type UnknownFunction = (...args: unknown[]) => unknown;
@@ -345,22 +348,22 @@ describe('Finding review case creation primitives', () => {
 
   it('fingerprints operation, provisional actor and the exact validated key without exposing it', () => {
     const key = normalizeIdempotencyKey('review:123e4567-e89b-12d3-a456-426614174000');
-    const fingerprint = creationRequestFingerprint(key);
+    const fingerprint = creationRequestFingerprint(TEST_ACTOR_ID, key);
     const expectedSerialization =
-      '{"actorId":"atlas-mvp-user","idempotencyKey":"review:123e4567-e89b-12d3-a456-426614174000","operation":"CREATE_FINDING_REVIEW_CASE"}';
-    const expectedFingerprint = 'f9c074c76aef039b409c0312f054348e079fad3e964f458f93051c4835d165db';
+      '{"actorId":"human:oidc:test:actor","idempotencyKey":"review:123e4567-e89b-12d3-a456-426614174000","operation":"CREATE_FINDING_REVIEW_CASE"}';
+    const expectedFingerprint = '4d0f8fcfb4a161c0ec354c0a9c5fd20e1b8905009902a0490df821fa1e9821b3';
     expect(key).toBe('review:123e4567-e89b-12d3-a456-426614174000');
     expect(
       canonicalSerialize({
         operation: 'CREATE_FINDING_REVIEW_CASE',
-        actorId: 'atlas-mvp-user',
+        actorId: TEST_ACTOR_ID,
         idempotencyKey: key,
       }),
     ).toBe(expectedSerialization);
     expect(sha256(expectedSerialization)).toBe(expectedFingerprint);
     expect(fingerprint).toBe(expectedFingerprint);
     expect(fingerprint).not.toContain(key);
-    expect(creationRequestFingerprint(key)).toBe(fingerprint);
+    expect(creationRequestFingerprint(TEST_ACTOR_ID, key)).toBe(fingerprint);
   });
 
   it('keeps idempotency keys case-sensitive', () => {
@@ -370,7 +373,9 @@ describe('Finding review case creation primitives', () => {
     expect(normalizeIdempotencyKey('AtlasReview123')).toBe('AtlasReview123');
     expect(normalizeIdempotencyKey('ABC')).toBe('ABC');
     expect(normalizeIdempotencyKey('abc')).toBe('abc');
-    expect(creationRequestFingerprint('ABC')).not.toBe(creationRequestFingerprint('abc'));
+    expect(creationRequestFingerprint(TEST_ACTOR_ID, 'ABC')).not.toBe(
+      creationRequestFingerprint(TEST_ACTOR_ID, 'abc'),
+    );
   });
 
   it.each([
@@ -429,7 +434,8 @@ describe('Finding review case creation primitives', () => {
 
 describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: FaultInjectingPrismaService;
   let receivedIdempotencyHeader: string | string[] | undefined;
   const testRunId = randomUUID();
@@ -439,6 +445,8 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
@@ -460,7 +468,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get<FaultInjectingPrismaService>(PrismaService);
   });
 
@@ -491,6 +499,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
   async function createDuplicateHostnameFindingFixture(label: string): Promise<{
@@ -519,7 +528,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
         },
       ],
     });
-    const response = await request(server)
+    const response = await api
       .get('/conflict-analysis/findings')
       .query({ hostname, pageSize: 100 })
       .expect(200);
@@ -536,7 +545,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   }
 
   async function postCase(findingId: string, key: string) {
-    const response = await request(server)
+    const response = await api
       .post('/conflict-review-cases')
       .set('Idempotency-Key', key)
       .send({ findingId });
@@ -584,9 +593,19 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     [{}, 'valid-key'],
     [{ findingId: 'not-a-finding' }, 'valid-key'],
     [{ findingId: 'finding_0123456789abcdef01234567', unknown: true }, 'valid-key'],
+    [
+      {
+        findingId: 'finding_0123456789abcdef01234567',
+        createdBy: 'spoofed',
+        actorId: 'spoofed',
+        roles: ['admin'],
+        permissions: ['atlas:access'],
+      },
+      'valid-key',
+    ],
     [{ findingId: 'finding_0123456789abcdef01234567' }, ''],
   ])('rejects an invalid body or header without internal details', async (body, key) => {
-    const call = request(server).post('/conflict-review-cases').send(body);
+    const call = api.post('/conflict-review-cases').send(body);
     if (key) call.set('Idempotency-Key', key);
     const response = await call.expect(400);
     expect(JSON.stringify(response.body)).not.toMatch(/Prisma|SQL|stack/i);
@@ -595,7 +614,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   it('recognizes the header name case-insensitively and preserves its value', async () => {
     const findingId = await createDuplicateHostnameFinding('header-name-case');
     const key = `Header-Case-${testRunId}`;
-    const created = await request(server)
+    const created = await api
       .post('/conflict-review-cases')
       .set('iDeMpOtEnCy-KeY', key)
       .send({ findingId });
@@ -603,7 +622,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(created.status).toBe(201);
     expect(receivedIdempotencyHeader).toBe(key);
 
-    const replay = await request(server)
+    const replay = await api
       .post('/conflict-review-cases')
       .set('IDEMPOTENCY-KEY', key)
       .send({ findingId });
@@ -614,7 +633,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('rejects a missing Idempotency-Key with a stable safe error and no writes', async () => {
     const persistenceBefore = await reviewPersistenceCounts();
-    const response = await request(server)
+    const response = await api
       .post('/conflict-review-cases')
       .send({ findingId: 'finding_0123456789abcdef01234567' });
     const body = responseBody<ErrorResponseBody>(response);
@@ -628,7 +647,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
   it('rejects duplicated Idempotency-Key headers after Node combines their values', async () => {
     const persistenceBefore = await reviewPersistenceCounts();
     receivedIdempotencyHeader = undefined;
-    const response = await request(server)
+    const response = await api
       .post('/conflict-review-cases')
       .set('Idempotency-Key', ['duplicate-a', 'duplicate-b'] as unknown as string)
       .send({ findingId: 'finding_0123456789abcdef01234567' });
@@ -650,7 +669,9 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(created.status).toBe(201);
     expect(response.status).toBe(409);
     expect(responseBody<ErrorResponseBody>(response).code).toBe('ACTIVE_REVIEW_CASE_EXISTS');
-    expect(creationRequestFingerprint(upperKey)).not.toBe(creationRequestFingerprint(lowerKey));
+    expect(creationRequestFingerprint(auth.actor.id, upperKey)).not.toBe(
+      creationRequestFingerprint(auth.actor.id, lowerKey),
+    );
   });
 
   it('returns a controlled 404 when the recalculated finding no longer exists', async () => {
@@ -680,7 +701,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
         status: 'OPEN',
         staleness: 'CURRENT',
         version: 1,
-        createdBy: 'atlas-mvp-user',
+        createdBy: auth.actor.id,
         idempotentReplay: false,
       }),
     );
@@ -699,7 +720,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
         eventType: 'CASE_CREATED',
         versionBefore: null,
         versionAfter: 1,
-        actorId: 'atlas-mvp-user',
+        actorId: auth.actor.id,
       }),
     ]);
     expect(await prisma.auditLog.count()).toBe(auditBefore + 1);
@@ -709,6 +730,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
       where: { entityType: 'FindingReviewCase', entityId: stored.id },
     });
     const serializedAudit = JSON.stringify(audit);
+    expect(audit).toEqual(expect.objectContaining({ actorType: 'USER', actorId: auth.actor.id }));
     expect(serializedAudit).toContain('requestFingerprint');
     expect(serializedAudit).not.toContain(`success-${testRunId}`);
     expect(serializedAudit).not.toContain('originalSnapshot');
@@ -730,6 +752,36 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     expect(await prisma.auditLog.count({ where: { entityId: createdBody.id } })).toBe(auditBefore);
   });
 
+  it('never replays another actor response when the Idempotency-Key is reused cross-actor', async () => {
+    const findingId = await createDuplicateHostnameFinding('cross-actor');
+    const key = `cross-actor-${testRunId}`;
+    const created = await postCase(findingId, key);
+    expect(created.status).toBe(201);
+    const original = responseBody<CaseResponseBody>(created);
+    const before = await reviewPersistenceCounts();
+
+    const actorB = await auth.createAuthenticatedAgent(
+      app,
+      await auth.issueToken({ subject: 'atlas-test-user-b', name: 'Atlas Test User B' }),
+    );
+    const response = await actorB
+      .post('/conflict-review-cases')
+      .set('Idempotency-Key', key)
+      .send({ findingId });
+
+    expect(response.status).toBe(409);
+    expect(responseBody<ErrorResponseBody>(response)).toEqual(
+      expect.objectContaining({
+        code: 'ACTIVE_REVIEW_CASE_EXISTS',
+        existingCaseId: original.id,
+      }),
+    );
+    expect(await reviewPersistenceCounts()).toEqual(before);
+    expect(creationRequestFingerprint(auth.actor.id, key)).not.toBe(
+      creationRequestFingerprint(oidcActorId('HUMAN', auth.issuer, 'atlas-test-user-b'), key),
+    );
+  });
+
   it('replays the original case after the finding is no longer detected', async () => {
     const fixture = await createDuplicateHostnameFindingFixture('replay-missing-finding');
     const key = `replay-missing-finding-${testRunId}`;
@@ -741,7 +793,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
       where: { id: fixture.secondAssetId },
       data: { name: `${fixture.hostname}-renamed` },
     });
-    const findingsAfterChange = await request(server)
+    const findingsAfterChange = await api
       .get('/conflict-analysis/findings')
       .query({ hostname: fixture.hostname, pageSize: 100 })
       .expect(200);
@@ -935,7 +987,7 @@ describe('POST /conflict-review-cases (PostgreSQL e2e)', () => {
     ['delete', `/conflict-review-cases/${randomUUID()}`],
     ['post', `/conflict-review-cases/${randomUUID()}`],
   ] as const)('does not expose out-of-scope %s endpoint', async (method, path) => {
-    await request(server)[method](path).expect(404);
+    await api[method](path).expect(404);
   });
 
   async function inventoryCounts() {

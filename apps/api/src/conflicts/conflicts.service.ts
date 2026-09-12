@@ -2,10 +2,10 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 
 import { AdministrativeStatus, ConflictStatus, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { QueryConflictsDto } from './dto/query-conflicts.dto';
 import { UpdateConflictStatusDto } from './dto/update-conflict-status.dto';
 
-const SIMULATED_ACTOR_USER_ID = 'atlas-mvp-user';
 const LIFECYCLE_CONFLICT_TYPE = 'LIFECYCLE_CONFLICT';
 const CLOSED_ADMINISTRATIVE_STATUSES = new Set<AdministrativeStatus>([
   AdministrativeStatus.DEACTIVATED,
@@ -148,7 +148,7 @@ export class ConflictsService {
     };
   }
 
-  async updateStatus(id: string, payload: UpdateConflictStatusDto) {
+  async updateStatus(id: string, payload: UpdateConflictStatusDto, actor: CurrentActor) {
     return this.prisma.$transaction(async (transaction) => {
       const currentConflict = await transaction.conflict.findUnique({
         where: { id },
@@ -191,7 +191,7 @@ export class ConflictsService {
         newStatus: payload.status,
         reason,
         comment,
-        actorUserId: SIMULATED_ACTOR_USER_ID,
+        actorUserId: actor.id,
       };
 
       const conflict = await transaction.conflict.update({
@@ -219,8 +219,8 @@ export class ConflictsService {
       const auditLog = await transaction.auditLog.create({
         data: {
           assetId: currentConflict.assetId,
-          actorType: 'USER',
-          actorId: SIMULATED_ACTOR_USER_ID,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
           action: 'CONFLICT_STATUS_CHANGED',
           entityType: 'Conflict',
           entityId: id,

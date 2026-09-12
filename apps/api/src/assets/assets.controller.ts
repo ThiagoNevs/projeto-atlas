@@ -11,6 +11,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { CurrentActor as Actor } from '../auth/current-actor.decorator';
+import type { CurrentActor } from '../auth/auth.types';
 
 import { ASSET_IMPORT_MAX_FILE_BYTES } from './asset-import-parser.service';
 import { AssetsService } from './assets.service';
@@ -38,26 +40,28 @@ export class AssetsController {
   updateAdministrativeStatus(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() payload: UpdateAdministrativeStatusDto,
+    @Actor() actor: CurrentActor,
   ) {
-    return this.assetsService.updateAdministrativeStatus(id, payload);
+    return this.assetsService.updateAdministrativeStatus(id, payload, actor);
   }
 
   @Post(':id/manual-enrichment')
   enrichManually(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() payload: ManualEnrichmentDto,
+    @Actor() actor: CurrentActor,
   ) {
-    return this.assetsService.enrichManually(id, payload);
+    return this.assetsService.enrichManually(id, payload, actor);
   }
 
   @Post('manual')
-  createManual(@Body() payload: CreateManualAssetDto) {
-    return this.assetsService.createManual(payload);
+  createManual(@Body() payload: CreateManualAssetDto, @Actor() actor: CurrentActor) {
+    return this.assetsService.createManual(payload, actor);
   }
 
   @Post('import/csv')
-  importCsv(@Body() payload: ImportAssetsCsvDto) {
-    return this.assetsService.importCsv(payload);
+  importCsv(@Body() payload: ImportAssetsCsvDto, @Actor() actor: CurrentActor) {
+    return this.assetsService.importCsv(payload, actor);
   }
 
   @Post('import/preview')
@@ -66,8 +70,8 @@ export class AssetsController {
   }
 
   @Post('import/commit')
-  commitCsv(@Body() payload: ImportAssetsCsvDto) {
-    return this.assetsService.commitCsv(payload);
+  commitCsv(@Body() payload: ImportAssetsCsvDto, @Actor() actor: CurrentActor) {
+    return this.assetsService.commitCsv(payload, actor);
   }
 
   @Post('import/spreadsheet')
@@ -76,8 +80,8 @@ export class AssetsController {
       limits: { fileSize: ASSET_IMPORT_MAX_FILE_BYTES, files: 1 },
     }),
   )
-  importSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
-    return this.assetsService.importSpreadsheet(file);
+  importSpreadsheet(@Actor() actor: CurrentActor, @UploadedFile() file?: Express.Multer.File) {
+    return this.assetsService.importSpreadsheet(file, actor);
   }
 
   @Post('import/preview/spreadsheet')
@@ -96,7 +100,7 @@ export class AssetsController {
       limits: { fileSize: ASSET_IMPORT_MAX_FILE_BYTES, files: 1 },
     }),
   )
-  commitSpreadsheet(@UploadedFile() file?: Express.Multer.File) {
-    return this.assetsService.commitSpreadsheet(file);
+  commitSpreadsheet(@Actor() actor: CurrentActor, @UploadedFile() file?: Express.Multer.File) {
+    return this.assetsService.commitSpreadsheet(file, actor);
   }
 }

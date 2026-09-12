@@ -5,7 +5,8 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._~:+/=-]{1,128}$/;
 export const PENDING_REVIEW_CASE_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 
 export interface PendingFindingReviewCaseAttempt {
-  version: 1;
+  version: 2;
+  actorId: string;
   findingId: string;
   idempotencyKey: string;
   createdAt: string;
@@ -25,11 +26,13 @@ function pendingStorageKey(findingId: string): string {
 
 export function createPendingFindingReviewCaseAttempt(
   findingId: string,
+  actorId: string,
   idempotencyKey: string,
   now = Date.now(),
 ): PendingFindingReviewCaseAttempt {
   return {
-    version: 1,
+    version: 2,
+    actorId,
     findingId,
     idempotencyKey,
     createdAt: new Date(now).toISOString(),
@@ -40,15 +43,22 @@ export function createPendingFindingReviewCaseAttempt(
 export function parsePendingFindingReviewCaseAttempt(
   serialized: string,
   expectedFindingId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingFindingReviewCaseAttempt | null {
-  const inspected = inspectPendingFindingReviewCaseAttempt(serialized, expectedFindingId, now);
+  const inspected = inspectPendingFindingReviewCaseAttempt(
+    serialized,
+    expectedFindingId,
+    expectedActorId,
+    now,
+  );
   return inspected.status === 'valid' ? inspected.attempt : null;
 }
 
 export function inspectPendingFindingReviewCaseAttempt(
   serialized: string,
   expectedFindingId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingReviewCaseAttemptInspection {
   try {
@@ -58,11 +68,15 @@ export function inspectPendingFindingReviewCaseAttempt(
     }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'createdAt,expiresAt,findingId,idempotencyKey,version') {
+    if (keys.join(',') !== 'actorId,createdAt,expiresAt,findingId,idempotencyKey,version') {
       return { status: 'invalid', attempt: null };
     }
     if (
-      candidate.version !== 1
+      candidate.version !== 2
+      || candidate.actorId !== expectedActorId
+      || typeof candidate.actorId !== 'string'
+      || candidate.actorId.length < 1
+      || candidate.actorId.length > 100
       || candidate.findingId !== expectedFindingId
       || !isFindingReviewFindingId(candidate.findingId)
       || typeof candidate.idempotencyKey !== 'string'
@@ -92,12 +106,13 @@ export function inspectPendingFindingReviewCaseAttempt(
 
 export function readPendingFindingReviewCaseAttempt(
   findingId: string,
+  actorId: string,
 ): StoredPendingReviewCaseAttempt {
   try {
     const storageKey = pendingStorageKey(findingId);
     const serialized = window.sessionStorage.getItem(storageKey);
     if (serialized === null) return { status: 'missing', attempt: null };
-    const inspected = inspectPendingFindingReviewCaseAttempt(serialized, findingId);
+    const inspected = inspectPendingFindingReviewCaseAttempt(serialized, findingId, actorId);
     if (inspected.status !== 'valid') window.sessionStorage.removeItem(storageKey);
     return inspected;
   } catch {

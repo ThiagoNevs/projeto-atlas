@@ -11,12 +11,10 @@ import {
   FindingReviewIdentityConclusion,
   Prisma,
 } from '../generated/prisma/client';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewCaseResolutionDto } from './dto/create-finding-review-case-resolution.dto';
-import {
-  FINDING_REVIEW_ACTOR_ID,
-  normalizeIdempotencyKey,
-} from './finding-review-case-creation';
+import { normalizeIdempotencyKey } from './finding-review-case-creation';
 import {
   FINDING_REVIEW_CASE_RESOLVED_EVENT,
   isSameFindingReviewResolutionRequest,
@@ -63,10 +61,11 @@ export class FindingReviewResolutionsService {
     caseId: string,
     payload: CreateFindingReviewCaseResolutionDto,
     rawIdempotencyKey: unknown,
+    actor: CurrentActor,
   ) {
     this.feature.assertEnabled();
     const idempotencyKey = this.validateIdempotencyKey(rawIdempotencyKey);
-    const fingerprint = resolutionRequestFingerprint(caseId, idempotencyKey);
+    const fingerprint = resolutionRequestFingerprint(actor.id, caseId, idempotencyKey);
     const semanticRequest = this.semanticRequest(caseId, payload);
 
     const existingRequest = await this.findByFingerprint(caseId, fingerprint);
@@ -146,7 +145,7 @@ export class FindingReviewResolutionsService {
             eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
             versionBefore: payload.expectedVersion,
             versionAfter,
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorId: actor.id,
             requestId: fingerprint,
             previousStatus: FindingReviewCaseStatus.IN_REVIEW,
             nextStatus: FindingReviewCaseStatus.RESOLVED,
@@ -175,8 +174,8 @@ export class FindingReviewResolutionsService {
 
         await transaction.auditLog.create({
           data: {
-            actorType: 'USER',
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: FINDING_REVIEW_CASE_RESOLVED_EVENT,
             entityType: 'FindingReviewCase',
             entityId: caseId,

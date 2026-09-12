@@ -11,6 +11,7 @@ import {
   FindingReviewIdentityConclusion,
   Prisma,
 } from '../generated/prisma/client';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewDecisionSupersessionDto } from './dto/create-finding-review-decision-supersession.dto';
 import {
@@ -22,7 +23,6 @@ import {
   type FindingReviewDecisionSupersessionSemanticRequest,
 } from './finding-review-decision-supersession';
 import {
-  FINDING_REVIEW_ACTOR_ID,
   FINDING_REVIEW_SNAPSHOT_VERSION,
   normalizeIdempotencyKey,
 } from './finding-review-case-creation';
@@ -104,10 +104,11 @@ export class FindingReviewDecisionSupersessionsService {
     supersededDecisionId: string,
     payload: CreateFindingReviewDecisionSupersessionDto,
     rawIdempotencyKey: unknown,
+    actor: CurrentActor,
   ) {
     this.feature.assertEnabled();
     const idempotencyKey = this.validateIdempotencyKey(rawIdempotencyKey);
-    const fingerprint = decisionSupersessionRequestFingerprint(idempotencyKey);
+    const fingerprint = decisionSupersessionRequestFingerprint(actor.id, idempotencyKey);
     const semanticRequest = this.semanticRequest(caseId, supersededDecisionId, payload);
 
     const existingRequest = await this.findByFingerprint(fingerprint);
@@ -229,7 +230,7 @@ export class FindingReviewDecisionSupersessionsService {
             identityConclusion: payload.identityConclusion,
             justification,
             caseVersion: versionAfter,
-            createdBy: FINDING_REVIEW_ACTOR_ID,
+            createdBy: actor.id,
             requestFingerprint: fingerprint,
             createdAt: occurredAt,
           },
@@ -261,7 +262,7 @@ export class FindingReviewDecisionSupersessionsService {
             eventType: FINDING_REVIEW_DECISION_SUPERSEDED_EVENT,
             versionBefore: payload.expectedVersion,
             versionAfter,
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorId: actor.id,
             requestId: fingerprint,
             previousStatus: null,
             nextStatus: null,
@@ -276,8 +277,8 @@ export class FindingReviewDecisionSupersessionsService {
 
         await transaction.auditLog.create({
           data: {
-            actorType: 'USER',
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: FINDING_REVIEW_DECISION_SUPERSEDED_EVENT,
             entityType: 'FindingReviewCase',
             entityId: caseId,

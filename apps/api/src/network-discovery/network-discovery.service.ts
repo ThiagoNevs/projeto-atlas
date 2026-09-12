@@ -16,12 +16,12 @@ import {
   OperationalStatus,
   Prisma,
 } from '../generated/prisma/client';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateNetworkDiscoveryProfileDto } from './dto/create-network-discovery-profile.dto';
 import { UpdateNetworkDiscoveryProfileDto } from './dto/update-network-discovery-profile.dto';
 import { isIpv4Cidr } from './validators/is-ipv4-cidr';
 
-const SIMULATED_ACTOR_ID = 'atlas-network-discovery-lite';
 const MAX_SIMULATED_TARGETS_PER_RUN = 3;
 const NETWORK_CONFLICT_TYPE = 'NETWORK_IDENTITY_CONFLICT';
 
@@ -115,7 +115,7 @@ export class NetworkDiscoveryService {
     return run;
   }
 
-  async runProfile(id: string) {
+  async runProfile(id: string, actor: CurrentActor) {
     const profile = await this.prisma.networkDiscoveryProfile.findUnique({ where: { id } });
     if (!profile) throw new NotFoundException(`Network discovery profile ${id} was not found.`);
     if (!profile.enabled) {
@@ -123,6 +123,7 @@ export class NetworkDiscoveryService {
         profile.id,
         'PROFILE_DISABLED',
         'O perfil está desabilitado.',
+        actor,
       );
       throw new BadRequestException('Disabled network discovery profiles cannot be executed.');
     }
@@ -140,7 +141,12 @@ export class NetworkDiscoveryService {
       }
     } catch (error) {
       if (error instanceof BadRequestException) {
-        await this.recordRejectedExecution(profile.id, 'INVALID_CONFIGURATION', error.message);
+        await this.recordRejectedExecution(
+          profile.id,
+          'INVALID_CONFIGURATION',
+          error.message,
+          actor,
+        );
       }
       throw error;
     }
@@ -240,8 +246,8 @@ export class NetworkDiscoveryService {
 
         await transaction.auditLog.create({
           data: {
-            actorType: 'SYSTEM',
-            actorId: SIMULATED_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: 'NETWORK_DISCOVERY_RUN_EXECUTED',
             entityType: 'NetworkDiscoveryRun',
             entityId: run.id,
@@ -277,8 +283,8 @@ export class NetworkDiscoveryService {
         }),
         this.prisma.auditLog.create({
           data: {
-            actorType: 'SYSTEM',
-            actorId: SIMULATED_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: 'NETWORK_DISCOVERY_RUN_FAILED',
             entityType: 'NetworkDiscoveryRun',
             entityId: run.id,
@@ -593,11 +599,12 @@ export class NetworkDiscoveryService {
     profileId: string,
     reasonCode: string,
     reason: string,
+    actor: CurrentActor,
   ): Promise<void> {
     await this.prisma.auditLog.create({
       data: {
-        actorType: 'SYSTEM',
-        actorId: SIMULATED_ACTOR_ID,
+        actorType: auditActorType(actor),
+        actorId: actor.id,
         action: 'NETWORK_DISCOVERY_RUN_REJECTED',
         entityType: 'NetworkDiscoveryProfile',
         entityId: profileId,

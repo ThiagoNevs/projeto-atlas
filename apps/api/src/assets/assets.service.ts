@@ -13,6 +13,7 @@ import {
   OperationalStatus,
   Prisma,
 } from '../generated/prisma/client';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   assetDetailSelect,
@@ -31,7 +32,6 @@ import {
   ParsedAssetImport,
 } from './asset-import-parser.service';
 
-const SIMULATED_ACTOR_USER_ID = 'atlas-mvp-user';
 const MANUAL_CONFIDENCE_SCORE = 60;
 const MANUAL_SOURCE = 'MANUAL';
 const MANUAL_EVIDENCE_TYPE = 'MANUAL_DECLARATION';
@@ -149,7 +149,11 @@ export class AssetsService {
     return presentAssetDetail(asset);
   }
 
-  async updateAdministrativeStatus(id: string, payload: UpdateAdministrativeStatusDto) {
+  async updateAdministrativeStatus(
+    id: string,
+    payload: UpdateAdministrativeStatusDto,
+    actor: CurrentActor,
+  ) {
     return this.prisma.$transaction(async (transaction) => {
       const currentAsset = await transaction.asset.findUnique({
         where: { id },
@@ -172,7 +176,7 @@ export class AssetsService {
         newStatus: payload.administrativeStatus,
         reason: payload.reason.trim(),
         comment: payload.comment.trim(),
-        actorUserId: SIMULATED_ACTOR_USER_ID,
+        actorUserId: actor.id,
       };
 
       const asset = await transaction.asset.update({
@@ -196,8 +200,8 @@ export class AssetsService {
       const auditLog = await transaction.auditLog.create({
         data: {
           assetId: id,
-          actorType: 'USER',
-          actorId: SIMULATED_ACTOR_USER_ID,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
           action: 'ADMIN_STATUS_CHANGED',
           entityType: 'Asset',
           entityId: id,
@@ -417,7 +421,7 @@ export class AssetsService {
     return { OR: alternatives };
   }
 
-  async createManual(payload: CreateManualAssetDto) {
+  async createManual(payload: CreateManualAssetDto, actor: CurrentActor) {
     const occurredAt = new Date();
     const identifier = payload.identifier.trim();
     const normalizedIdentifier = this.normalizeIdentifier(identifier, payload.identifierType);
@@ -489,7 +493,7 @@ export class AssetsService {
         identifierType: payload.identifierType,
         reason: payload.reason,
         source: MANUAL_SOURCE,
-        actorUserId: SIMULATED_ACTOR_USER_ID,
+        actorUserId: actor.id,
       };
       const event = await transaction.assetEvent.create({
         data: {
@@ -506,8 +510,8 @@ export class AssetsService {
       const auditLog = await transaction.auditLog.create({
         data: {
           assetId: asset.id,
-          actorType: 'USER',
-          actorId: SIMULATED_ACTOR_USER_ID,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
           action: MANUAL_EVENT_TYPE,
           entityType: 'Asset',
           entityId: asset.id,
@@ -541,12 +545,12 @@ export class AssetsService {
     });
   }
 
-  async importCsv(payload: ImportAssetsCsvDto) {
-    return this.commitAssetImport(this.importParser.parseText(payload.csv));
+  async importCsv(payload: ImportAssetsCsvDto, actor: CurrentActor) {
+    return this.commitAssetImport(this.importParser.parseText(payload.csv), actor);
   }
 
-  async importSpreadsheet(file: Express.Multer.File | undefined) {
-    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file));
+  async importSpreadsheet(file: Express.Multer.File | undefined, actor: CurrentActor) {
+    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file), actor);
   }
 
   async previewCsv(payload: ImportAssetsCsvDto) {
@@ -557,15 +561,15 @@ export class AssetsService {
     return this.buildImportPreview(await this.importParser.parseSpreadsheet(file));
   }
 
-  async commitCsv(payload: ImportAssetsCsvDto) {
-    return this.commitAssetImport(this.importParser.parseText(payload.csv));
+  async commitCsv(payload: ImportAssetsCsvDto, actor: CurrentActor) {
+    return this.commitAssetImport(this.importParser.parseText(payload.csv), actor);
   }
 
-  async commitSpreadsheet(file: Express.Multer.File | undefined) {
-    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file));
+  async commitSpreadsheet(file: Express.Multer.File | undefined, actor: CurrentActor) {
+    return this.commitAssetImport(await this.importParser.parseSpreadsheet(file), actor);
   }
 
-  private async commitAssetImport(parsed: ParsedAssetImport) {
+  private async commitAssetImport(parsed: ParsedAssetImport, actor: CurrentActor) {
     const preview = await this.buildImportPreview(parsed);
     const spreadsheet = parsed.format === 'XLSX' || parsed.format === 'XLSM';
     const source = spreadsheet ? 'spreadsheet-import' : 'csv-import';
@@ -719,7 +723,7 @@ export class AssetsService {
           line: row.line,
           hostname,
           ipAddress: row.data.ipAddress.trim(),
-          actorUserId: SIMULATED_ACTOR_USER_ID,
+          actorUserId: actor.id,
           comment: row.data.comment || null,
         };
         const event = await transaction.assetEvent.create({
@@ -741,8 +745,8 @@ export class AssetsService {
         await transaction.auditLog.create({
           data: {
             assetId: asset.id,
-            actorType: 'USER',
-            actorId: SIMULATED_ACTOR_USER_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: eventType,
             entityType: 'Asset',
             entityId: asset.id,
@@ -826,7 +830,7 @@ export class AssetsService {
     };
   }
 
-  async enrichManually(id: string, payload: ManualEnrichmentDto) {
+  async enrichManually(id: string, payload: ManualEnrichmentDto, actor: CurrentActor) {
     const attributes = Object.entries(payload.attributes).flatMap(([key, value]) =>
       typeof value === 'string' && value.trim() ? [{ key, value: value.trim() }] : [],
     );
@@ -959,7 +963,7 @@ export class AssetsService {
         createdAttributes,
         confirmedAttributes,
         source: MANUAL_SOURCE,
-        actorUserId: SIMULATED_ACTOR_USER_ID,
+        actorUserId: actor.id,
       };
       const previousValues = Object.fromEntries(
         attributes.map((attribute) => {
@@ -982,8 +986,8 @@ export class AssetsService {
       const auditLog = await transaction.auditLog.create({
         data: {
           assetId: id,
-          actorType: 'USER',
-          actorId: SIMULATED_ACTOR_USER_ID,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
           action: MANUAL_ENRICHMENT_EVENT_TYPE,
           entityType: 'ASSET',
           entityId: id,

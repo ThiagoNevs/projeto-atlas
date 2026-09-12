@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 
-import type { Dispatch, SetStateAction } from 'react';
+import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { Root } from 'react-dom/client';
 
 import { ApiError } from '../lib/api-error.ts';
@@ -24,8 +24,9 @@ import {
 const sharedEnvironment = createJsdomTestEnvironment();
 sharedEnvironment.container.remove();
 
-const { act, createElement } = await import('react');
+const { act, createElement, useEffect } = await import('react');
 const { createRoot } = await import('react-dom/client');
+const { AuthContext } = await import('./auth-provider.tsx');
 const {
   FindingReviewCasesPage,
   PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
@@ -54,6 +55,34 @@ const SECOND_CASE_ID = '44444444-4444-4444-8444-444444444444';
 const ASSET_ID = '22222222-2222-4222-8222-222222222222';
 const FINDING_ID = 'finding_0123456789abcdef01234567';
 const SECOND_FINDING_ID = 'finding_89abcdef0123456789abcdef';
+const ACTOR_ID = 'human:oidc:test:actor';
+
+const authenticatedTestContext = {
+  status: 'authenticated' as const,
+  actor: {
+    id: ACTOR_ID,
+    kind: 'HUMAN' as const,
+    displayName: 'Pessoa de teste',
+    permissions: ['atlas:access'],
+  },
+  error: null,
+  login: async () => undefined,
+  logout: async () => undefined,
+};
+
+function AuthenticatedTestBoundary({ children }: { children: ReactNode }) {
+  return createElement(AuthContext.Provider, { value: authenticatedTestContext }, children);
+}
+
+function AuthenticatedFindingReviewCasesPage(
+  props: Parameters<typeof FindingReviewCasesPage>[0],
+) {
+  return createElement(
+    AuthenticatedTestBoundary,
+    null,
+    createElement(FindingReviewCasesPage, props),
+  );
+}
 
 let activeTestEnvironments = 0;
 
@@ -330,7 +359,7 @@ async function renderPage(
 ) {
   const root: Root = createRoot(environment.container);
   await act(async () => {
-    root.render(createElement(FindingReviewCasesPage, props));
+    root.render(createElement(AuthenticatedFindingReviewCasesPage, props));
     await flush();
   });
   return { environment, root };
@@ -349,7 +378,7 @@ async function renderCommandControllerHarness(
   };
 
   function Harness() {
-    commands = useReviewCaseCommands({
+    const nextCommands = useReviewCaseCommands({
       detail,
       selectedCaseIdRef,
       updateStatus: async () => ({
@@ -371,11 +400,14 @@ async function renderCommandControllerHarness(
       retryList: () => undefined,
       ...overrides,
     });
+    useEffect(() => {
+      commands = nextCommands;
+    }, [nextCommands]);
     return null;
   }
 
   await act(async () => {
-    root.render(createElement(Harness));
+    root.render(createElement(AuthenticatedTestBoundary, null, createElement(Harness)));
     await flush();
   });
 
@@ -1135,7 +1167,7 @@ test('rerender do mesmo detalhe não agenda nem rouba o foco novamente', async (
     assert.ok(filterControl);
     filterControl.focus();
     await act(async () => {
-      harness.root.render(createElement(FindingReviewCasesPage, props));
+      harness.root.render(createElement(AuthenticatedFindingReviewCasesPage, props));
       await flush();
     });
     await act(async () => { frames.runAll(); await flush(); });
@@ -1342,7 +1374,7 @@ test('unmount cancela a criação pendente sem atualizar a interface', async () 
   const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
   harness.environment.window.sessionStorage.setItem(
     storageKey,
-    JSON.stringify(createPendingFindingReviewCaseAttempt(FINDING_ID, 'atlas-ui-unmount-success')),
+    JSON.stringify(createPendingFindingReviewCaseAttempt(FINDING_ID, ACTOR_ID, 'atlas-ui-unmount-success')),
   );
   const button = findButton(harness.environment.container, 'Criar caso');
   await act(async () => { button.click(); await flush(); });
@@ -1401,7 +1433,7 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
   const firstContainer = environment.container;
   const firstRoot = createRoot(firstContainer);
   await act(async () => {
-    firstRoot.render(createElement(FindingReviewCasesPage, {
+    firstRoot.render(createElement(AuthenticatedFindingReviewCasesPage, {
       initialSearchParams: { create: '1', findingId: FINDING_ID },
       loadCases: async () => listResponse,
       createCase: async (_findingId: string, key: string) => {
@@ -1426,7 +1458,7 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
     `atlas:pending-review-case:${FINDING_ID}`,
   );
   assert.ok(storedAttempt);
-  const parsedAttempt = parsePendingFindingReviewCaseAttempt(storedAttempt, FINDING_ID);
+  const parsedAttempt = parsePendingFindingReviewCaseAttempt(storedAttempt, FINDING_ID, ACTOR_ID);
   assert.equal(parsedAttempt?.idempotencyKey, keys[0]);
   await act(async () => firstRoot.unmount());
 
@@ -1434,7 +1466,7 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
   environment.window.document.body.append(secondContainer);
   const secondRoot = createRoot(secondContainer);
   await act(async () => {
-    secondRoot.render(createElement(FindingReviewCasesPage, {
+    secondRoot.render(createElement(AuthenticatedFindingReviewCasesPage, {
       initialSearchParams: { create: '1', findingId: FINDING_ID },
       loadCases: async () => listResponse,
       loadDetail: async () => detailResponse,
@@ -1469,9 +1501,10 @@ test('resultado incerto preserva a chave entre remontagem e replay', async () =>
 test('tentativa pendente usa envelope versionado e expira sem renovar silenciosamente', () => {
   const now = Date.parse('2026-07-20T12:00:00.000Z');
   const key = 'atlas-ui-11111111-1111-4111-8111-111111111111';
-  const attempt = createPendingFindingReviewCaseAttempt(FINDING_ID, key, now);
+  const attempt = createPendingFindingReviewCaseAttempt(FINDING_ID, ACTOR_ID, key, now);
   assert.deepEqual(attempt, {
-    version: 1,
+    version: 2,
+    actorId: ACTOR_ID,
     findingId: FINDING_ID,
     idempotencyKey: key,
     createdAt: '2026-07-20T12:00:00.000Z',
@@ -1479,14 +1512,14 @@ test('tentativa pendente usa envelope versionado e expira sem renovar silenciosa
   });
   const serialized = JSON.stringify(attempt);
   assert.deepEqual(
-    parsePendingFindingReviewCaseAttempt(serialized, FINDING_ID, now + 1),
+    parsePendingFindingReviewCaseAttempt(serialized, FINDING_ID, ACTOR_ID, now + 1),
     attempt,
   );
   assert.equal(
     parsePendingFindingReviewCaseAttempt(
       serialized,
       FINDING_ID,
-      now + PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
+      ACTOR_ID, now + PENDING_REVIEW_CASE_ATTEMPT_TTL_MS,
     ),
     null,
   );
@@ -1495,24 +1528,32 @@ test('tentativa pendente usa envelope versionado e expira sem renovar silenciosa
 test('tentativa pendente rejeita conteúdo inválido, adulterado ou associado a outro finding', () => {
   const now = Date.parse('2026-07-20T12:00:00.000Z');
   const key = 'atlas-ui-11111111-1111-4111-8111-111111111111';
-  const valid = createPendingFindingReviewCaseAttempt(FINDING_ID, key, now);
+  const valid = createPendingFindingReviewCaseAttempt(FINDING_ID, ACTOR_ID, key, now);
   const invalidValues = [
     'not-json',
-    JSON.stringify({ ...valid, version: 2 }),
+    JSON.stringify({ ...valid, version: 1 }),
+    JSON.stringify({ ...valid, actorId: 'human:oidc:test:other-actor' }),
+    JSON.stringify({
+      version: 1,
+      findingId: valid.findingId,
+      idempotencyKey: valid.idempotencyKey,
+      createdAt: valid.createdAt,
+      expiresAt: valid.expiresAt,
+    }),
     JSON.stringify({ ...valid, findingId: SECOND_FINDING_ID }),
     JSON.stringify({ ...valid, idempotencyKey: `${key} espaço` }),
     JSON.stringify({ ...valid, expiresAt: '2026-07-20T13:00:00.000Z' }),
     JSON.stringify({ ...valid, unexpected: true }),
   ];
   for (const value of invalidValues) {
-    assert.equal(parsePendingFindingReviewCaseAttempt(value, FINDING_ID, now + 1), null);
+    assert.equal(parsePendingFindingReviewCaseAttempt(value, FINDING_ID, ACTOR_ID, now + 1), null);
   }
 });
 
 test('conteúdo pendente inválido ou expirado exige um novo gesto antes do POST', async () => {
   const expired = createPendingFindingReviewCaseAttempt(
     FINDING_ID,
-    'atlas-ui-expired',
+    ACTOR_ID, 'atlas-ui-expired',
     Date.parse('2020-01-01T00:00:00.000Z'),
   );
   for (const storedValue of ['{invalid', JSON.stringify(expired)]) {
@@ -1522,7 +1563,7 @@ test('conteúdo pendente inválido ou expirado exige um novo gesto antes do POST
     const keys: string[] = [];
     const root = createRoot(environment.container);
     await act(async () => {
-      root.render(createElement(FindingReviewCasesPage, {
+      root.render(createElement(AuthenticatedFindingReviewCasesPage, {
         initialSearchParams: { create: '1', findingId: FINDING_ID },
         loadCases: async () => listResponse,
         createCase: async (_findingId: string, key: string) => {
@@ -1544,7 +1585,7 @@ test('conteúdo pendente inválido ou expirado exige um novo gesto antes do POST
       const replacement = environment.window.sessionStorage.getItem(storageKey);
       assert.ok(replacement);
       assert.equal(
-        parsePendingFindingReviewCaseAttempt(replacement, FINDING_ID)?.idempotencyKey,
+        parsePendingFindingReviewCaseAttempt(replacement, FINDING_ID, ACTOR_ID)?.idempotencyKey,
         keys[0],
       );
     } finally {
@@ -1571,7 +1612,7 @@ test('retries incertos aos 5 e 14 minutos preservam chave e expiração sem reno
     await act(async () => { button.click(); await flush(); });
     const firstEnvelope = harness.environment.window.sessionStorage.getItem(storageKey);
     assert.ok(firstEnvelope);
-    const firstAttempt = parsePendingFindingReviewCaseAttempt(firstEnvelope, FINDING_ID);
+    const firstAttempt = parsePendingFindingReviewCaseAttempt(firstEnvelope, FINDING_ID, ACTOR_ID);
     assert.ok(firstAttempt);
 
     clock.advanceBy(5 * 60 * 1_000);
@@ -1579,7 +1620,7 @@ test('retries incertos aos 5 e 14 minutos preservam chave e expiração sem reno
     const secondEnvelope = harness.environment.window.sessionStorage.getItem(storageKey);
     assert.equal(secondEnvelope, firstEnvelope);
     assert.deepEqual(
-      parsePendingFindingReviewCaseAttempt(secondEnvelope ?? '', FINDING_ID),
+      parsePendingFindingReviewCaseAttempt(secondEnvelope ?? '', FINDING_ID, ACTOR_ID),
       firstAttempt,
     );
 
@@ -1623,7 +1664,7 @@ test('retry aos 14 minutos reutiliza o mesmo header e os timestamps originais', 
     const originalAttempt = parsePendingFindingReviewCaseAttempt(
       originalEnvelope,
       FINDING_ID,
-      clock.now,
+      ACTOR_ID, clock.now,
     );
     assert.ok(originalAttempt);
 
@@ -1637,7 +1678,7 @@ test('retry aos 14 minutos reutiliza o mesmo header e os timestamps originais', 
     ]);
     assert.equal(harness.environment.window.sessionStorage.getItem(storageKey), originalEnvelope);
     assert.deepEqual(
-      parsePendingFindingReviewCaseAttempt(originalEnvelope, FINDING_ID, clock.now),
+      parsePendingFindingReviewCaseAttempt(originalEnvelope, FINDING_ID, ACTOR_ID, clock.now),
       originalAttempt,
     );
   } finally {
@@ -1679,7 +1720,7 @@ test('retry após mais de 15 minutos bloqueia o POST e exige outro gesto para no
     const replacementAttempt = parsePendingFindingReviewCaseAttempt(
       replacement,
       FINDING_ID,
-      clock.now,
+      ACTOR_ID, clock.now,
     );
     assert.ok(replacementAttempt);
     assert.equal(replacementAttempt.idempotencyKey, keys[1]);
@@ -1755,7 +1796,7 @@ test('getItem indisponível reutiliza a tentativa em memória antes do TTL e blo
     await act(async () => { button.click(); await flush(); });
     const originalEnvelope = originalGetItem(storageKey);
     assert.ok(originalEnvelope);
-    const attempt = parsePendingFindingReviewCaseAttempt(originalEnvelope, FINDING_ID, clock.now);
+    const attempt = parsePendingFindingReviewCaseAttempt(originalEnvelope, FINDING_ID, ACTOR_ID, clock.now);
     assert.ok(attempt);
 
     clock.advanceBy(14 * 60 * 1_000);
@@ -1904,13 +1945,13 @@ test('respostas conclusivas limpam a tentativa mesmo depois do unmount', async (
     const storageKey = `atlas:pending-review-case:${FINDING_ID}`;
     const attempt = createPendingFindingReviewCaseAttempt(
       FINDING_ID,
-      `atlas-ui-conclusive-${status}`,
+      ACTOR_ID, `atlas-ui-conclusive-${status}`,
     );
     environment.window.sessionStorage.setItem(storageKey, JSON.stringify(attempt));
     const pending = deferred<CreateFindingReviewCaseResponse>();
     const root = createRoot(environment.container);
     await act(async () => {
-      root.render(createElement(FindingReviewCasesPage, {
+      root.render(createElement(AuthenticatedFindingReviewCasesPage, {
         initialSearchParams: { create: '1', findingId: FINDING_ID },
         loadCases: async () => listResponse,
         createCase: async () => pending.promise,
@@ -2674,7 +2715,7 @@ test('resposta tardia da decisão de A não altera B e limpa somente o envelope 
 
     const attemptB = createPendingFindingReviewDecisionAttempt(
       SECOND_CASE_ID,
-      'DIFFERENT_ASSETS',
+      ACTOR_ID, 'DIFFERENT_ASSETS',
       'Tentativa incerta exclusiva de B.',
       2,
       'atlas-ui-decision-case-b',
@@ -2881,20 +2922,21 @@ test('envelope de decisão valida TTL e permanece isolado por caso', () => {
   const now = Date.parse('2026-08-22T12:00:00.000Z');
   const attempt = createPendingFindingReviewDecisionAttempt(
     CASE_ID,
-    'DIFFERENT_ASSETS',
+    ACTOR_ID, 'DIFFERENT_ASSETS',
     'São ativos distintos.',
     2,
     'atlas-ui-decision-key',
     now,
   );
-  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), CASE_ID, now)?.caseId, CASE_ID);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), CASE_ID, ACTOR_ID, now)?.caseId, CASE_ID);
   assert.equal(parsePendingFindingReviewDecisionAttempt(
     JSON.stringify(attempt),
     CASE_ID,
-    now + PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
+    ACTOR_ID, now + PENDING_REVIEW_DECISION_ATTEMPT_TTL_MS,
   ), null);
-  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), SECOND_CASE_ID, now), null);
-  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify({ ...attempt, extra: true }), CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), SECOND_CASE_ID, ACTOR_ID, now), null);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify(attempt), CASE_ID, 'human:oidc:test:other-actor', now), null);
+  assert.equal(parsePendingFindingReviewDecisionAttempt(JSON.stringify({ ...attempt, extra: true }), CASE_ID, ACTOR_ID, now), null);
 });
 
 test('exibe decisão atual, histórico múltiplo e evento traduzido sem fingerprint', async () => {
@@ -3212,25 +3254,26 @@ test('valida o envelope de resolução, TTL e vínculo com o caso', () => {
   const now = Date.parse('2026-07-20T12:00:00.000Z');
   const attempt = createPendingFindingReviewResolutionAttempt(
     CASE_ID,
-    'Justificativa canônica.',
+    ACTOR_ID, 'Justificativa canônica.',
     3,
     'atlas-ui-resolution-key',
     now,
   );
   assert.deepEqual(
-    parsePendingFindingReviewResolutionAttempt(JSON.stringify(attempt), CASE_ID, now + 1),
+    parsePendingFindingReviewResolutionAttempt(JSON.stringify(attempt), CASE_ID, ACTOR_ID, now + 1),
     attempt,
   );
   assert.equal(
     parsePendingFindingReviewResolutionAttempt(
       JSON.stringify(attempt),
       CASE_ID,
-      now + PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
+      ACTOR_ID, now + PENDING_REVIEW_RESOLUTION_ATTEMPT_TTL_MS,
     ),
     null,
   );
-  assert.equal(parsePendingFindingReviewResolutionAttempt(JSON.stringify(attempt), SECOND_CASE_ID, now), null);
-  assert.equal(parsePendingFindingReviewResolutionAttempt('{invalid', CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewResolutionAttempt(JSON.stringify(attempt), SECOND_CASE_ID, ACTOR_ID, now), null);
+  assert.equal(parsePendingFindingReviewResolutionAttempt(JSON.stringify(attempt), CASE_ID, 'human:oidc:test:other-actor', now), null);
+  assert.equal(parsePendingFindingReviewResolutionAttempt('{invalid', CASE_ID, ACTOR_ID, now), null);
 });
 
 test('remove envelopes de resolução expirados e malformados durante a restauração do detalhe', async () => {
@@ -3239,7 +3282,7 @@ test('remove envelopes de resolução expirados e malformados durante a restaura
   const expiredEnvironment = createIsolatedTestEnvironment();
   const expiredAttempt = createPendingFindingReviewResolutionAttempt(
     CASE_ID,
-    'Tentativa expirada.',
+    ACTOR_ID, 'Tentativa expirada.',
     3,
     'atlas-ui-resolution-expired',
     clock.now,
@@ -3680,17 +3723,18 @@ test('valida envelope de reabertura, TTL, versão desconhecida e isolamento por 
   const now = Date.parse('2026-07-20T12:00:00.000Z');
   const attempt = createPendingFindingReviewReopenAttempt(
     CASE_ID,
-    'Justificativa canônica.',
+    ACTOR_ID, 'Justificativa canônica.',
     4,
     'atlas-ui-reopen-key',
     now,
   );
   assert.equal(Date.parse(attempt.expiresAt) - Date.parse(attempt.createdAt), PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS);
-  assert.deepEqual(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, now + 1), attempt);
-  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, now + PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS), null);
-  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), SECOND_CASE_ID, now), null);
-  assert.equal(parsePendingFindingReviewReopenAttempt('{invalid', CASE_ID, now), null);
-  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify({ ...attempt, version: 2 }), CASE_ID, now), null);
+  assert.deepEqual(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, ACTOR_ID, now + 1), attempt);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, ACTOR_ID, now + PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), SECOND_CASE_ID, ACTOR_ID, now), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify(attempt), CASE_ID, 'human:oidc:test:other-actor', now), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt('{invalid', CASE_ID, ACTOR_ID, now), null);
+  assert.equal(parsePendingFindingReviewReopenAttempt(JSON.stringify({ ...attempt, version: 1 }), CASE_ID, ACTOR_ID, now), null);
 });
 
 test('retry expirado na mesma aba não envia nova chave e exige recarga explícita', async () => {
@@ -3722,7 +3766,7 @@ test('limpa envelope de reabertura válido mas expirado no componente sem retry 
   const storageKey = `atlas:pending-review-reopen:${CASE_ID}`;
   const expired = createPendingFindingReviewReopenAttempt(
     CASE_ID,
-    'Tentativa válida, porém expirada.',
+    ACTOR_ID, 'Tentativa válida, porém expirada.',
     4,
     'atlas-ui-reopen-expired',
     clock.now - PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS - 1,
@@ -3756,8 +3800,8 @@ test('limpa envelope de reabertura válido mas expirado no componente sem retry 
 
 test('limpa envelopes de reabertura malformados e com versão desconhecida sem enviar POST', async () => {
   for (const raw of ['{invalid', JSON.stringify({
-    ...createPendingFindingReviewReopenAttempt(CASE_ID, 'Válida.', 4, 'atlas-ui-reopen-version'),
-    version: 2,
+    ...createPendingFindingReviewReopenAttempt(CASE_ID, ACTOR_ID, 'Válida.', 4, 'atlas-ui-reopen-version'),
+    version: 1,
   })]) {
     let calls = 0;
     const environment = createIsolatedTestEnvironment();
@@ -4495,7 +4539,7 @@ test('replay histórico D1→D2 não regride current D3 nem a versão e não dup
   const environment = createIsolatedTestEnvironment();
   const attempt = createPendingFindingReviewDecisionSupersessionAttempt(
     CASE_ID,
-    decisionResponse.decision.id,
+    ACTOR_ID, decisionResponse.decision.id,
     supersededDecision.identityConclusion,
     supersededDecision.justification,
     'A primeira decisão precisava ser corrigida.',
@@ -4561,7 +4605,7 @@ test('envelope da correção valida TTL, vínculo, versão e conteúdo sem renov
   const now = Date.parse('2026-07-20T12:00:00.000Z');
   const attempt = createPendingFindingReviewDecisionSupersessionAttempt(
     CASE_ID,
-    decisionResponse.decision.id,
+    ACTOR_ID, decisionResponse.decision.id,
     'DIFFERENT_ASSETS',
     'Justificativa\ninterna preservada.',
     'Motivo\ninterno preservado.',
@@ -4574,26 +4618,29 @@ test('envelope da correção valida TTL, vínculo, versão e conteúdo sem renov
     PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
   );
   assert.deepEqual(
-    parsePendingFindingReviewDecisionSupersessionAttempt(JSON.stringify(attempt), CASE_ID, now + 1),
+    parsePendingFindingReviewDecisionSupersessionAttempt(JSON.stringify(attempt), CASE_ID, ACTOR_ID, now + 1),
     attempt,
   );
   assert.equal(
     parsePendingFindingReviewDecisionSupersessionAttempt(
       JSON.stringify(attempt),
       CASE_ID,
-      now + PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
+      ACTOR_ID, now + PENDING_REVIEW_DECISION_SUPERSESSION_ATTEMPT_TTL_MS,
     ),
     null,
   );
-  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt('{invalid', CASE_ID, now), null);
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt('{invalid', CASE_ID, ACTOR_ID, now), null);
   assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
-    JSON.stringify({ ...attempt, version: 2 }), CASE_ID, now,
+    JSON.stringify({ ...attempt, version: 1 }), CASE_ID, ACTOR_ID, now,
   ), null);
   assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
-    JSON.stringify(attempt), SECOND_CASE_ID, now,
+    JSON.stringify(attempt), SECOND_CASE_ID, ACTOR_ID, now,
   ), null);
   assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
-    JSON.stringify({ ...attempt, supersededDecisionId: 'invalid' }), CASE_ID, now,
+    JSON.stringify(attempt), CASE_ID, 'human:oidc:test:other-actor', now,
+  ), null);
+  assert.equal(parsePendingFindingReviewDecisionSupersessionAttempt(
+    JSON.stringify({ ...attempt, supersededDecisionId: 'invalid' }), CASE_ID, ACTOR_ID, now,
   ), null);
 });
 
@@ -4627,7 +4674,7 @@ test('resultado incerto restaura e retry reutiliza exatamente envelope sem auto 
     const storageKey = `atlas:pending-review-decision-supersession:${CASE_ID}`;
     const raw = environment.window.sessionStorage.getItem(storageKey);
     assert.ok(raw);
-    const persisted = parsePendingFindingReviewDecisionSupersessionAttempt(raw, CASE_ID, clock.now);
+    const persisted = parsePendingFindingReviewDecisionSupersessionAttempt(raw, CASE_ID, ACTOR_ID, clock.now);
     assert.ok(persisted);
     const expiresAt = persisted.expiresAt;
 
@@ -4635,7 +4682,7 @@ test('resultado incerto restaura e retry reutiliza exatamente envelope sem auto 
     environment.container.replaceChildren();
     const remountedRoot = createRoot(environment.container);
     harness = { environment, root: remountedRoot };
-    await act(async () => { remountedRoot.render(createElement(FindingReviewCasesPage, props)); await flush(); });
+    await act(async () => { remountedRoot.render(createElement(AuthenticatedFindingReviewCasesPage, props)); await flush(); });
     assert.equal(calls.length, 1);
     clock.advanceBy(5 * 60 * 1000);
     await act(async () => { findButton(environment.container, 'Tentar novamente').click(); await flush(); });
@@ -4672,7 +4719,7 @@ test('cleanup condicional da tentativa A não remove envelope B mais novo', asyn
     assert.equal(calls, 2);
     const attemptB = createPendingFindingReviewDecisionSupersessionAttempt(
       CASE_ID,
-      decisionResponse.decision.id,
+      ACTOR_ID, decisionResponse.decision.id,
       'DIFFERENT_ASSETS',
       'Outra justificativa.',
       'Outro motivo.',

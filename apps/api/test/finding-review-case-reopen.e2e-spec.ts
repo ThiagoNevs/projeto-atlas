@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
@@ -11,6 +10,7 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import { ConflictFindingsService } from '../src/conflict-analysis/conflict-findings.service';
 import { CreateFindingReviewCaseReopenDto } from '../src/finding-review-cases/dto/create-finding-review-case-reopen.dto';
 import {
@@ -19,10 +19,7 @@ import {
   reopenRequestFingerprint,
 } from '../src/finding-review-cases/finding-review-case-reopen';
 import { FINDING_REVIEW_CASE_RESOLVED_EVENT } from '../src/finding-review-cases/finding-review-case-resolution';
-import {
-  reviewSubjectKey,
-  sha256,
-} from '../src/finding-review-cases/finding-review-case-creation';
+import { reviewSubjectKey, sha256 } from '../src/finding-review-cases/finding-review-case-creation';
 import { FINDING_REVIEW_CASES_FEATURE_FLAG } from '../src/finding-review-cases/finding-review-cases.feature';
 import {
   FindingReviewCaseStatus,
@@ -31,6 +28,8 @@ import {
   type Prisma,
 } from '../src/generated/prisma/client';
 import { PrismaService } from '../src/prisma/prisma.service';
+
+const TEST_ACTOR_ID = 'human:oidc:test:actor';
 
 type FailureStep = 'event' | 'audit';
 type UnknownFunction = (...args: unknown[]) => unknown;
@@ -98,13 +97,10 @@ class ReopenTestPrismaService extends PrismaService {
     return new Proxy(client, {
       get: (target, property) => {
         const delegate = (target as unknown as Record<PropertyKey, unknown>)[property];
-        const failureStep = property === 'findingReviewEvent'
-          ? 'event'
-          : property === 'auditLog'
-            ? 'audit'
-            : null;
-        const protectedDelegate = typeof property === 'string'
-          && PROTECTED_DELEGATES.has(property as ProtectedDelegate);
+        const failureStep =
+          property === 'findingReviewEvent' ? 'event' : property === 'auditLog' ? 'audit' : null;
+        const protectedDelegate =
+          typeof property === 'string' && PROTECTED_DELEGATES.has(property as ProtectedDelegate);
         if ((!failureStep && !protectedDelegate) || typeof delegate !== 'object' || !delegate) {
           return delegate;
         }
@@ -118,10 +114,10 @@ class ReopenTestPrismaService extends PrismaService {
                 throw new Error(`TEST_REOPEN_TRANSACTION_FAILURE:${failureStep}`);
               }
               if (
-                this.inventoryWriteGuard
-                && protectedDelegate
-                && typeof method === 'string'
-                && WRITE_METHODS.has(method)
+                this.inventoryWriteGuard &&
+                protectedDelegate &&
+                typeof method === 'string' &&
+                WRITE_METHODS.has(method)
               ) {
                 throw new Error(`TEST_REOPEN_INVENTORY_WRITE:${String(property)}.${method}`);
               }
@@ -192,21 +188,22 @@ describe('Finding review reopen helpers and DTO', () => {
   it('creates deterministic, case-sensitive and case-scoped fingerprints', () => {
     const firstCase = randomUUID();
     const secondCase = randomUUID();
-    expect(reopenRequestFingerprint(firstCase, 'reopen-ABC')).toBe(
-      reopenRequestFingerprint(firstCase, 'reopen-ABC'),
+    expect(reopenRequestFingerprint(TEST_ACTOR_ID, firstCase, 'reopen-ABC')).toBe(
+      reopenRequestFingerprint(TEST_ACTOR_ID, firstCase, 'reopen-ABC'),
     );
-    expect(reopenRequestFingerprint(firstCase, 'reopen-ABC')).not.toBe(
-      reopenRequestFingerprint(firstCase, 'reopen-abc'),
+    expect(reopenRequestFingerprint(TEST_ACTOR_ID, firstCase, 'reopen-ABC')).not.toBe(
+      reopenRequestFingerprint(TEST_ACTOR_ID, firstCase, 'reopen-abc'),
     );
-    expect(reopenRequestFingerprint(firstCase, 'reopen-ABC')).not.toBe(
-      reopenRequestFingerprint(secondCase, 'reopen-ABC'),
+    expect(reopenRequestFingerprint(TEST_ACTOR_ID, firstCase, 'reopen-ABC')).not.toBe(
+      reopenRequestFingerprint(TEST_ACTOR_ID, secondCase, 'reopen-ABC'),
     );
   });
 });
 
 describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: ReopenTestPrismaService;
   let findings: ConflictFindingsService;
   const testRunId = randomUUID();
@@ -216,6 +213,8 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
@@ -227,7 +226,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get<ReopenTestPrismaService>(PrismaService);
     findings = app.get(ConflictFindingsService);
   });
@@ -251,23 +250,28 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
-  async function createCase(options: {
-    status?: FindingReviewCaseStatus;
-    version?: number;
-    reviewSubjectKey?: string;
-  } = {}): Promise<CaseFixture> {
+  async function createCase(
+    options: {
+      status?: FindingReviewCaseStatus;
+      version?: number;
+      reviewSubjectKey?: string;
+    } = {},
+  ): Promise<CaseFixture> {
     const token = randomUUID();
     const caseId = randomUUID();
     const version = options.version ?? 3;
     const status = options.status ?? FindingReviewCaseStatus.RESOLVED;
     const reviewSubjectKey = options.reviewSubjectKey ?? sha256(`subject:${testRunId}:${token}`);
-    const activeReviewSubjectKey = ([
-      FindingReviewCaseStatus.OPEN,
-      FindingReviewCaseStatus.IN_REVIEW,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-    ] as FindingReviewCaseStatus[]).includes(status)
+    const activeReviewSubjectKey = (
+      [
+        FindingReviewCaseStatus.OPEN,
+        FindingReviewCaseStatus.IN_REVIEW,
+        FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      ] as FindingReviewCaseStatus[]
+    ).includes(status)
       ? reviewSubjectKey
       : null;
     const relatedAssetIds = [randomUUID(), randomUUID()];
@@ -301,7 +305,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
         },
         originalSnapshotHash: sha256(`snapshot:${testRunId}:${token}`),
         version,
-        createdBy: 'atlas-mvp-user',
+        createdBy: auth.actor.id,
         findingGeneratedAt: createdAt,
         createdAt,
         updatedAt: createdAt,
@@ -319,26 +323,28 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
               eventType: 'CASE_CREATED',
               versionBefore: null,
               versionAfter: 1,
-              actorId: 'atlas-mvp-user',
+              actorId: auth.actor.id,
               nextStatus: FindingReviewCaseStatus.OPEN,
               after: { status: FindingReviewCaseStatus.OPEN, version: 1 },
               occurredAt: createdAt,
               createdAt,
             },
             ...(status === FindingReviewCaseStatus.RESOLVED
-              ? [{
-                  eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
-                  versionBefore: version - 1,
-                  versionAfter: version,
-                  actorId: 'atlas-mvp-user',
-                  previousStatus: FindingReviewCaseStatus.IN_REVIEW,
-                  nextStatus: FindingReviewCaseStatus.RESOLVED,
-                  before: { status: FindingReviewCaseStatus.IN_REVIEW, version: version - 1 },
-                  after: { status: FindingReviewCaseStatus.RESOLVED, version },
-                  metadata: { justification: 'Resolução histórica da fixture.' },
-                  occurredAt: createdAt,
-                  createdAt,
-                }]
+              ? [
+                  {
+                    eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
+                    versionBefore: version - 1,
+                    versionAfter: version,
+                    actorId: auth.actor.id,
+                    previousStatus: FindingReviewCaseStatus.IN_REVIEW,
+                    nextStatus: FindingReviewCaseStatus.RESOLVED,
+                    before: { status: FindingReviewCaseStatus.IN_REVIEW, version: version - 1 },
+                    after: { status: FindingReviewCaseStatus.RESOLVED, version },
+                    metadata: { justification: 'Resolução histórica da fixture.' },
+                    occurredAt: createdAt,
+                    createdAt,
+                  },
+                ]
               : []),
           ],
         },
@@ -352,7 +358,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
         identityConclusion: FindingReviewIdentityConclusion.SAME_ASSET,
         justification: 'Decisão de identidade histórica preservada.',
         caseVersion: Math.max(1, version - 1),
-        createdBy: 'atlas-mvp-user',
+        createdBy: auth.actor.id,
         requestFingerprint: sha256(`decision:${testRunId}:${token}`),
         createdAt,
       },
@@ -378,7 +384,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     });
     relatedAssetIds.forEach((id) => assetIds.add(id));
 
-    const response = await request(server)
+    const response = await api
       .get('/conflict-analysis/findings')
       .query({ hostname, pageSize: 100 })
       .expect(200);
@@ -396,31 +402,20 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     };
   }
 
-  function postReopen(
-    caseId: string,
-    key: string | undefined,
-    payload: Record<string, unknown>,
-  ) {
-    const call = request(server).post(`/conflict-review-cases/${caseId}/reopens`).send(payload);
+  function postReopen(caseId: string, key: string | undefined, payload: Record<string, unknown>) {
+    const call = api.post(`/conflict-review-cases/${caseId}/reopens`).send(payload);
     return key === undefined ? call : call.set('Idempotency-Key', key);
   }
 
-  function postResolution(
-    caseId: string,
-    key: string,
-    expectedVersion: number,
-  ) {
-    return request(server)
+  function postResolution(caseId: string, key: string, expectedVersion: number) {
+    return api
       .post(`/conflict-review-cases/${caseId}/resolutions`)
       .set('Idempotency-Key', key)
       .send({ expectedVersion, justification: 'Nova conclusão após a reabertura.' });
   }
 
   function postCaseCreation(findingId: string, key: string) {
-    return request(server)
-      .post('/conflict-review-cases')
-      .set('Idempotency-Key', key)
-      .send({ findingId });
+    return api.post('/conflict-review-cases').set('Idempotency-Key', key).send({ findingId });
   }
 
   function validPayload(
@@ -446,15 +441,17 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
   }
 
   async function inventorySnapshot(): Promise<string> {
-    const [assets, attributes, interfaces, evidence, events, conflicts, values] = await Promise.all([
-      prisma.asset.findMany({ orderBy: { id: 'asc' } }),
-      prisma.assetAttribute.findMany({ orderBy: { id: 'asc' } }),
-      prisma.networkInterface.findMany({ orderBy: { id: 'asc' } }),
-      prisma.assetEvidence.findMany({ orderBy: { id: 'asc' } }),
-      prisma.assetEvent.findMany({ orderBy: { id: 'asc' } }),
-      prisma.conflict.findMany({ orderBy: { id: 'asc' } }),
-      prisma.conflictValue.findMany({ orderBy: { id: 'asc' } }),
-    ]);
+    const [assets, attributes, interfaces, evidence, events, conflicts, values] = await Promise.all(
+      [
+        prisma.asset.findMany({ orderBy: { id: 'asc' } }),
+        prisma.assetAttribute.findMany({ orderBy: { id: 'asc' } }),
+        prisma.networkInterface.findMany({ orderBy: { id: 'asc' } }),
+        prisma.assetEvidence.findMany({ orderBy: { id: 'asc' } }),
+        prisma.assetEvent.findMany({ orderBy: { id: 'asc' } }),
+        prisma.conflict.findMany({ orderBy: { id: 'asc' } }),
+        prisma.conflictValue.findMany({ orderBy: { id: 'asc' } }),
+      ],
+    );
     return JSON.stringify({ assets, attributes, interfaces, evidence, events, conflicts, values });
   }
 
@@ -485,7 +482,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
         versionAfter: fixture.version + 1,
         previousStatus: FindingReviewCaseStatus.RESOLVED,
         status: FindingReviewCaseStatus.IN_REVIEW,
-        reopenedBy: 'atlas-mvp-user',
+        reopenedBy: auth.actor.id,
       }),
     });
     expect(new Date(body.reopen.reopenedAt).toISOString()).toBe(body.reopen.reopenedAt);
@@ -493,18 +490,24 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     const persisted = await prisma.findingReviewCase.findUniqueOrThrow({
       where: { id: fixture.caseId },
     });
-    expect(persisted).toEqual(expect.objectContaining({
-      status: FindingReviewCaseStatus.IN_REVIEW,
-      version: fixture.version + 1,
-      activeReviewSubjectKey: fixture.reviewSubjectKey,
-    }));
-    expect(await prisma.findingReviewDecision.findMany({
-      where: { caseId: fixture.caseId },
-      orderBy: { caseVersion: 'asc' },
-    })).toEqual(decisionBefore);
-    expect(await prisma.findingReviewEvent.count({
-      where: { caseId: fixture.caseId, eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT },
-    })).toBe(1);
+    expect(persisted).toEqual(
+      expect.objectContaining({
+        status: FindingReviewCaseStatus.IN_REVIEW,
+        version: fixture.version + 1,
+        activeReviewSubjectKey: fixture.reviewSubjectKey,
+      }),
+    );
+    expect(
+      await prisma.findingReviewDecision.findMany({
+        where: { caseId: fixture.caseId },
+        orderBy: { caseVersion: 'asc' },
+      }),
+    ).toEqual(decisionBefore);
+    expect(
+      await prisma.findingReviewEvent.count({
+        where: { caseId: fixture.caseId, eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT },
+      }),
+    ).toBe(1);
     expect(await reopenEffects(fixture.caseId)).toEqual({ events: 1, audits: 1 });
     expect(await inventorySnapshot()).toBe(inventoryBefore);
 
@@ -512,30 +515,36 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       where: {
         caseId_requestId: {
           caseId: fixture.caseId,
-          requestId: reopenRequestFingerprint(fixture.caseId, rawKey),
+          requestId: reopenRequestFingerprint(auth.actor.id, fixture.caseId, rawKey),
         },
       },
     });
     const audit = await prisma.auditLog.findFirstOrThrow({
       where: { entityId: fixture.caseId, action: FINDING_REVIEW_CASE_REOPENED_EVENT },
     });
-    expect(event).toEqual(expect.objectContaining({
-      id: body.reopen.eventId,
-      versionBefore: fixture.version,
-      versionAfter: fixture.version + 1,
-      previousStatus: FindingReviewCaseStatus.RESOLVED,
-      nextStatus: FindingReviewCaseStatus.IN_REVIEW,
-      metadata: { justification: 'Linha um.\nLinha  dois.' },
-    }));
-    expect(audit).toEqual(expect.objectContaining({
-      action: FINDING_REVIEW_CASE_REOPENED_EVENT,
-      entityType: 'FindingReviewCase',
-      entityId: fixture.caseId,
-      before: { status: FindingReviewCaseStatus.RESOLVED, version: fixture.version },
-      after: { status: FindingReviewCaseStatus.IN_REVIEW, version: fixture.version + 1 },
-    }));
+    expect(event).toEqual(
+      expect.objectContaining({
+        id: body.reopen.eventId,
+        versionBefore: fixture.version,
+        versionAfter: fixture.version + 1,
+        previousStatus: FindingReviewCaseStatus.RESOLVED,
+        nextStatus: FindingReviewCaseStatus.IN_REVIEW,
+        metadata: { justification: 'Linha um.\nLinha  dois.' },
+      }),
+    );
+    expect(audit).toEqual(
+      expect.objectContaining({
+        action: FINDING_REVIEW_CASE_REOPENED_EVENT,
+        entityType: 'FindingReviewCase',
+        entityId: fixture.caseId,
+        before: { status: FindingReviewCaseStatus.RESOLVED, version: fixture.version },
+        after: { status: FindingReviewCaseStatus.IN_REVIEW, version: fixture.version + 1 },
+      }),
+    );
     expect(JSON.stringify([event.metadata, audit.metadata, response.body])).not.toContain(rawKey);
-    expect(JSON.stringify(response.body)).not.toMatch(/requestId|requestFingerprint|Idempotency-Key/);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /requestId|requestFingerprint|Idempotency-Key/,
+    );
   });
 
   it('keeps currentDecision and decisionHistory in the public detail after reopen', async () => {
@@ -545,7 +554,7 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       `detail-reopen-${randomUUID()}`,
       validPayload(fixture.version),
     ).expect(201);
-    const detail = await request(server).get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
+    const detail = await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
     const body = responseBody<{
       status: FindingReviewCaseStatus;
       version: number;
@@ -558,10 +567,12 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     expect(body.currentDecision.id).toBe(fixture.decisionId);
     expect(body.decisionHistory).toHaveLength(1);
     expect(body.decisionHistory[0]).toEqual(expect.objectContaining({ id: fixture.decisionId }));
-    expect(body.events.map((event) => event.eventType)).toEqual(expect.arrayContaining([
-      FINDING_REVIEW_CASE_RESOLVED_EVENT,
-      FINDING_REVIEW_CASE_REOPENED_EVENT,
-    ]));
+    expect(body.events.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining([
+        FINDING_REVIEW_CASE_RESOLVED_EVENT,
+        FINDING_REVIEW_CASE_REOPENED_EVENT,
+      ]),
+    );
     expect(JSON.stringify(body.events)).not.toMatch(/requestId|requestFingerprint/);
   });
 
@@ -573,7 +584,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     FindingReviewCaseStatus.CANCELLED,
   ])('rejects reopen from %s without side effects', async (status) => {
     const fixture = await createCase({ status });
-    const before = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const before = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const response = await postReopen(
       fixture.caseId,
       `status-reopen-${randomUUID()}`,
@@ -581,8 +594,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
     );
     expect(response.status).toBe(422);
     expect(responseBody<ErrorBody>(response).code).toBe('FINDING_REVIEW_CASE_REOPEN_NOT_ALLOWED');
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(before);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(before);
     expect(await reopenEffects(fixture.caseId)).toEqual({ events: 0, audits: 0 });
   });
 
@@ -660,7 +674,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       validPayload(fixture.version, '  Justificativa original.  '),
     );
     const createdBody = responseBody<ReopenBody>(created);
-    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const effectsBefore = await reopenEffects(fixture.caseId);
     const replay = await postReopen(
       fixture.caseId,
@@ -672,8 +688,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       idempotentReplay: true,
       reopen: createdBody.reopen,
     });
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(caseBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(caseBefore);
     expect(await reopenEffects(fixture.caseId)).toEqual(effectsBefore);
   });
 
@@ -737,20 +754,21 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
         `race-generic-reopen-${randomUUID()}`,
         validPayload(fixture.version),
       ),
-      request(server)
-        .patch(`/conflict-review-cases/${fixture.caseId}/status`)
-        .send({
-          expectedVersion: fixture.version,
-          status: FindingReviewCaseStatus.IN_REVIEW,
-        }),
+      api.patch(`/conflict-review-cases/${fixture.caseId}/status`).send({
+        expectedVersion: fixture.version,
+        status: FindingReviewCaseStatus.IN_REVIEW,
+      }),
     ]);
     expect(reopen.status).toBe(201);
     expect([400, 409]).toContain(genericTransition.status);
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(expect.objectContaining({
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(
+      expect.objectContaining({
         status: FindingReviewCaseStatus.IN_REVIEW,
         version: fixture.version + 1,
-      }));
+      }),
+    );
     expect(await reopenEffects(fixture.caseId)).toEqual({ events: 1, audits: 1 });
   });
 
@@ -786,14 +804,18 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       validPayload(resolved.version),
     );
     expect(response.status).toBe(409);
-    expect(responseBody<ErrorBody>(response)).toEqual(expect.objectContaining({
-      code: 'ACTIVE_REVIEW_CASE_EXISTS',
-      existingCaseId: active.caseId,
-    }));
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }))
-      .toEqual(resolvedBefore);
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: active.caseId } }))
-      .toEqual(activeBefore);
+    expect(responseBody<ErrorBody>(response)).toEqual(
+      expect.objectContaining({
+        code: 'ACTIVE_REVIEW_CASE_EXISTS',
+        existingCaseId: active.caseId,
+      }),
+    );
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }),
+    ).toEqual(resolvedBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: active.caseId } }),
+    ).toEqual(activeBefore);
   });
 
   it('uses the database unique constraint for concurrent reopen and case creation', async () => {
@@ -820,47 +842,67 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
 
     expect([reopenResponse.status, createResponse.status].sort()).toEqual([201, 409]);
     if (reopenResponse.status === 201) {
-      expect(responseBody<ErrorBody>(createResponse)).toEqual(expect.objectContaining({
-        code: 'ACTIVE_REVIEW_CASE_EXISTS',
-        existingCaseId: resolved.caseId,
-      }));
-      expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }))
-        .toEqual(expect.objectContaining({
+      expect(responseBody<ErrorBody>(createResponse)).toEqual(
+        expect.objectContaining({
+          code: 'ACTIVE_REVIEW_CASE_EXISTS',
+          existingCaseId: resolved.caseId,
+        }),
+      );
+      expect(
+        await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }),
+      ).toEqual(
+        expect.objectContaining({
           status: FindingReviewCaseStatus.IN_REVIEW,
           version: resolved.version + 1,
           activeReviewSubjectKey: finding.reviewSubjectKey,
-        }));
+        }),
+      );
       expect(await reopenEffects(resolved.caseId)).toEqual({ events: 1, audits: 1 });
-      expect(await prisma.findingReviewCase.count({
-        where: { reviewSubjectKey: finding.reviewSubjectKey },
-      })).toBe(1);
-      expect(await prisma.findingReviewEvent.count({
-        where: { eventType: 'CASE_CREATED' },
-      })).toBe(creationEventsBefore);
-      expect(await prisma.auditLog.count({
-        where: { entityType: 'FindingReviewCase', action: 'CASE_CREATED' },
-      })).toBe(creationAuditsBefore);
+      expect(
+        await prisma.findingReviewCase.count({
+          where: { reviewSubjectKey: finding.reviewSubjectKey },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.findingReviewEvent.count({
+          where: { eventType: 'CASE_CREATED' },
+        }),
+      ).toBe(creationEventsBefore);
+      expect(
+        await prisma.auditLog.count({
+          where: { entityType: 'FindingReviewCase', action: 'CASE_CREATED' },
+        }),
+      ).toBe(creationAuditsBefore);
     } else {
       const created = responseBody<{ id: string; reviewSubjectKey: string }>(createResponse);
       caseIds.add(created.id);
-      expect(responseBody<ErrorBody>(reopenResponse)).toEqual(expect.objectContaining({
-        code: 'ACTIVE_REVIEW_CASE_EXISTS',
-        existingCaseId: created.id,
-      }));
+      expect(responseBody<ErrorBody>(reopenResponse)).toEqual(
+        expect.objectContaining({
+          code: 'ACTIVE_REVIEW_CASE_EXISTS',
+          existingCaseId: created.id,
+        }),
+      );
       expect(created.reviewSubjectKey).toBe(finding.reviewSubjectKey);
-      expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }))
-        .toEqual(resolvedBefore);
+      expect(
+        await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: resolved.caseId } }),
+      ).toEqual(resolvedBefore);
       expect(await reopenEffects(resolved.caseId)).toEqual({ events: 0, audits: 0 });
-      expect(await prisma.findingReviewEvent.count({
-        where: { caseId: created.id, eventType: 'CASE_CREATED' },
-      })).toBe(1);
-      expect(await prisma.auditLog.count({
-        where: { entityType: 'FindingReviewCase', entityId: created.id, action: 'CASE_CREATED' },
-      })).toBe(1);
+      expect(
+        await prisma.findingReviewEvent.count({
+          where: { caseId: created.id, eventType: 'CASE_CREATED' },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.auditLog.count({
+          where: { entityType: 'FindingReviewCase', entityId: created.id, action: 'CASE_CREATED' },
+        }),
+      ).toBe(1);
     }
-    expect(await prisma.findingReviewCase.count({
-      where: { activeReviewSubjectKey: finding.reviewSubjectKey },
-    })).toBe(1);
+    expect(
+      await prisma.findingReviewCase.count({
+        where: { activeReviewSubjectKey: finding.reviewSubjectKey },
+      }),
+    ).toBe(1);
   });
 
   it('supports resolve/reopen cycles with the same current decision', async () => {
@@ -871,12 +913,16 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       validPayload(3),
     );
     expect(firstReopen.status).toBe(201);
-    expect((await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .activeReviewSubjectKey).toBe(fixture.reviewSubjectKey);
+    expect(
+      (await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
+        .activeReviewSubjectKey,
+    ).toBe(fixture.reviewSubjectKey);
 
     await postResolution(fixture.caseId, `cycle-resolution-1-${randomUUID()}`, 4).expect(201);
-    expect((await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .activeReviewSubjectKey).toBeNull();
+    expect(
+      (await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
+        .activeReviewSubjectKey,
+    ).toBeNull();
 
     const secondReopen = await postReopen(
       fixture.caseId,
@@ -884,18 +930,22 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       validPayload(5, 'Segunda revisão do mesmo caso.'),
     );
     expect(secondReopen.status).toBe(201);
-    expect((await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .activeReviewSubjectKey).toBe(fixture.reviewSubjectKey);
+    expect(
+      (await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
+        .activeReviewSubjectKey,
+    ).toBe(fixture.reviewSubjectKey);
 
     await postResolution(fixture.caseId, `cycle-resolution-2-${randomUUID()}`, 6).expect(201);
     const finalCase = await prisma.findingReviewCase.findUniqueOrThrow({
       where: { id: fixture.caseId },
     });
-    expect(finalCase).toEqual(expect.objectContaining({
-      status: FindingReviewCaseStatus.RESOLVED,
-      version: 7,
-      activeReviewSubjectKey: null,
-    }));
+    expect(finalCase).toEqual(
+      expect.objectContaining({
+        status: FindingReviewCaseStatus.RESOLVED,
+        version: 7,
+        activeReviewSubjectKey: null,
+      }),
+    );
     expect(await prisma.findingReviewDecision.count({ where: { caseId: fixture.caseId } })).toBe(1);
     expect(await reopenEffects(fixture.caseId)).toEqual({ events: 2, audits: 2 });
   });
@@ -915,8 +965,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       idempotentReplay: true,
       reopen: firstBody.reopen,
     });
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(beforeReplay);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(beforeReplay);
   });
 
   it('disables new reopens and replay with the shared feature flag', async () => {
@@ -943,7 +994,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
   async function expectRollback(step: FailureStep) {
     const fixture = await createCase();
     const key = `rollback-reopen-${step}-${randomUUID()}`;
-    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const effectsBefore = await reopenEffects(fixture.caseId);
     const inventoryBefore = await inventorySnapshot();
     prisma.failNextTransactionAt(step);
@@ -954,8 +1007,9 @@ describe('POST /conflict-review-cases/:id/reopens (PostgreSQL e2e)', () => {
       prisma.clearTestControls();
     }
     expect(failed.status).toBe(500);
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(caseBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(caseBefore);
     expect(await reopenEffects(fixture.caseId)).toEqual(effectsBefore);
     expect(await inventorySnapshot()).toBe(inventoryBefore);
 

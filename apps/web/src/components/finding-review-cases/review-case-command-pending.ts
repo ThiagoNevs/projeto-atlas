@@ -17,7 +17,8 @@ export const PENDING_REVIEW_REOPEN_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 export const MAX_FINDING_REVIEW_REOPEN_JUSTIFICATION_LENGTH = 1000;
 
 export interface PendingFindingReviewDecisionAttempt {
-  version: 1;
+  version: 2;
+  actorId: string;
   caseId: string;
   identityConclusion: FindingReviewIdentityConclusion;
   justification: string;
@@ -28,7 +29,8 @@ export interface PendingFindingReviewDecisionAttempt {
 }
 
 export interface PendingFindingReviewResolutionAttempt {
-  version: 1;
+  version: 2;
+  actorId: string;
   caseId: string;
   justification: string;
   expectedVersion: number;
@@ -38,7 +40,8 @@ export interface PendingFindingReviewResolutionAttempt {
 }
 
 export interface PendingFindingReviewDecisionSupersessionAttempt {
-  version: 1;
+  version: 2;
+  actorId: string;
   caseId: string;
   supersededDecisionId: string;
   identityConclusion: FindingReviewIdentityConclusion;
@@ -51,7 +54,8 @@ export interface PendingFindingReviewDecisionSupersessionAttempt {
 }
 
 export interface PendingFindingReviewReopenAttempt {
-  version: 1;
+  version: 2;
+  actorId: string;
   caseId: string;
   justification: string;
   expectedVersion: number;
@@ -139,6 +143,7 @@ function decisionStorageKey(caseId: string): string {
 
 export function createPendingFindingReviewDecisionAttempt(
   caseId: string,
+  actorId: string,
   identityConclusion: FindingReviewIdentityConclusion,
   justification: string,
   expectedVersion: number,
@@ -146,7 +151,8 @@ export function createPendingFindingReviewDecisionAttempt(
   now = Date.now(),
 ): PendingFindingReviewDecisionAttempt {
   return {
-    version: 1,
+    version: 2,
+    actorId,
     caseId,
     identityConclusion,
     justification,
@@ -160,15 +166,22 @@ export function createPendingFindingReviewDecisionAttempt(
 export function parsePendingFindingReviewDecisionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingFindingReviewDecisionAttempt | null {
-  const inspected = inspectPendingFindingReviewDecisionAttempt(serialized, expectedCaseId, now);
+  const inspected = inspectPendingFindingReviewDecisionAttempt(
+    serialized,
+    expectedCaseId,
+    expectedActorId,
+    now,
+  );
   return inspected.status === 'valid' ? inspected.attempt : null;
 }
 
 export function inspectPendingFindingReviewDecisionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingDecisionInspection {
   try {
@@ -178,11 +191,15 @@ export function inspectPendingFindingReviewDecisionAttempt(
     }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,version') {
+    if (keys.join(',') !== 'actorId,caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,version') {
       return { status: 'invalid', attempt: null };
     }
     if (
-      candidate.version !== 1
+      candidate.version !== 2
+      || candidate.actorId !== expectedActorId
+      || typeof candidate.actorId !== 'string'
+      || candidate.actorId.length < 1
+      || candidate.actorId.length > 100
       || candidate.caseId !== expectedCaseId
       || !isFindingReviewCaseId(candidate.caseId)
       || (candidate.identityConclusion !== 'SAME_ASSET'
@@ -212,10 +229,11 @@ export function inspectPendingFindingReviewDecisionAttempt(
 
 export function readPendingFindingReviewDecisionAttempt(
   caseId: string,
+  actorId: string,
 ): PendingDecisionInspection | MissingInspection {
   return readStoredAttempt(
     decisionStorageKey(caseId),
-    (serialized) => inspectPendingFindingReviewDecisionAttempt(serialized, caseId),
+    (serialized) => inspectPendingFindingReviewDecisionAttempt(serialized, caseId, actorId),
     (inspection) => inspection.status === 'valid',
   );
 }
@@ -239,6 +257,7 @@ function decisionSupersessionStorageKey(caseId: string): string {
 
 export function createPendingFindingReviewDecisionSupersessionAttempt(
   caseId: string,
+  actorId: string,
   supersededDecisionId: string,
   identityConclusion: FindingReviewIdentityConclusion,
   justification: string,
@@ -248,7 +267,8 @@ export function createPendingFindingReviewDecisionSupersessionAttempt(
   now = Date.now(),
 ): PendingFindingReviewDecisionSupersessionAttempt {
   return {
-    version: 1,
+    version: 2,
+    actorId,
     caseId,
     supersededDecisionId,
     identityConclusion,
@@ -266,11 +286,13 @@ export function createPendingFindingReviewDecisionSupersessionAttempt(
 export function parsePendingFindingReviewDecisionSupersessionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingFindingReviewDecisionSupersessionAttempt | null {
   const inspected = inspectPendingFindingReviewDecisionSupersessionAttempt(
     serialized,
     expectedCaseId,
+    expectedActorId,
     now,
   );
   return inspected.status === 'valid' ? inspected.attempt : null;
@@ -279,6 +301,7 @@ export function parsePendingFindingReviewDecisionSupersessionAttempt(
 export function inspectPendingFindingReviewDecisionSupersessionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingDecisionSupersessionInspection {
   try {
@@ -288,11 +311,15 @@ export function inspectPendingFindingReviewDecisionSupersessionAttempt(
     }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'caseId,correctionReason,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,supersededDecisionId,version') {
+    if (keys.join(',') !== 'actorId,caseId,correctionReason,createdAt,expectedVersion,expiresAt,idempotencyKey,identityConclusion,justification,supersededDecisionId,version') {
       return { status: 'invalid', attempt: null };
     }
     if (
-      candidate.version !== 1
+      candidate.version !== 2
+      || candidate.actorId !== expectedActorId
+      || typeof candidate.actorId !== 'string'
+      || candidate.actorId.length < 1
+      || candidate.actorId.length > 100
       || candidate.caseId !== expectedCaseId
       || !isFindingReviewCaseId(candidate.caseId)
       || !isFindingReviewCaseId(candidate.supersededDecisionId)
@@ -330,10 +357,11 @@ export function inspectPendingFindingReviewDecisionSupersessionAttempt(
 
 export function readPendingFindingReviewDecisionSupersessionAttempt(
   caseId: string,
+  actorId: string,
 ): PendingDecisionSupersessionInspection | MissingInspection {
   return readStoredAttempt(
     decisionSupersessionStorageKey(caseId),
-    (serialized) => inspectPendingFindingReviewDecisionSupersessionAttempt(serialized, caseId),
+    (serialized) => inspectPendingFindingReviewDecisionSupersessionAttempt(serialized, caseId, actorId),
     (inspection) => inspection.status === 'valid',
   );
 }
@@ -357,13 +385,15 @@ function resolutionStorageKey(caseId: string): string {
 
 export function createPendingFindingReviewResolutionAttempt(
   caseId: string,
+  actorId: string,
   justification: string,
   expectedVersion: number,
   idempotencyKey: string,
   now = Date.now(),
 ): PendingFindingReviewResolutionAttempt {
   return {
-    version: 1,
+    version: 2,
+    actorId,
     caseId,
     justification,
     expectedVersion,
@@ -376,15 +406,22 @@ export function createPendingFindingReviewResolutionAttempt(
 export function parsePendingFindingReviewResolutionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingFindingReviewResolutionAttempt | null {
-  const inspected = inspectPendingFindingReviewResolutionAttempt(serialized, expectedCaseId, now);
+  const inspected = inspectPendingFindingReviewResolutionAttempt(
+    serialized,
+    expectedCaseId,
+    expectedActorId,
+    now,
+  );
   return inspected.status === 'valid' ? inspected.attempt : null;
 }
 
 export function inspectPendingFindingReviewResolutionAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingResolutionInspection {
   try {
@@ -394,11 +431,15 @@ export function inspectPendingFindingReviewResolutionAttempt(
     }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,justification,version') {
+    if (keys.join(',') !== 'actorId,caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,justification,version') {
       return { status: 'invalid', attempt: null };
     }
     if (
-      candidate.version !== 1
+      candidate.version !== 2
+      || candidate.actorId !== expectedActorId
+      || typeof candidate.actorId !== 'string'
+      || candidate.actorId.length < 1
+      || candidate.actorId.length > 100
       || candidate.caseId !== expectedCaseId
       || !isFindingReviewCaseId(candidate.caseId)
       || typeof candidate.justification !== 'string'
@@ -426,10 +467,11 @@ export function inspectPendingFindingReviewResolutionAttempt(
 
 export function readPendingFindingReviewResolutionAttempt(
   caseId: string,
+  actorId: string,
 ): PendingResolutionInspection | MissingInspection {
   return readStoredAttempt(
     resolutionStorageKey(caseId),
-    (serialized) => inspectPendingFindingReviewResolutionAttempt(serialized, caseId),
+    (serialized) => inspectPendingFindingReviewResolutionAttempt(serialized, caseId, actorId),
     (inspection) => inspection.status === 'valid',
   );
 }
@@ -453,13 +495,15 @@ function reopenStorageKey(caseId: string): string {
 
 export function createPendingFindingReviewReopenAttempt(
   caseId: string,
+  actorId: string,
   justification: string,
   expectedVersion: number,
   idempotencyKey: string,
   now = Date.now(),
 ): PendingFindingReviewReopenAttempt {
   return {
-    version: 1,
+    version: 2,
+    actorId,
     caseId,
     justification,
     expectedVersion,
@@ -472,15 +516,22 @@ export function createPendingFindingReviewReopenAttempt(
 export function parsePendingFindingReviewReopenAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingFindingReviewReopenAttempt | null {
-  const inspected = inspectPendingFindingReviewReopenAttempt(serialized, expectedCaseId, now);
+  const inspected = inspectPendingFindingReviewReopenAttempt(
+    serialized,
+    expectedCaseId,
+    expectedActorId,
+    now,
+  );
   return inspected.status === 'valid' ? inspected.attempt : null;
 }
 
 export function inspectPendingFindingReviewReopenAttempt(
   serialized: string,
   expectedCaseId: string,
+  expectedActorId: string,
   now = Date.now(),
 ): PendingReopenInspection {
   try {
@@ -490,11 +541,15 @@ export function inspectPendingFindingReviewReopenAttempt(
     }
     const candidate = value as Record<string, unknown>;
     const keys = Object.keys(candidate).sort();
-    if (keys.join(',') !== 'caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,justification,version') {
+    if (keys.join(',') !== 'actorId,caseId,createdAt,expectedVersion,expiresAt,idempotencyKey,justification,version') {
       return { status: 'invalid', attempt: null };
     }
     if (
-      candidate.version !== 1
+      candidate.version !== 2
+      || candidate.actorId !== expectedActorId
+      || typeof candidate.actorId !== 'string'
+      || candidate.actorId.length < 1
+      || candidate.actorId.length > 100
       || candidate.caseId !== expectedCaseId
       || !isFindingReviewCaseId(candidate.caseId)
       || typeof candidate.justification !== 'string'
@@ -522,10 +577,11 @@ export function inspectPendingFindingReviewReopenAttempt(
 
 export function readPendingFindingReviewReopenAttempt(
   caseId: string,
+  actorId: string,
 ): PendingReopenInspection | MissingInspection {
   return readStoredAttempt(
     reopenStorageKey(caseId),
-    (serialized) => inspectPendingFindingReviewReopenAttempt(serialized, caseId),
+    (serialized) => inspectPendingFindingReviewReopenAttempt(serialized, caseId, actorId),
     (inspection) => inspection.status === 'valid',
   );
 }

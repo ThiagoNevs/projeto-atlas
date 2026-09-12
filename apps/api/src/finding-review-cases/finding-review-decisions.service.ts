@@ -10,6 +10,7 @@ import {
   FindingReviewCaseStatus,
   Prisma,
 } from '../generated/prisma/client';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateFindingReviewDecisionDto } from './dto/create-finding-review-decision.dto';
 import {
@@ -21,7 +22,6 @@ import {
   type FindingReviewDecisionSemanticRequest,
 } from './finding-review-case-decision';
 import {
-  FINDING_REVIEW_ACTOR_ID,
   FINDING_REVIEW_SNAPSHOT_VERSION,
   normalizeIdempotencyKey,
 } from './finding-review-case-creation';
@@ -54,10 +54,11 @@ export class FindingReviewDecisionsService {
     caseId: string,
     payload: CreateFindingReviewDecisionDto,
     rawIdempotencyKey: unknown,
+    actor: CurrentActor,
   ) {
     this.feature.assertEnabled();
     const idempotencyKey = this.validateIdempotencyKey(rawIdempotencyKey);
-    const fingerprint = decisionRequestFingerprint(idempotencyKey);
+    const fingerprint = decisionRequestFingerprint(actor.id, idempotencyKey);
     const semanticRequest = this.semanticRequest(caseId, payload);
 
     const existingRequest = await this.findByFingerprint(fingerprint);
@@ -143,7 +144,7 @@ export class FindingReviewDecisionsService {
             identityConclusion: payload.identityConclusion,
             justification,
             caseVersion: versionAfter,
-            createdBy: FINDING_REVIEW_ACTOR_ID,
+            createdBy: actor.id,
             requestFingerprint: fingerprint,
             createdAt: occurredAt,
           },
@@ -156,7 +157,7 @@ export class FindingReviewDecisionsService {
             eventType: FINDING_REVIEW_DECISION_RECORDED_EVENT,
             versionBefore: payload.expectedVersion,
             versionAfter,
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorId: actor.id,
             requestId: fingerprint,
             previousStatus: null,
             nextStatus: null,
@@ -179,8 +180,8 @@ export class FindingReviewDecisionsService {
 
         await transaction.auditLog.create({
           data: {
-            actorType: 'USER',
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: FINDING_REVIEW_DECISION_RECORDED_EVENT,
             entityType: 'FindingReviewCase',
             entityId: caseId,

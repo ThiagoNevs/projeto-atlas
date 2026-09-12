@@ -1,6 +1,5 @@
 import {
   canonicalSerialize,
-  FINDING_REVIEW_ACTOR_ID,
   sha256,
 } from './finding-review-case-creation';
 
@@ -20,11 +19,11 @@ export interface PersistedFindingReviewReopenRequest {
   justification: string | null;
 }
 
-export function reopenRequestFingerprint(caseId: string, idempotencyKey: string): string {
+export function reopenRequestFingerprint(actorId: string, caseId: string, idempotencyKey: string): string {
   return sha256(
     canonicalSerialize({
       operation: FINDING_REVIEW_CASE_REOPEN_OPERATION,
-      actorId: FINDING_REVIEW_ACTOR_ID,
+      actorId,
       caseId,
       idempotencyKey,
     }),
