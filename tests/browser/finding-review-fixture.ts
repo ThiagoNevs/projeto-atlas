@@ -23,6 +23,7 @@ export type FindingReviewFixture = {
 export async function createFindingReviewFixture(
   request: APIRequestContext,
   apiUrl: string,
+  authorization: string,
 ): Promise<FindingReviewFixture> {
   const runId = randomUUID();
   const hostname = `pw-review-${runId.slice(0, 12)}`;
@@ -30,6 +31,7 @@ export async function createFindingReviewFixture(
 
   for (const suffix of ['a', 'b']) {
     const response = await request.post(`${apiUrl}/ingestion/assets`, {
+      headers: { Authorization: authorization },
       data: {
         source: 'playwright-browser-e2e',
         sourceAssetId: `${runId}-${suffix}`,
@@ -47,6 +49,7 @@ export async function createFindingReviewFixture(
   }
 
   const findingsResponse = await request.get(`${apiUrl}/conflict-analysis/findings`, {
+    headers: { Authorization: authorization },
     params: {
       hostname,
       pageSize: '100',

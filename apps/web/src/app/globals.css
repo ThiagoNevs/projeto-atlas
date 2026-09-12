@@ -53,6 +53,32 @@ input {
   font: inherit;
 }
 
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+
+.auth-shell button,
+.auth-user button {
+  border: 1px solid rgba(78, 199, 239, 0.55);
+  border-radius: 8px;
+  background: rgba(78, 199, 239, 0.12);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.55rem 0.85rem;
+}
+
+.auth-user {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .site-header {
   position: sticky;
   z-index: 20;

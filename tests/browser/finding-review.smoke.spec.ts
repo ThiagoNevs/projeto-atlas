@@ -5,14 +5,59 @@ import { createFindingReviewFixture } from './finding-review-fixture';
 const apiUrl = 'http://127.0.0.1:3101';
 
 test('creates, reviews, decides and resolves a finding review case', async ({ page, request }) => {
-  const fixture = await createFindingReviewFixture(request, apiUrl);
+  let authorization = '';
+  const authMeResponse = page.waitForResponse((candidate) => {
+    if (candidate.url() !== `${apiUrl}/auth/me`) return false;
+    authorization = candidate.request().headers().authorization ?? '';
+    return true;
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Entre para acessar o Atlas' })).toBeVisible();
+  await page.getByRole('button', { name: 'Entrar' }).click();
+  await page.locator('input[name="login"]').fill('atlas-browser-user');
+  await page.locator('input[name="password"]').fill('test-only-password');
+  await page.getByRole('button', { name: 'Sign-in' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
+  const me = await authMeResponse;
+  const tokenPayload = authorization.replace(/^Bearer /, '').split('.')[1];
+  const claims = tokenPayload
+    ? (JSON.parse(Buffer.from(tokenPayload, 'base64url').toString('utf8')) as Record<
+        string,
+        unknown
+      >)
+    : null;
+  if (!me.ok()) {
+    throw new Error(
+      `OIDC login reached /auth/me but was rejected: HTTP ${me.status()} ${await me.text()}; claims=${JSON.stringify(claims)}`,
+    );
+  }
+  await expect(page.getByText('Atlas Browser User')).toBeVisible();
+  expect(authorization).toMatch(/^Bearer [^.]+\.[^.]+\.[^.]+$/);
+  expect(claims).toMatchObject({
+    aud: apiUrl,
+    client_id: 'atlas-web',
+    groups: ['atlas-user'],
+    sub: 'atlas-browser-user',
+  });
+  const browserStorage = await page.evaluate(() => ({
+    local: Object.keys(localStorage),
+    session: Object.keys(sessionStorage),
+  }));
+  expect(browserStorage.local).toEqual([]);
+  expect(browserStorage.session.some((key) => /token/i.test(key))).toBe(false);
+  expect(browserStorage.session.some((key) => key.startsWith('atlas:oidc:transaction:'))).toBe(
+    false,
+  );
+
+  const fixture = await createFindingReviewFixture(request, apiUrl, authorization);
   const decisionJustification = `Decisão browser E2E ${fixture.runId}`;
   const resolutionJustification = `Resolução browser E2E ${fixture.runId}`;
   const reopenJustification = `Reabertura browser E2E ${fixture.runId}`;
 
-  await page.goto(
-    `/conflict-findings?type=DUPLICATE_HOSTNAME_ACROSS_ASSETS&hostname=${encodeURIComponent(fixture.hostname)}`,
-  );
+  await page.getByRole('link', { name: 'Achados de identidade e rede' }).click();
+  await page.getByRole('textbox', { name: 'Hostname', exact: true }).fill(fixture.hostname);
+  await page.getByRole('button', { name: 'Aplicar filtros' }).click();
 
   const findingCard = page.getByRole('article').filter({ hasText: fixture.hostname });
   await expect(findingCard).toContainText(fixture.findingId);

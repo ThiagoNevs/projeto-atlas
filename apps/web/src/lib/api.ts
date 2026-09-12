@@ -1,4 +1,5 @@
 import { ApiError, normalizeApiError } from './api-error.ts';
+import { authenticatedFetch } from './auth-transport.ts';
 import {
   parseConflictFindingsResponse,
   parseIdentityNetworkAnalysisResponse,
@@ -822,7 +823,7 @@ async function fetchWithNetworkHandling(
   fetchImplementation: FetchImplementation = fetch,
 ): Promise<Response> {
   try {
-    return await fetchImplementation(input, init);
+    return await authenticatedFetch(input, init, fetchImplementation);
   } catch (error) {
     throw normalizeApiError(error);
   }
