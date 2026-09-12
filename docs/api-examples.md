@@ -410,11 +410,12 @@ Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `
 `type`, `administrativeStatus`, `manufacturer`, `model`, `serialNumber`, `macAddress`,
 `environment`, `criticality` e `comment`.
 
-Todos os endpoints de domínio deste documento exigem `Authorization: Bearer <access-token>` com a
-permissão coarse-grained `atlas:access`. Somente `GET /health` é público. A identidade e a autoria são
-derivadas pelo backend do token validado; campos `createdBy`, `actorId`, roles ou permissions enviados
-pelo cliente não escolhem o autor. `GET /auth/me` retorna apenas `id`, `kind`, `displayName` opcional e
-`permissions`.
+Todos os endpoints de domínio deste documento exigem `Authorization: Bearer <access-token>`, o gate
+geral `atlas:access` e a permission granular declarada pelo handler. Somente `GET /health` é público.
+A identidade, a autoria e as permissions são derivadas pelo backend do token validado; campos
+`createdBy`, `actorId`, roles ou permissions enviados pelo cliente não escolhem o autor nem concedem
+acesso. `GET /auth/me` exige `atlas:access` e retorna apenas `id`, `kind`, `displayName` opcional e
+`permissions`; roles externas não fazem parte do contrato público.
 
 ### Importar XLSX ou XLSM
 
@@ -749,7 +750,8 @@ o foco não é movido para um painel obsoleto.
 A funcionalidade está desabilitada por padrão. Para testar em
 desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API.
 Registros históricos podem continuar exibindo `atlas-mvp-user`; novas operações persistem o ID OIDC
-namespaced do `CurrentActor`. RBAC granular ainda não está implementado.
+namespaced do `CurrentActor`. As rotas de leitura exigem `review-case:read` e os comandos exigem
+`review-case:manage`; a API permanece a autoridade mesmo quando o frontend oculta ações não permitidas.
 
 A flag controla todo o fluxo implementado de Finding Review: criação, listagem, detalhe, comparação de
 contexto, transições, decisão, resolução, reabertura e respectivos replays retornam HTTP 503 quando ela
@@ -927,8 +929,8 @@ detalhes Prisma como `P2020` nunca fazem parte da resposta.
 Esse PATCH não usa `Idempotency-Key` e não deve receber retry automático. Se a conexão falhar ou
 expirar, o resultado pode ser incerto: consulte novamente o detalhe antes de oferecer outra alteração.
 Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quanto essa verificação explícita.
-O ator é derivado do access token OIDC validado. O RBAC granular e os comandos para `DISMISSED` e
-`CANCELLED` permanecem futuros.
+O ator é derivado do access token OIDC validado, e o comando exige `review-case:manage`. Os comandos
+para `DISMISSED` e `CANCELLED` permanecem futuros.
 
 ### Registrar a primeira decisão de identidade
 

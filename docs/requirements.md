@@ -797,7 +797,8 @@ O MVP pode ser considerado funcional quando atender aos seguintes critérios:
 O MVP possui limitações conhecidas:
 
 - Possui autenticação OIDC, mas não sessão persistente, refresh token ou silent renew.
-- Não possui autorização granular por perfil; o gate atual é somente `atlas:access`.
+- Possui autorização granular por permissions derivadas de roles OIDC Viewer/Analyst/Admin; o gate
+  `atlas:access` permanece obrigatório e independente.
 - Não possui multi-tenant real.
 - Não possui conectores reais.
 - Não possui Collector real.
