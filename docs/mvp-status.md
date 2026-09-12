@@ -138,8 +138,9 @@ a adoção persistente de um novo snapshot por refresh continua fora do escopo.
 
 A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
-`atlas-mvp-user` é provisório e não fornece autenticação, isolamento entre usuários ou RBAC; por isso a
-feature deve permanecer desabilitada fora da validação local controlada.
+de novas operações é um `CurrentActor` derivado do token OIDC validado. Autores históricos
+`atlas-mvp-user` permanecem intactos. O gate atual concede apenas `atlas:access`; RBAC granular e
+isolamento multi-tenant ainda não existem.
 
 Agora existem consultas somente leitura em `GET /conflict-review-cases`,
 `GET /conflict-review-cases/:id` e `GET /conflict-review-cases/:id/context-comparison`. A listagem é
@@ -178,13 +179,14 @@ A tela expõe todos os filtros de leitura, inclusive ativo e intervalo de criaç
 para timestamps ISO 8601 completos e mantém filtros, paginação, ordenação e `caseId` sincronizados com o
 histórico do navegador. Listagem e detalhe cancelam requisições obsoletas e validam as respostas em
 runtime. A criação possui timeout de dez segundos, bloqueio síncrono contra clique duplo e preserva no
-`sessionStorage` um envelope versionado somente depois que timeout ou falha de rede tornam o resultado
+`sessionStorage` um envelope versionado e vinculado ao `actorId` somente depois que timeout ou falha de rede tornam o resultado
 incerto. O envelope conserva `createdAt` e `expiresAt` originais durante todos os retries e expira em 15
 minutos sem renovação silenciosa. Cada retry revalida inclusive a tentativa mantida na mesma aba: antes
 do limite reutiliza a chave e, quando `now >= expiresAt`, bloqueia o POST. Se o registro estiver expirado,
 adulterado ou associado a outro finding, ele é removido e nenhum POST ocorre nesse gesto; uma nova chave
 exige outro clique explícito. Se o `sessionStorage` não puder ser lido ou escrito, o envelope completo em
 memória preserva chave e TTL durante a montagem atual, mas não pode ser recuperado após remontagem.
+Envelopes legados sem ator e envelopes de outro principal são descartados antes de qualquer retry.
 Respostas conclusivas removem somente o registro correspondente mesmo quando o componente já foi
 desmontado ou a interface mudou de finding. O detalhe direciona o foco ao heading após sucesso ou erro e
 cancela frames pendentes em fechamento, troca de caso e unmount.
@@ -249,9 +251,10 @@ resolução anterior; `CASE_REOPENED` aparece na timeline e na Auditoria global 
 
 #### Limitações e próximas evoluções
 
-Ainda não existem atribuição, comentários, refresh, comandos para `DISMISSED`/`CANCELLED`,
-integração com `Conflict` ou Resolution Center. O ator `atlas-mvp-user` é provisório e não representa
-autenticação ou RBAC. O finding derivado não passa a ser persistido como fonte de verdade.
+Ainda não existem atribuição, comentários, refresh persistente, comandos para
+`DISMISSED`/`CANCELLED`, integração com `Conflict` ou Resolution Center. A autenticação OIDC e a
+autoria confiável existem, mas Viewer/Analyst/Admin permanecem no PR #41. O finding derivado não passa
+a ser persistido como fonte de verdade.
 
 ### Tipos compartilhados
 
@@ -260,7 +263,7 @@ frontend.
 
 ## Fora do escopo atual
 
-- Autenticação corporativa e autorização por papéis.
+- RBAC granular por papéis Viewer/Analyst/Admin.
 - Multi-tenant produtivo e isolamento por organização.
 - Conectores reais para Microsoft Intune, Defender, Entra ID ou CMDBs.
 - Collector instalado na infraestrutura do cliente.
@@ -279,12 +282,11 @@ frontend.
 ## Limitações conhecidas
 
 - Ambiente orientado a desenvolvimento local.
-- Ausência de autenticação e usuários reais.
-- `actorUserId` simulado em decisões auditáveis.
+- Sem tabela de usuários local, refresh token, silent renew ou sessão persistente do Atlas.
+- Todos os atores com `atlas:access` ainda possuem o mesmo acesso funcional.
 - Listagens de Network Discovery sem paginação.
 - Sem observabilidade estruturada, métricas ou tracing distribuído.
-- Sem testes E2E reais do frontend em navegador no pipeline.
-- Sem CI/CD configurado.
+- Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
 - Sem gestão produtiva de secrets.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.
 - Sem política formal de backup, retenção e recuperação.
