@@ -1,10 +1,12 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link.js';
 
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { AuditLogQueryParams, AuditLogRecord, AuditLogResponse, getAuditLogs } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import {
@@ -488,5 +490,9 @@ export function AuditPage({ loadAuditLogs = getAuditLogs }: { loadAuditLogs?: Au
 }
 
 export default function AuditRoute() {
-  return <AuditPage />;
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.auditRead}>
+      <AuditPage />
+    </PermissionBoundary>
+  );
 }

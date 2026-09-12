@@ -24,6 +24,8 @@ export async function resolve(specifier, context, nextResolve) {
 
   if (specifier.startsWith('@/')) {
     candidate = findSourceFile(path.resolve(webRoot, 'src', specifier.slice(2)));
+  } else if (specifier === '@atlas/shared') {
+    candidate = path.resolve(webRoot, '../../packages/shared/src/index.ts');
   } else if (
     context.parentURL?.startsWith('file:') &&
     (specifier.startsWith('./') || specifier.startsWith('../'))

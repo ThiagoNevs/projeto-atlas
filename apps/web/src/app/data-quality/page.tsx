@@ -1,10 +1,12 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { Fragment, FormEvent, useEffect, useState } from 'react';
 
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { RelativeTime } from '@/components/relative-time';
 import {
   AdministrativeStatus,
@@ -184,7 +186,7 @@ function ScoreAnalysisBlock({
   );
 }
 
-export default function DataQualityPage() {
+function DataQualityPageContent() {
   const [form, setForm] = useState<FilterForm>(initialForm);
   const [query, setQuery] = useState<DataQualityQueryParams>(initialQuery);
   const [summary, setSummary] = useState<DataQualitySummary>(emptySummary);
@@ -241,9 +243,7 @@ export default function DataQualityPage() {
       await exportDataQualityAssetsCsv(query);
     } catch (downloadError: unknown) {
       setExportError(
-        downloadError instanceof Error
-          ? downloadError.message
-          : 'Não foi possível exportar o CSV.',
+        downloadError instanceof Error ? downloadError.message : 'Não foi possível exportar o CSV.',
       );
     } finally {
       setExporting(false);
@@ -497,14 +497,16 @@ export default function DataQualityPage() {
             <button className="button button-secondary" type="button" onClick={clearFilters}>
               Limpar filtros
             </button>
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={exportCsv}
-              disabled={exporting}
-            >
-              {exporting ? 'Exportando…' : 'Exportar CSV'}
-            </button>
+            <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryExport} fallback={null}>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={exportCsv}
+                disabled={exporting}
+              >
+                {exporting ? 'Exportando…' : 'Exportar CSV'}
+              </button>
+            </PermissionBoundary>
           </div>
           {exportError ? <p className="form-message form-error">{exportError}</p> : null}
         </form>
@@ -636,5 +638,13 @@ export default function DataQualityPage() {
         </>
       ) : null}
     </main>
+  );
+}
+
+export default function DataQualityPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryRead}>
+      <DataQualityPageContent />
+    </PermissionBoundary>
   );
 }

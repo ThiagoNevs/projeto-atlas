@@ -3,6 +3,7 @@ import test, { after } from 'node:test';
 
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { Root } from 'react-dom/client';
+import { ATLAS_PERMISSION_VALUES } from '@atlas/shared';
 
 import { ApiError } from '../lib/api-error.ts';
 import type {
@@ -63,7 +64,7 @@ const authenticatedTestContext = {
     id: ACTOR_ID,
     kind: 'HUMAN' as const,
     displayName: 'Pessoa de teste',
-    permissions: ['atlas:access'],
+    permissions: [...ATLAS_PERMISSION_VALUES],
   },
   error: null,
   login: async () => undefined,

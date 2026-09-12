@@ -1,9 +1,11 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
 import { ErrorState, LoadingState } from '../components/page-state';
+import { PermissionBoundary } from '../components/permission-boundary';
 import { RelativeTime } from '../components/relative-time';
 import { formatDateTime } from '../lib/format';
 import { getAssetTypeLabel, getDiscoveryRunStatusLabel, getEventLabel } from '../lib/labels';
@@ -51,7 +53,7 @@ function Distribution({
   );
 }
 
-export default function Home() {
+function HomeContent() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -333,5 +335,13 @@ export default function Home() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryRead}>
+      <HomeContent />
+    </PermissionBoundary>
   );
 }

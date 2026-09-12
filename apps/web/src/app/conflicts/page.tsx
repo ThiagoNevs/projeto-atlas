@@ -1,11 +1,13 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
 
 import { ConflictStatusForm } from '@/components/conflict-status-form';
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { RelativeTime } from '@/components/relative-time';
 import {
   ConflictQueryParams,
@@ -56,7 +58,7 @@ const initialQuery: ConflictQueryParams = {
   sortDirection: 'desc',
 };
 
-export default function ConflictsPage() {
+function ConflictsPageContent() {
   const [form, setForm] = useState<FilterForm>(initialForm);
   const [query, setQuery] = useState<ConflictQueryParams>(initialQuery);
   const [result, setResult] = useState<PaginatedResponse<ConflictSummary>>({
@@ -310,18 +312,23 @@ export default function ConflictsPage() {
                         <RelativeTime className="cell-subtitle" value={conflict.updatedAt} />
                       </td>
                       <td>
-                        <details className="conflict-treatment">
-                          <summary>Tratar</summary>
-                          <div className="conflict-treatment-body">
-                            <ConflictStatusForm
-                              administrativeStatus={conflict.administrativeStatus}
-                              conflictId={conflict.id}
-                              conflictType={conflict.type}
-                              currentStatus={conflict.status}
-                              onChanged={refreshConflicts}
-                            />
-                          </div>
-                        </details>
+                        <PermissionBoundary
+                          permission={ATLAS_PERMISSIONS.conflictManage}
+                          fallback={null}
+                        >
+                          <details className="conflict-treatment">
+                            <summary>Tratar</summary>
+                            <div className="conflict-treatment-body">
+                              <ConflictStatusForm
+                                administrativeStatus={conflict.administrativeStatus}
+                                conflictId={conflict.id}
+                                conflictType={conflict.type}
+                                currentStatus={conflict.status}
+                                onChanged={refreshConflicts}
+                              />
+                            </div>
+                          </details>
+                        </PermissionBoundary>
                       </td>
                     </tr>
                   ))}
@@ -338,5 +345,13 @@ export default function ConflictsPage() {
         </>
       ) : null}
     </main>
+  );
+}
+
+export default function ConflictsPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.conflictRead}>
+      <ConflictsPageContent />
+    </PermissionBoundary>
   );
 }

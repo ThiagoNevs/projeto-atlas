@@ -1,10 +1,12 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
 
 import { Pagination } from '@/components/pagination';
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { RelativeTime } from '@/components/relative-time';
 import { StatusBadge } from '@/components/status-badge';
 import {
@@ -77,7 +79,7 @@ const initialQuery: AssetQueryParams = {
   sortDirection: 'desc',
 };
 
-export default function AssetsPage() {
+function AssetsPageContent() {
   const [form, setForm] = useState<FilterForm>(initialForm);
   const [query, setQuery] = useState<AssetQueryParams>(initialQuery);
   const [result, setResult] = useState<PaginatedResponse<AssetSummary>>({
@@ -159,12 +161,16 @@ export default function AssetsPage() {
           </p>
         </div>
         <div className="page-heading-actions">
-          <Link className="button button-secondary" href="/assets/import">
-            Importar ativos
-          </Link>
-          <Link className="button button-primary" href="/assets/new">
-            Adicionar ativo
-          </Link>
+          <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryImport} fallback={null}>
+            <Link className="button button-secondary" href="/assets/import">
+              Importar ativos
+            </Link>
+          </PermissionBoundary>
+          <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryMaintain} fallback={null}>
+            <Link className="button button-primary" href="/assets/new">
+              Adicionar ativo
+            </Link>
+          </PermissionBoundary>
           {!loading && !error ? (
             <div className="summary-pill">
               <strong>{result.total}</strong>
@@ -396,5 +402,13 @@ export default function AssetsPage() {
         </>
       ) : null}
     </main>
+  );
+}
+
+export default function AssetsPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryRead}>
+      <AssetsPageContent />
+    </PermissionBoundary>
   );
 }

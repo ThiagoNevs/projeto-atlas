@@ -1,9 +1,11 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
 
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { RelativeTime } from '@/components/relative-time';
 import {
   createNetworkDiscoveryProfile,
@@ -60,7 +62,7 @@ function parseCidrs(value: string): string[] {
     .filter(Boolean);
 }
 
-export default function NetworkDiscoveryPage() {
+function NetworkDiscoveryPage() {
   const [profiles, setProfiles] = useState<NetworkDiscoveryProfile[]>([]);
   const [runs, setRuns] = useState<NetworkDiscoveryRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<NetworkDiscoveryRunDetail | null>(null);
@@ -218,7 +220,8 @@ export default function NetworkDiscoveryPage() {
       {formError ? <p className="form-message form-error discovery-message">{formError}</p> : null}
       {message ? <p className="form-message form-success discovery-message">{message}</p> : null}
 
-      <section className="panel discovery-panel">
+      <PermissionBoundary permission={ATLAS_PERMISSIONS.discoveryConfigure} fallback={null}>
+        <section className="panel discovery-panel">
         <div className="panel-heading">
           <div>
             <p className="section-kicker">Configuração</p>
@@ -317,7 +320,8 @@ export default function NetworkDiscoveryPage() {
             </button>
           </div>
         </form>
-      </section>
+        </section>
+      </PermissionBoundary>
 
       <section className="panel full-panel discovery-panel">
         <div className="panel-heading">
@@ -366,16 +370,18 @@ export default function NetworkDiscoveryPage() {
                     <span key={method}>{getDiscoveryMethodLabel(method)}</span>
                   ))}
                 </div>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  disabled={!profile.enabled || runningProfileId !== null}
-                  onClick={() => void executeProfile(profile)}
-                >
-                  {runningProfileId === profile.id
-                    ? 'Executando simulação…'
-                    : 'Executar descoberta'}
-                </button>
+                <PermissionBoundary permission={ATLAS_PERMISSIONS.discoveryExecute} fallback={null}>
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    disabled={!profile.enabled || runningProfileId !== null}
+                    onClick={() => void executeProfile(profile)}
+                  >
+                    {runningProfileId === profile.id
+                      ? 'Executando simulação…'
+                      : 'Executar descoberta'}
+                  </button>
+                </PermissionBoundary>
               </article>
             ))}
           </div>
@@ -509,5 +515,13 @@ export default function NetworkDiscoveryPage() {
         </section>
       ) : null}
     </main>
+  );
+}
+
+export default function NetworkDiscoveryRoute() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.discoveryRead}>
+      <NetworkDiscoveryPage />
+    </PermissionBoundary>
   );
 }

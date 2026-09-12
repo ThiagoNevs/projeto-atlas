@@ -1,5 +1,6 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link.js';
 import {
   FormEvent,
@@ -12,6 +13,7 @@ import {
 } from 'react';
 
 import { ErrorState, LoadingState } from './page-state';
+import { PermissionBoundary } from './permission-boundary';
 import {
   ApiError,
   getAssetConflictAnalysis,
@@ -730,12 +732,14 @@ function FindingCard({
       <p className="finding-explanation">{item.explanationSummary}</p>
 
       <div className="finding-case-action">
-        <Link
-          className="button button-secondary"
-          href={`/conflict-review-cases?create=1&findingId=${encodeURIComponent(item.findingId)}`}
-        >
-          Criar caso de revisão
-        </Link>
+        <PermissionBoundary permission={ATLAS_PERMISSIONS.reviewCaseManage} fallback={null}>
+          <Link
+            className="button button-secondary"
+            href={`/conflict-review-cases?create=1&findingId=${encodeURIComponent(item.findingId)}`}
+          >
+            Criar caso de revisão
+          </Link>
+        </PermissionBoundary>
       </div>
 
       <div className="finding-identity-grid">

@@ -1,5 +1,6 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { ChangeEvent, FormEvent, useState } from 'react';
 
@@ -20,6 +21,7 @@ import {
   buildImportReportFilename,
   importReportAvailability,
 } from '@/lib/import-report';
+import { PermissionBoundary } from '@/components/permission-boundary';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const csvExample = `hostname;ipAddress;operatingSystem;osVersion;location;owner;department;type;administrativeStatus;comment
@@ -33,7 +35,7 @@ const statusPresentation: Record<ImportPreviewRow['status'], { label: string; cl
   INVALID: { label: 'Linha inválida', className: 'status-negative' },
 };
 
-export default function ImportAssetsPage() {
+function ImportAssetsPage() {
   const [content, setContent] = useState(csvExample);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -377,5 +379,13 @@ function ImportResult({
         </div>
       ) : null}
     </section>
+  );
+}
+
+export default function ImportAssetsRoute() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryImport}>
+      <ImportAssetsPage />
+    </PermissionBoundary>
   );
 }

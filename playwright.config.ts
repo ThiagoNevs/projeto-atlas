@@ -61,6 +61,9 @@ export default defineConfig({
         AUTH_HUMAN_CLIENT_ID: 'atlas-web',
         AUTH_ROLE_CLAIM: 'groups',
         AUTH_ATLAS_ACCESS_VALUES: 'atlas-user',
+        AUTH_VIEWER_ROLE_VALUES: 'atlas-viewer',
+        AUTH_ANALYST_ROLE_VALUES: 'atlas-analyst',
+        AUTH_ADMIN_ROLE_VALUES: 'atlas-admin',
       },
     },
     {

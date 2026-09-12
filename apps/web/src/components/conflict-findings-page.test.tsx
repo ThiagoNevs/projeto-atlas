@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { act, createElement, type ReactNode } from 'react';
 import type { Root } from 'react-dom/client';
+import { ATLAS_PERMISSION_VALUES } from '@atlas/shared';
 
 import {
   ConflictFindingsPage,
@@ -21,6 +22,20 @@ import {
   createJsdomTestEnvironment,
   type JsdomTestEnvironment,
 } from '../test/jsdom-test-environment.ts';
+import { AuthContext } from './auth-provider.tsx';
+
+const authenticatedTestContext = {
+  status: 'authenticated' as const,
+  actor: {
+    id: 'human:oidc:test:actor',
+    kind: 'HUMAN' as const,
+    displayName: 'Pessoa de teste',
+    permissions: [...ATLAS_PERMISSION_VALUES],
+  },
+  error: null,
+  login: async () => undefined,
+  logout: async () => undefined,
+};
 
 const ASSET_A = '11111111-1111-4111-8111-111111111111';
 const ASSET_B = '22222222-2222-4222-8222-222222222222';
@@ -300,7 +315,9 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
       environment,
       render: async (node) => {
         await act(async () => {
-          root.render(node);
+          root.render(
+            createElement(AuthContext.Provider, { value: authenticatedTestContext }, node),
+          );
           await flush();
         });
       },
