@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
@@ -9,6 +8,7 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import { ConflictFindingsService } from '../src/conflict-analysis/conflict-findings.service';
 import type { ConflictFinding } from '../src/conflict-analysis/types/conflict-analysis';
 import {
@@ -294,7 +294,8 @@ interface ErrorBody {
 
 describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: PrismaService;
   let findings: ConflictFindingsService;
   const previousFlag = process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
@@ -304,6 +305,8 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication();
@@ -312,7 +315,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get(PrismaService);
     findings = app.get(ConflictFindingsService);
   });
@@ -329,6 +332,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
   async function createFixture(label: string) {
@@ -353,7 +357,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
         },
       ],
     });
-    const findings = await request(server)
+    const findings = await api
       .get('/conflict-analysis/findings')
       .query({ hostname, pageSize: 100 })
       .expect(200);
@@ -361,7 +365,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
       (item) => item.type === 'DUPLICATE_HOSTNAME_ACROSS_ASSETS',
     );
     if (!match) throw new Error(`Fixture ${label} não produziu finding.`);
-    const created = await request(server)
+    const created = await api
       .post('/conflict-review-cases')
       .set('Idempotency-Key', `pr38-${label}-${testRunId}`)
       .send({ findingId: match.findingId })
@@ -416,10 +420,10 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
     const fixture = await createFixture('current');
     const before = await persistenceState(fixture.id);
     const deriveCurrent = jest.spyOn(findings, 'findAllCurrent');
-    const first = await request(server)
+    const first = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
-    const second = await request(server)
+    const second = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     const body = first.body as ComparisonBody;
@@ -443,7 +447,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
       where: { id: fixture.firstAssetId },
       data: { description: 'Mudança administrativa irrelevante à identidade.' },
     });
-    const response = await request(server)
+    const response = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     expect((response.body as ComparisonBody).result).toEqual({
@@ -466,7 +470,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
       },
     });
     const before = await persistenceState(fixture.id);
-    const response = await request(server)
+    const response = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     const body = response.body as ComparisonBody;
@@ -503,7 +507,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
     });
 
     try {
-      const response = await request(server)
+      const response = await api
         .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
         .expect(200);
       expect(response.body).toEqual(
@@ -546,7 +550,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
     });
     const before = await persistenceState(fixture.id);
 
-    const response = await request(server)
+    const response = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     expect(response.body).toEqual(
@@ -569,7 +573,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
       data: { name: `${fixture.hostname}-renamed` },
     });
     const before = await persistenceState(fixture.id);
-    const response = await request(server)
+    const response = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     expect(response.body).toEqual(
@@ -589,7 +593,7 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
     const fixture = await createFixture('asset-unavailable');
     await prisma.asset.delete({ where: { id: fixture.secondAssetId } });
     const before = await persistenceState(fixture.id);
-    const response = await request(server)
+    const response = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(200);
     expect((response.body as ComparisonBody).result).toEqual({
@@ -601,18 +605,18 @@ describe('GET /conflict-review-cases/:id/context-comparison (PostgreSQL e2e)', (
   });
 
   it('uses the established validation, not-found and feature-gate errors', async () => {
-    const invalid = await request(server)
+    const invalid = await api
       .get('/conflict-review-cases/not-a-uuid/context-comparison')
       .expect(400);
     expect((invalid.body as ErrorBody).code).toBe('INVALID_FINDING_REVIEW_CASE_ID');
-    const missing = await request(server)
+    const missing = await api
       .get(`/conflict-review-cases/${randomUUID()}/context-comparison`)
       .expect(404);
     expect((missing.body as ErrorBody).code).toBe('FINDING_REVIEW_CASE_NOT_FOUND');
 
     const fixture = await createFixture('disabled');
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'false';
-    const disabled = await request(server)
+    const disabled = await api
       .get(`/conflict-review-cases/${fixture.id}/context-comparison`)
       .expect(503);
     expect((disabled.body as ErrorBody).code).toBe('FINDING_REVIEW_CASES_DISABLED');

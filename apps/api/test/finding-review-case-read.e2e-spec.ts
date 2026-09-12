@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
@@ -11,6 +10,7 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import {
   CONFLICT_FINDING_ID_PATTERN,
   createConflictFindingId,
@@ -270,7 +270,8 @@ interface ReadFixture {
 
 describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: PrismaService;
   const testRunId = randomUUID();
   const createdBy = `read-test-${testRunId}`;
@@ -290,6 +291,8 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication();
@@ -298,7 +301,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get(PrismaService);
 
     const statuses = Object.values(FindingReviewCaseStatus);
@@ -449,13 +452,11 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
   it('lists a summarized first page with defaults and relation counts', async () => {
-    const response = await request(server)
-      .get('/conflict-review-cases')
-      .query({ createdBy })
-      .expect(200);
+    const response = await api.get('/conflict-review-cases').query({ createdBy }).expect(200);
     const body = responseBody<{
       items: Array<Record<string, unknown>>;
       pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
@@ -473,7 +474,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it('keeps equal timestamps stably ordered by id', async () => {
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, pageSize: 100 })
       .expect(200);
@@ -500,13 +501,22 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
       .reverse();
 
     const firstPage = responseBody<{ items: Array<{ id: string }> }>(
-      await request(server).get('/conflict-review-cases').query({ ...query, page: 1 }).expect(200),
+      await api
+        .get('/conflict-review-cases')
+        .query({ ...query, page: 1 })
+        .expect(200),
     ).items.map((item) => item.id);
     const secondPage = responseBody<{ items: Array<{ id: string }> }>(
-      await request(server).get('/conflict-review-cases').query({ ...query, page: 2 }).expect(200),
+      await api
+        .get('/conflict-review-cases')
+        .query({ ...query, page: 2 })
+        .expect(200),
     ).items.map((item) => item.id);
     const repeatedFirstPage = responseBody<{ items: Array<{ id: string }> }>(
-      await request(server).get('/conflict-review-cases').query({ ...query, page: 1 }).expect(200),
+      await api
+        .get('/conflict-review-cases')
+        .query({ ...query, page: 1 })
+        .expect(200),
     ).items.map((item) => item.id);
 
     expect(firstPage).toEqual(repeatedFirstPage);
@@ -522,13 +532,13 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
       .sort();
     const pageSize = Math.ceil(expected.length / 2);
     const first = responseBody<{ items: Array<{ id: string }> }>(
-      await request(server)
+      await api
         .get('/conflict-review-cases')
         .query({ createdBy, status, sortBy: 'status', sortDirection: 'asc', pageSize, page: 1 })
         .expect(200),
     ).items.map((item) => item.id);
     const second = responseBody<{ items: Array<{ id: string }> }>(
-      await request(server)
+      await api
         .get('/conflict-review-cases')
         .query({ createdBy, status, sortBy: 'status', sortDirection: 'asc', pageSize, page: 2 })
         .expect(200),
@@ -539,7 +549,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it('supports pagination beyond the end without changing the total', async () => {
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, page: 99, pageSize: 10 })
       .expect(200);
@@ -556,7 +566,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it('returns a safe empty result for a valid filter without matches', async () => {
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, findingId: `finding_${'f'.repeat(24)}` })
       .expect(200);
@@ -570,7 +580,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('combines status, staleness, finding type, finding id and historical asset filters', async () => {
     const fixture = fixtureAt(7);
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({
         createdBy,
@@ -590,7 +600,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('finds a case by historical asset id after the current asset was removed', async () => {
     const fixture = fixtureAt(1);
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, assetId: fixture.assetId })
       .expect(200);
@@ -601,7 +611,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('treats createdFrom and createdTo as inclusive UTC limits', async () => {
     const boundary = stableTime.toISOString();
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, createdFrom: boundary, createdTo: boundary, pageSize: 100 })
       .expect(200);
@@ -614,7 +624,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     '2026-07-01T09:00:00-03:00',
     '2026-07-01T15:00:00+03:00',
   ])('accepts explicit timezones over HTTP: %s', async (boundary) => {
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({ createdBy, createdFrom: boundary, createdTo: boundary, pageSize: 100 })
       .expect(200);
@@ -662,7 +672,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     { findingId: ' finding_0123456789abcdef01234567 ' },
     { unknown: 'value' },
   ])('rejects invalid or unknown list parameters: %p', async (query) => {
-    const response = await request(server).get('/conflict-review-cases').query(query).expect(400);
+    const response = await api.get('/conflict-review-cases').query(query).expect(400);
     expect(JSON.stringify(response.body)).not.toMatch(/Prisma|SQL|stack/i);
   });
 
@@ -671,19 +681,16 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     'page=1&page=2',
     'findingId=finding_0123456789abcdef01234567&findingId=finding_89abcdef0123456789abcdef',
   ])('rejects duplicated query parameters: %s', async (query) => {
-    await request(server).get(`/conflict-review-cases?${query}`).expect(400);
+    await api.get(`/conflict-review-cases?${query}`).expect(400);
   });
 
   it('returns stable Portuguese validation messages for deterministic filters', async () => {
-    const date = await request(server)
+    const date = await api
       .get('/conflict-review-cases')
       .query({ createdFrom: '2026-07-20' })
       .expect(400);
-    const page = await request(server)
-      .get('/conflict-review-cases')
-      .query({ page: '1e2' })
-      .expect(400);
-    const finding = await request(server)
+    const page = await api.get('/conflict-review-cases').query({ page: '1e2' }).expect(400);
+    const finding = await api
       .get('/conflict-review-cases')
       .query({ findingId: 'read-finding-invalid' })
       .expect(400);
@@ -703,12 +710,9 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     const cases = app.get(FindingReviewCasesService);
     const findAll = jest.spyOn(cases, 'findAll');
     try {
-      await request(server)
-        .get('/conflict-review-cases')
-        .query({ createdFrom: '2026-07-20' })
-        .expect(400);
-      await request(server).get('/conflict-review-cases').query({ page: '1e2' }).expect(400);
-      await request(server)
+      await api.get('/conflict-review-cases').query({ createdFrom: '2026-07-20' }).expect(400);
+      await api.get('/conflict-review-cases').query({ page: '1e2' }).expect(400);
+      await api
         .get('/conflict-review-cases')
         .query({ findingId: 'read-finding-invalid' })
         .expect(400);
@@ -719,7 +723,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it('rejects an inverted date interval with a stable Portuguese error', async () => {
-    const response = await request(server)
+    const response = await api
       .get('/conflict-review-cases')
       .query({
         createdBy,
@@ -737,9 +741,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('returns persisted snapshot, historical assets and ordered safe events without internal fields', async () => {
     const fixture = fixtureAt(0);
-    const response = await request(server)
-      .get(`/conflict-review-cases/${fixture.caseId}`)
-      .expect(200);
+    const response = await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
     const body = responseBody<{
       originalSnapshot: Prisma.JsonValue;
       originalSnapshotHash: string;
@@ -778,9 +780,7 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
 
   it('preserves historical asset identity when the current asset no longer exists', async () => {
     const fixture = fixtureAt(1);
-    const response = await request(server)
-      .get(`/conflict-review-cases/${deletedAssetCaseId}`)
-      .expect(200);
+    const response = await api.get(`/conflict-review-cases/${deletedAssetCaseId}`).expect(200);
     expect(responseBody<{ assets: Array<Record<string, unknown>> }>(response).assets[0]).toEqual(
       expect.objectContaining({
         assetIdAtCreation: fixture.assetId,
@@ -797,11 +797,11 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
     const findings = app.get(ConflictFindingsService);
     const findCurrentById = jest.spyOn(findings, 'findCurrentById');
     try {
-      await request(server)
+      await api
         .get('/conflict-review-cases')
         .query({ createdBy, findingId: fixture.findingId })
         .expect(200);
-      await request(server).get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
+      await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
       expect(findCurrentById).not.toHaveBeenCalled();
     } finally {
       findCurrentById.mockRestore();
@@ -809,14 +809,14 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
   });
 
   it('returns stable controlled errors for malformed and missing ids', async () => {
-    const malformed = await request(server).get('/conflict-review-cases/not-a-uuid').expect(400);
+    const malformed = await api.get('/conflict-review-cases/not-a-uuid').expect(400);
     expect(responseBody<{ code: string; message: string }>(malformed)).toEqual(
       expect.objectContaining({
         code: 'INVALID_FINDING_REVIEW_CASE_ID',
         message: 'O identificador do caso de revisão é inválido.',
       }),
     );
-    const missing = await request(server).get(`/conflict-review-cases/${randomUUID()}`).expect(404);
+    const missing = await api.get(`/conflict-review-cases/${randomUUID()}`).expect(404);
     expect(responseBody<{ code: string; message: string }>(missing)).toEqual(
       expect.objectContaining({
         code: 'FINDING_REVIEW_CASE_NOT_FOUND',
@@ -835,19 +835,14 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
         value === 'false'
           ? 'FINDING_REVIEW_CASES_DISABLED'
           : 'FINDING_REVIEW_CASES_CONFIGURATION_INVALID';
-      const list = await request(server)
-        .get('/conflict-review-cases')
-        .query({ createdBy })
-        .expect(503);
-      const detail = await request(server)
-        .get(`/conflict-review-cases/${fixture.caseId}`)
-        .expect(503);
+      const list = await api.get('/conflict-review-cases').query({ createdBy }).expect(503);
+      const detail = await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(503);
       expect(responseBody<{ code: string }>(list).code).toBe(expectedCode);
       expect(responseBody<{ code: string }>(detail).code).toBe(expectedCode);
     }
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
-    await request(server).get('/conflict-review-cases').query({ createdBy }).expect(200);
-    await request(server).get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
+    await api.get('/conflict-review-cases').query({ createdBy }).expect(200);
+    await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
     expect(await persistenceCounts()).toEqual(persistenceBefore);
   });
 
@@ -858,25 +853,19 @@ describe('GET /conflict-review-cases (PostgreSQL e2e)', () => {
       where: { id: fixture.caseId },
       select: { updatedAt: true, originalSnapshot: true, originalSnapshotHash: true },
     });
-    await request(server)
-      .get('/conflict-review-cases')
-      .query({ createdBy, pageSize: 100 })
-      .expect(200);
-    await request(server)
+    await api.get('/conflict-review-cases').query({ createdBy, pageSize: 100 }).expect(200);
+    await api
       .get('/conflict-review-cases')
       .query({ createdBy, status: fixture.status })
       .expect(200);
-    await request(server)
+    await api
       .get('/conflict-review-cases')
       .query({ createdBy, page: 99, pageSize: 10 })
       .expect(200);
-    await request(server)
-      .get('/conflict-review-cases')
-      .query({ createdFrom: '2026-07-20' })
-      .expect(400);
-    await request(server).get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
-    await request(server).get(`/conflict-review-cases/${deletedAssetCaseId}`).expect(200);
-    await request(server).get(`/conflict-review-cases/${randomUUID()}`).expect(404);
+    await api.get('/conflict-review-cases').query({ createdFrom: '2026-07-20' }).expect(400);
+    await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
+    await api.get(`/conflict-review-cases/${deletedAssetCaseId}`).expect(200);
+    await api.get(`/conflict-review-cases/${randomUUID()}`).expect(404);
     expect(await persistenceCounts()).toEqual(before);
     expect(
       await prisma.findingReviewCase.findUniqueOrThrow({

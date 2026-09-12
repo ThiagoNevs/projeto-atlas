@@ -122,9 +122,10 @@ Limitações para o novo fluxo:
 timestamp. Ele é adequado como trilha global, mas não substitui um histórico navegável e fortemente
 relacionado ao caso.
 
-O MVP não possui autenticação, autorização, guard, JWT ou RBAC. Ações atuais usam o ator simulado
-`atlas-mvp-user`. Logo, a implementação persistida não deverá ser liberada como fluxo produtivo sem
-identidade autenticada e autorização mínima.
+O baseline atual usa OIDC Authorization Code + PKCE no browser, valida access tokens JWT/JWKS no Nest
+e protege os endpoints de domínio por default-deny. A autoria vem do `CurrentActor` derivado do token;
+registros históricos com `atlas-mvp-user` permanecem inalterados. O gate atual é somente
+`atlas:access`; RBAC granular continua reservado para uma etapa posterior.
 
 Antes da implementação persistida do Finding Review, as mudanças administrativas já existentes usavam
 transação, mas não `version`, ETag, `If-Match` ou update condicional. Esse contexto histórico permitia
@@ -649,8 +650,9 @@ Comentários, atribuição e adoção persistente de contexto por refresh perman
 - **Concorrência:** update condicional por ID, versão e estado atual; versão divergente retorna `409`.
 - **Efeitos:** incrementa a versão e atualiza o estado e `updatedAt`, cria `CASE_STATUS_CHANGED` e
   `AuditLog` na mesma transação PostgreSQL. Não altera inventário.
-- **Limitações:** ator `atlas-mvp-user` provisório; autenticação e RBAC ainda não existem. `RESOLVED`
-  possui comando de domínio próprio; `DISMISSED` e `CANCELLED` continuam futuros.
+- **Limitações:** o ator vem do `CurrentActor` autenticado, mas o gate ainda é somente
+  `atlas:access`, sem RBAC granular. `RESOLVED` possui comando de domínio próprio; `DISMISSED` e
+  `CANCELLED` continuam futuros.
 
 ### 14.6 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
@@ -738,8 +740,8 @@ Comentários, atribuição e adoção persistente de contexto por refresh perman
 
 #### Contrato implementado atualmente
 
-O MVP ainda não possui autenticação ou RBAC; todos os comandos usam o ator provisório
-`atlas-mvp-user`.
+O MVP autentica por OIDC, aplica default-deny e exige `atlas:access`. Os comandos usam o ID estável do
+`CurrentActor`; ainda não existe diferenciação funcional por papéis Viewer/Analyst/Admin.
 
 | Endpoint | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- |
@@ -1195,13 +1197,13 @@ escopo da fundação inicial, não o fluxo atual completo.
 ### 26.2 Decisões que ainda exigem aprovação humana
 
 A tabela preserva perguntas do planejamento original. Nomes da fundação, feature flag, idempotência e
-escopo inicial já foram definidos pelas implementações; autenticação, retenção, comentários,
-integração com `Conflict` e ações no inventário continuam dependentes de decisão futura.
+escopo inicial e autenticação OIDC já foram definidos pelas implementações; RBAC granular, retenção,
+comentários, integração com `Conflict` e ações no inventário continuam dependentes de decisão futura.
 
 | Pergunta | Recomendação | Impacto da aprovação |
 | --- | --- | --- |
 | Nomes definitivos das tabelas e enums? | validar os nomes conceituais antes do Prisma | contratos e migration |
-| Autenticação mínima? | não liberar escrita com `atlas-mvp-user` | identidade, atribuição e auditoria |
+| RBAC granular? | definir a matriz Viewer/Analyst/Admin após o gate `atlas:access` | autorização por operação e UX |
 | Retenção de snapshots? | política configurável, sem prazo silencioso | volume, privacidade e compliance |
 | Tamanho máximo de comentário? | definir por produto/segurança antes da fase 3 | validação e UX |
 | Política de ocultação? | somente papel autorizado, motivo e auditoria | governança e privacidade |

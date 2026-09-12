@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
@@ -11,6 +10,7 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import { CreateFindingReviewCaseResolutionDto } from '../src/finding-review-cases/dto/create-finding-review-case-resolution.dto';
 import {
   FINDING_REVIEW_CASE_RESOLVED_EVENT,
@@ -26,6 +26,8 @@ import {
   type Prisma,
 } from '../src/generated/prisma/client';
 import { PrismaService } from '../src/prisma/prisma.service';
+
+const TEST_ACTOR_ID = 'human:oidc:test:actor';
 
 type FailureStep = 'event' | 'audit';
 type UnknownFunction = (...args: unknown[]) => unknown;
@@ -60,11 +62,8 @@ class ResolutionFaultInjectingPrismaService extends PrismaService {
     return new Proxy(client, {
       get: (target, property) => {
         const delegate = (target as unknown as Record<PropertyKey, unknown>)[property];
-        const step = property === 'findingReviewEvent'
-          ? 'event'
-          : property === 'auditLog'
-            ? 'audit'
-            : null;
+        const step =
+          property === 'findingReviewEvent' ? 'event' : property === 'auditLog' ? 'audit' : null;
         if (!step || typeof delegate !== 'object' || delegate === null) return delegate;
         return new Proxy(delegate, {
           get: (delegateTarget, method) => {
@@ -145,21 +144,22 @@ describe('Finding review resolution helpers and DTO', () => {
   it('scopes deterministic and case-sensitive fingerprints by case', () => {
     const firstCase = randomUUID();
     const secondCase = randomUUID();
-    expect(resolutionRequestFingerprint(firstCase, 'resolution-ABC')).toBe(
-      resolutionRequestFingerprint(firstCase, 'resolution-ABC'),
+    expect(resolutionRequestFingerprint(TEST_ACTOR_ID, firstCase, 'resolution-ABC')).toBe(
+      resolutionRequestFingerprint(TEST_ACTOR_ID, firstCase, 'resolution-ABC'),
     );
-    expect(resolutionRequestFingerprint(firstCase, 'resolution-ABC')).not.toBe(
-      resolutionRequestFingerprint(firstCase, 'resolution-abc'),
+    expect(resolutionRequestFingerprint(TEST_ACTOR_ID, firstCase, 'resolution-ABC')).not.toBe(
+      resolutionRequestFingerprint(TEST_ACTOR_ID, firstCase, 'resolution-abc'),
     );
-    expect(resolutionRequestFingerprint(firstCase, 'resolution-ABC')).not.toBe(
-      resolutionRequestFingerprint(secondCase, 'resolution-ABC'),
+    expect(resolutionRequestFingerprint(TEST_ACTOR_ID, firstCase, 'resolution-ABC')).not.toBe(
+      resolutionRequestFingerprint(TEST_ACTOR_ID, secondCase, 'resolution-ABC'),
     );
   });
 });
 
 describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: ResolutionFaultInjectingPrismaService;
   const testRunId = randomUUID();
   const caseIds = new Set<string>();
@@ -168,6 +168,8 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
@@ -179,7 +181,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get<ResolutionFaultInjectingPrismaService>(PrismaService);
   });
 
@@ -202,25 +204,30 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
-  async function createCase(options: {
-    status?: FindingReviewCaseStatus;
-    staleness?: FindingReviewStaleness;
-    version?: number;
-    withDecision?: boolean;
-    identityConclusion?: FindingReviewIdentityConclusion;
-  } = {}): Promise<CaseFixture> {
+  async function createCase(
+    options: {
+      status?: FindingReviewCaseStatus;
+      staleness?: FindingReviewStaleness;
+      version?: number;
+      withDecision?: boolean;
+      identityConclusion?: FindingReviewIdentityConclusion;
+    } = {},
+  ): Promise<CaseFixture> {
     const token = randomUUID();
     const caseId = randomUUID();
     const version = options.version ?? 2;
     const status = options.status ?? FindingReviewCaseStatus.IN_REVIEW;
     const withDecision = options.withDecision ?? true;
-    const activeReviewSubjectKey = ([
-      FindingReviewCaseStatus.OPEN,
-      FindingReviewCaseStatus.IN_REVIEW,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-    ] as FindingReviewCaseStatus[]).includes(status)
+    const activeReviewSubjectKey = (
+      [
+        FindingReviewCaseStatus.OPEN,
+        FindingReviewCaseStatus.IN_REVIEW,
+        FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      ] as FindingReviewCaseStatus[]
+    ).includes(status)
       ? sha256(`active:${testRunId}:${token}`)
       : null;
     const relatedAssetIds = [randomUUID(), randomUUID()];
@@ -254,7 +261,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
         },
         originalSnapshotHash: sha256(`snapshot:${testRunId}:${token}`),
         version,
-        createdBy: 'atlas-mvp-user',
+        createdBy: auth.actor.id,
         findingGeneratedAt: createdAt,
         createdAt,
         updatedAt: createdAt,
@@ -271,7 +278,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
             eventType: 'CASE_CREATED',
             versionBefore: null,
             versionAfter: 1,
-            actorId: 'atlas-mvp-user',
+            actorId: auth.actor.id,
             nextStatus: FindingReviewCaseStatus.OPEN,
             after: { status: FindingReviewCaseStatus.OPEN, version: 1 },
             occurredAt: createdAt,
@@ -287,11 +294,11 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       const decision = await prisma.findingReviewDecision.create({
         data: {
           caseId,
-          identityConclusion: options.identityConclusion
-            ?? FindingReviewIdentityConclusion.SAME_ASSET,
+          identityConclusion:
+            options.identityConclusion ?? FindingReviewIdentityConclusion.SAME_ASSET,
           justification: 'Decisão de identidade registrada antes da resolução.',
           caseVersion: version,
-          createdBy: 'atlas-mvp-user',
+          createdBy: auth.actor.id,
           requestFingerprint: sha256(`decision:${testRunId}:${token}`),
           createdAt,
         },
@@ -307,9 +314,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     key: string | undefined,
     payload: Record<string, unknown>,
   ) {
-    const call = request(server)
-      .post(`/conflict-review-cases/${caseId}/resolutions`)
-      .send(payload);
+    const call = api.post(`/conflict-review-cases/${caseId}/resolutions`).send(payload);
     return key === undefined ? call : call.set('Idempotency-Key', key);
   }
 
@@ -336,15 +341,17 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
   }
 
   async function inventoryCounts() {
-    const [assets, attributes, interfaces, evidence, events, conflicts, values] = await Promise.all([
-      prisma.asset.count(),
-      prisma.assetAttribute.count(),
-      prisma.networkInterface.count(),
-      prisma.assetEvidence.count(),
-      prisma.assetEvent.count(),
-      prisma.conflict.count(),
-      prisma.conflictValue.count(),
-    ]);
+    const [assets, attributes, interfaces, evidence, events, conflicts, values] = await Promise.all(
+      [
+        prisma.asset.count(),
+        prisma.assetAttribute.count(),
+        prisma.networkInterface.count(),
+        prisma.assetEvidence.count(),
+        prisma.assetEvent.count(),
+        prisma.conflict.count(),
+        prisma.conflictValue.count(),
+      ],
+    );
     return { assets, attributes, interfaces, evidence, events, conflicts, values };
   }
 
@@ -376,7 +383,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
           versionAfter: fixture.version + 1,
           previousStatus: FindingReviewCaseStatus.IN_REVIEW,
           status: FindingReviewCaseStatus.RESOLVED,
-          resolvedBy: 'atlas-mvp-user',
+          resolvedBy: auth.actor.id,
         }),
       });
       expect(new Date(body.resolution.resolvedAt).toISOString()).toBe(body.resolution.resolvedAt);
@@ -384,15 +391,19 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       const persisted = await prisma.findingReviewCase.findUniqueOrThrow({
         where: { id: fixture.caseId },
       });
-      expect(persisted).toEqual(expect.objectContaining({
-        status: FindingReviewCaseStatus.RESOLVED,
-        staleness: FindingReviewStaleness.REQUIRES_REFRESH,
-        version: fixture.version + 1,
-        activeReviewSubjectKey: null,
-      }));
+      expect(persisted).toEqual(
+        expect.objectContaining({
+          status: FindingReviewCaseStatus.RESOLVED,
+          staleness: FindingReviewStaleness.REQUIRES_REFRESH,
+          version: fixture.version + 1,
+          activeReviewSubjectKey: null,
+        }),
+      );
       expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 1, audits: 1 });
       expect(await inventoryCounts()).toEqual(inventoryBefore);
-      expect(await prisma.findingReviewDecision.count({ where: { caseId: fixture.caseId } })).toBe(1);
+      expect(await prisma.findingReviewDecision.count({ where: { caseId: fixture.caseId } })).toBe(
+        1,
+      );
     },
   );
 
@@ -403,35 +414,41 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     const body = responseBody<ResolutionBody>(response);
     expect(response.status).toBe(201);
 
-    const fingerprint = resolutionRequestFingerprint(fixture.caseId, key);
+    const fingerprint = resolutionRequestFingerprint(auth.actor.id, fixture.caseId, key);
     const event = await prisma.findingReviewEvent.findUniqueOrThrow({
       where: { caseId_requestId: { caseId: fixture.caseId, requestId: fingerprint } },
     });
-    expect(event).toEqual(expect.objectContaining({
-      id: body.resolution.eventId,
-      eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
-      versionBefore: 2,
-      versionAfter: 3,
-      actorId: 'atlas-mvp-user',
-      previousStatus: FindingReviewCaseStatus.IN_REVIEW,
-      nextStatus: FindingReviewCaseStatus.RESOLVED,
-      metadata: {
-        decisionId: fixture.decisionId,
-        identityConclusion: FindingReviewIdentityConclusion.SAME_ASSET,
-        justification: body.resolution.justification,
-      },
-    }));
+    expect(event).toEqual(
+      expect.objectContaining({
+        id: body.resolution.eventId,
+        eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
+        versionBefore: 2,
+        versionAfter: 3,
+        actorId: auth.actor.id,
+        previousStatus: FindingReviewCaseStatus.IN_REVIEW,
+        nextStatus: FindingReviewCaseStatus.RESOLVED,
+        metadata: {
+          decisionId: fixture.decisionId,
+          identityConclusion: FindingReviewIdentityConclusion.SAME_ASSET,
+          justification: body.resolution.justification,
+        },
+      }),
+    );
     const audit = await prisma.auditLog.findFirstOrThrow({
       where: { entityId: fixture.caseId, action: FINDING_REVIEW_CASE_RESOLVED_EVENT },
     });
-    expect(audit).toEqual(expect.objectContaining({
-      actorType: 'USER',
-      actorId: 'atlas-mvp-user',
-      entityType: 'FindingReviewCase',
-    }));
+    expect(audit).toEqual(
+      expect.objectContaining({
+        actorType: 'USER',
+        actorId: auth.actor.id,
+        entityType: 'FindingReviewCase',
+      }),
+    );
     expect(JSON.stringify([event.metadata, audit.metadata, response.body])).not.toContain(key);
     expect(JSON.stringify(response.body)).not.toContain(fingerprint);
-    expect(JSON.stringify(response.body)).not.toMatch(/requestId|requestFingerprint|Idempotency-Key/);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /requestId|requestFingerprint|Idempotency-Key/,
+    );
   });
 
   it('returns a replay after RESOLVED with semantic whitespace equivalence and no writes', async () => {
@@ -443,7 +460,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       validPayload(2, '  Justificativa original.  '),
     );
     const createdBody = responseBody<ResolutionBody>(created);
-    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const effectsBefore = await resolutionEffects(fixture.caseId);
     const replay = await postResolution(
       fixture.caseId,
@@ -456,8 +475,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       idempotentReplay: true,
       resolution: createdBody.resolution,
     });
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(caseBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(caseBefore);
     expect(await resolutionEffects(fixture.caseId)).toEqual(effectsBefore);
   });
 
@@ -499,8 +519,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       responseBody<ResolutionBody>(second).resolution.eventId,
     );
     expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 1, audits: 1 });
-    expect((await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } })).version)
-      .toBe(3);
+    expect(
+      (await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } })).version,
+    ).toBe(3);
   });
 
   it('rejects concurrent different payloads that reuse the same key', async () => {
@@ -524,15 +545,15 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     ]);
     expect([first.status, second.status].sort()).toEqual([201, 409]);
     const rejected = first.status === 409 ? first : second;
-    expect(responseBody<ErrorBody>(rejected).code).toBe(
-      'FINDING_REVIEW_CASE_VERSION_CONFLICT',
-    );
+    expect(responseBody<ErrorBody>(rejected).code).toBe('FINDING_REVIEW_CASE_VERSION_CONFLICT');
     expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 1, audits: 1 });
   });
 
   it('requires the current decision after checking the current version and status', async () => {
     const fixture = await createCase({ withDecision: false });
-    const before = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const before = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const response = await postResolution(
       fixture.caseId,
       `decision-required-${randomUUID()}`,
@@ -540,8 +561,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     );
     expect(response.status).toBe(422);
     expect(responseBody<ErrorBody>(response).code).toBe('FINDING_REVIEW_CASE_DECISION_REQUIRED');
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(before);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(before);
     expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 0, audits: 0 });
   });
 
@@ -553,7 +575,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     FindingReviewCaseStatus.CANCELLED,
   ])('rejects a new resolution from status %s without side effects', async (status) => {
     const fixture = await createCase({ status });
-    const before = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const before = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const response = await postResolution(
       fixture.caseId,
       `status-resolution-${randomUUID()}`,
@@ -563,15 +587,19 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     expect(responseBody<ErrorBody>(response).code).toBe(
       'FINDING_REVIEW_CASE_RESOLUTION_NOT_ALLOWED',
     );
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(before);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(before);
     expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 0, audits: 0 });
   });
 
   it.each([
     [undefined, 'FINDING_REVIEW_RESOLUTION_JUSTIFICATION_REQUIRED'],
     ['  \n\t ', 'FINDING_REVIEW_RESOLUTION_JUSTIFICATION_REQUIRED'],
-    ['x'.repeat(MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH + 1), 'INVALID_FINDING_REVIEW_RESOLUTION_JUSTIFICATION'],
+    [
+      'x'.repeat(MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH + 1),
+      'INVALID_FINDING_REVIEW_RESOLUTION_JUSTIFICATION',
+    ],
   ])('rejects invalid justification %p with a controlled error', async (justification, code) => {
     const fixture = await createCase();
     const payload = validPayload();
@@ -614,9 +642,7 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
         payload,
       );
       expect(response.status).toBe(409);
-      expect(responseBody<ErrorBody>(response).code).toBe(
-        'FINDING_REVIEW_CASE_VERSION_CONFLICT',
-      );
+      expect(responseBody<ErrorBody>(response).code).toBe('FINDING_REVIEW_CASE_VERSION_CONFLICT');
       expect(await resolutionEffects(fixture.caseId)).toEqual({ events: 0, audits: 0 });
     },
   );
@@ -644,7 +670,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
   it('rejects absent or invalid Idempotency-Key and disables creation and replay with the feature', async () => {
     const fixture = await createCase();
     expect((await postResolution(fixture.caseId, undefined, validPayload())).status).toBe(400);
-    expect((await postResolution(fixture.caseId, 'chave inválida', validPayload())).status).toBe(400);
+    expect((await postResolution(fixture.caseId, 'chave inválida', validPayload())).status).toBe(
+      400,
+    );
 
     const key = `flag-resolution-${randomUUID()}`;
     await postResolution(fixture.caseId, key, validPayload()).expect(201);
@@ -659,29 +687,33 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
     const key = `safe-resolution-${randomUUID()}`;
     const created = await postResolution(fixture.caseId, key, validPayload());
     const resolution = responseBody<ResolutionBody>(created).resolution;
-    const detail = await request(server).get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
+    const detail = await api.get(`/conflict-review-cases/${fixture.caseId}`).expect(200);
     const resolutionEvent = responseBody<{
       events: Array<Record<string, unknown>>;
     }>(detail).events.find((event) => event.eventType === FINDING_REVIEW_CASE_RESOLVED_EVENT);
 
-    expect(resolutionEvent).toEqual(expect.objectContaining({
-      eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
-      metadata: {
-        decisionId: fixture.decisionId,
-        identityConclusion: FindingReviewIdentityConclusion.SAME_ASSET,
-        justification: resolution.justification,
-      },
-    }));
+    expect(resolutionEvent).toEqual(
+      expect.objectContaining({
+        eventType: FINDING_REVIEW_CASE_RESOLVED_EVENT,
+        metadata: {
+          decisionId: fixture.decisionId,
+          identityConclusion: FindingReviewIdentityConclusion.SAME_ASSET,
+          justification: resolution.justification,
+        },
+      }),
+    );
     expect(JSON.stringify(resolutionEvent)).not.toMatch(/requestId|requestFingerprint/);
     expect(JSON.stringify(resolutionEvent)).not.toContain(
-      resolutionRequestFingerprint(fixture.caseId, key),
+      resolutionRequestFingerprint(auth.actor.id, fixture.caseId, key),
     );
   });
 
   async function expectRollback(step: FailureStep) {
     const fixture = await createCase();
     const key = `rollback-resolution-${step}-${randomUUID()}`;
-    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } });
+    const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({
+      where: { id: fixture.caseId },
+    });
     const effectsBefore = await resolutionEffects(fixture.caseId);
     const inventoryBefore = await inventoryCounts();
     prisma.failNextTransactionAt(step);
@@ -692,8 +724,9 @@ describe('POST /conflict-review-cases/:id/resolutions (PostgreSQL e2e)', () => {
       prisma.clearFailure();
     }
     expect(failed.status).toBe(500);
-    expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }))
-      .toEqual(caseBefore);
+    expect(
+      await prisma.findingReviewCase.findUniqueOrThrow({ where: { id: fixture.caseId } }),
+    ).toEqual(caseBefore);
     expect(await resolutionEffects(fixture.caseId)).toEqual(effectsBefore);
     expect(await inventoryCounts()).toEqual(inventoryBefore);
     expect(caseBefore.activeReviewSubjectKey).toBe(fixture.activeReviewSubjectKey);

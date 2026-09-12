@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { HealthController } from './health.controller';
+import { AuthModule } from './auth/auth.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AssetsModule } from './assets/assets.module';
 import { ConflictsModule } from './conflicts/conflicts.module';
@@ -18,6 +19,7 @@ import { TimelineModule } from './timeline/timeline.module';
 
 @Module({
   imports: [
+    AuthModule,
     PrismaModule,
     IngestionModule,
     AssetsModule,

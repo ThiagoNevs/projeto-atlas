@@ -456,7 +456,7 @@ test('criação diferencia 201 e replay 200 sem alterar o contrato enviado', asy
   const replayed = await createFindingReviewCase(FINDING_ID, 'atlas-ui-key', { fetchImplementation });
   assert.equal(created.idempotentReplay, false);
   assert.equal(replayed.idempotentReplay, true);
-  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-key');
+  assert.equal(new Headers(calls[0]?.init.headers).get('Idempotency-Key'), 'atlas-ui-key');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { findingId: FINDING_ID });
 });
 
@@ -475,8 +475,8 @@ test('transição usa PATCH, expectedVersion e não envia Idempotency-Key', asyn
     status: 'IN_REVIEW',
     expectedVersion: 1,
   });
-  const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers['Idempotency-Key'], undefined);
+  const headers = new Headers(calls[0]?.init.headers);
+  assert.equal(headers.get('Idempotency-Key'), null);
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/status$`));
 });
 
@@ -556,7 +556,7 @@ test('cliente de decisão envia contrato técnico, chave opaca e interpreta repl
   );
   assert.equal(result.idempotentReplay, true);
   assert.equal(calls[0]?.init.method, 'POST');
-  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-decision-key');
+  assert.equal(new Headers(calls[0]?.init.headers).get('Idempotency-Key'), 'atlas-ui-decision-key');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
     identityConclusion: 'SAME_ASSET',
     justification: 'Mesma  identidade.\nConfirmada.',
@@ -598,7 +598,7 @@ test('cliente de correção envia contrato, chave, signal e interpreta replay', 
   assert.equal(result.supersededDecisionId, DECISION_ID);
   assert.match(calls[0]?.input ?? '', new RegExp(`${CASE_ID}/decisions/${DECISION_ID}/supersessions$`));
   assert.equal(calls[0]?.init.method, 'POST');
-  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-supersession-key');
+  assert.equal(new Headers(calls[0]?.init.headers).get('Idempotency-Key'), 'atlas-ui-supersession-key');
   assert.ok(calls[0]?.init.signal instanceof AbortSignal);
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
     expectedVersion: 2,
@@ -673,7 +673,7 @@ test('cliente de resolução envia versão, justificativa canônica e interpreta
   );
   assert.equal(result.idempotentReplay, true);
   assert.equal(calls[0]?.init.method, 'POST');
-  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-resolution-key');
+  assert.equal(new Headers(calls[0]?.init.headers).get('Idempotency-Key'), 'atlas-ui-resolution-key');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
     expectedVersion: 2,
     justification: 'Ativos distintos confirmados.\nInvestigação encerrada.',
@@ -709,7 +709,7 @@ test('cliente de reabertura envia versão, justificativa canônica e interpreta 
   );
   assert.equal(result.idempotentReplay, true);
   assert.equal(calls[0]?.init.method, 'POST');
-  assert.equal((calls[0]?.init.headers as Record<string, string>)['Idempotency-Key'], 'atlas-ui-reopen-key');
+  assert.equal(new Headers(calls[0]?.init.headers).get('Idempotency-Key'), 'atlas-ui-reopen-key');
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
     expectedVersion: 3,
     justification: 'Novas  evidências.\nRetomar análise.',

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../../lib/api-error';
+import { useAuth } from '../auth-provider';
 import type {
   CreateFindingReviewCaseResponse,
   FindingReviewCasesRequestOptions,
@@ -28,6 +29,8 @@ interface Options {
 }
 
 export function useReviewCaseCreationCommand({ createCase, onSuccess }: Options) {
+  const { actor } = useAuth();
+  const actorId = actor?.id ?? '';
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<CreateFindingReviewCaseResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +76,7 @@ export function useReviewCaseCreationCommand({ createCase, onSuccess }: Options)
       const inspected = inspectPendingFindingReviewCaseAttempt(
         JSON.stringify(attempt),
         creationFindingId,
+        actorId,
       );
       if (inspected.status !== 'valid') {
         clearPendingFindingReviewCaseAttempt(creationFindingId, attempt);
@@ -84,7 +88,7 @@ export function useReviewCaseCreationCommand({ createCase, onSuccess }: Options)
       attempt = inspected.attempt;
       pendingAttempt.current = attempt;
     } else {
-      const stored = readPendingFindingReviewCaseAttempt(creationFindingId);
+      const stored = readPendingFindingReviewCaseAttempt(creationFindingId, actorId);
       if (stored.status === 'invalid' || stored.status === 'expired') {
         setError(pendingReviewCaseAttemptDiscardedMessage(stored.status));
         setExistingCaseId(null);
@@ -94,6 +98,7 @@ export function useReviewCaseCreationCommand({ createCase, onSuccess }: Options)
         ? stored.attempt
         : createPendingFindingReviewCaseAttempt(
           creationFindingId,
+          actorId,
           createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
         );
       pendingAttempt.current = attempt;

@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { describe, expect, it, beforeAll, afterAll, jest } from '@jest/globals';
@@ -10,6 +9,7 @@ import ExcelJS from 'exceljs';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import {
   NetworkDiscoveryResultStatus,
   NetworkDiscoveryRunStatus,
@@ -135,8 +135,20 @@ type CsvImportResponse = {
   importedCount: number;
   format: 'CSV' | 'PASTED' | 'XLSX' | 'XLSM';
   warningCount: number;
-  warnings: Array<{ line: number; rowNumber?: number; field: string; code?: string; message: string }>;
-  assets: Array<{ id: string; name: string; operationalStatus: string; firstSeenAt: string | null; lastSeenAt: string | null }>;
+  warnings: Array<{
+    line: number;
+    rowNumber?: number;
+    field: string;
+    code?: string;
+    message: string;
+  }>;
+  assets: Array<{
+    id: string;
+    name: string;
+    operationalStatus: string;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+  }>;
   summary: {
     total: number;
     created: number;
@@ -185,7 +197,8 @@ type ManualEnrichmentResponse = {
 
 describe('Asset ingestion idempotency (e2e)', () => {
   let app: INestApplication;
-  let httpServer: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: PrismaService;
   let networkDiscoveryService: NetworkDiscoveryService;
   let assetId: string;
@@ -248,6 +261,8 @@ describe('Asset ingestion idempotency (e2e)', () => {
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
 
+    auth = await startTestAuthHarness();
+
     const testingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = testingModule.createNestApplication();
     app.useGlobalPipes(
@@ -258,7 +273,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       }),
     );
     await app.init();
-    httpServer = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get(PrismaService);
     networkDiscoveryService = app.get(NetworkDiscoveryService);
 
@@ -451,13 +466,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
     }
     await prisma.asset.deleteMany({ where: { canonicalKey: { startsWith: canonicalKey } } });
     await app.close();
+    await auth.close();
   });
 
   it('creates an asset, evidence, attributes, interface and discovery event', async () => {
-    const response = await request(httpServer)
-      .post('/ingestion/assets')
-      .send(basePayload)
-      .expect(201);
+    const response = await api.post('/ingestion/assets').send(basePayload).expect(201);
     const body = response.body as IngestionResponse;
 
     assetId = body.asset.id;
@@ -472,10 +485,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('syncs identical data without duplicating attributes or interfaces', async () => {
-    const response = await request(httpServer)
-      .post('/ingestion/assets')
-      .send(basePayload)
-      .expect(201);
+    const response = await api.post('/ingestion/assets').send(basePayload).expect(201);
     const body = response.body as IngestionResponse;
 
     expect(body.action).toBe('synced');
@@ -493,7 +503,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('creates attribute history and an update event when hostname changes', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -515,7 +525,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('updates the same interface when a known MAC receives a new IP', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -539,7 +549,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('prepares a conflict when the same IP is observed with another MAC', async () => {
-    await request(httpServer)
+    await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -560,7 +570,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects scores outside the 0 to 100 range', async () => {
-    await request(httpServer)
+    await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -571,7 +581,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('does not create a lifecycle conflict when an IN_USE asset receives evidence', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -590,7 +600,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('changes administrative status and records the event and audit log atomically', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/assets/${assetId}/administrative-status`)
       .send({
         administrativeStatus: 'DEACTIVATED',
@@ -625,13 +635,13 @@ describe('Asset ingestion idempotency (e2e)', () => {
         newStatus: 'DEACTIVATED',
         reason: 'Baixa patrimonial',
         comment: 'Equipamento recolhido pelo suporte e removido do uso corporativo.',
-        actorUserId: 'atlas-mvp-user',
+        actorUserId: auth.actor.id,
       }),
     );
     expect(auditLog).toEqual(
       expect.objectContaining({
         actorType: 'USER',
-        actorId: 'atlas-mvp-user',
+        actorId: auth.actor.id,
         before: { administrativeStatus: 'IN_USE' },
         after: { administrativeStatus: 'DEACTIVATED' },
         metadata: {
@@ -646,7 +656,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const eventCount = await prisma.assetEvent.count({ where: { assetId } });
     const auditLogCount = await prisma.auditLog.count({ where: { assetId } });
 
-    await request(httpServer)
+    await api
       .patch(`/assets/${assetId}/administrative-status`)
       .send({
         administrativeStatus: 'DEACTIVATED',
@@ -660,7 +670,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('validates enum, reason and comment for administrative status updates', async () => {
-    await request(httpServer)
+    await api
       .patch(`/assets/${assetId}/administrative-status`)
       .send({
         administrativeStatus: 'INVALID_STATUS',
@@ -671,7 +681,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('creates ASSET_REAPPEARED when a DEACTIVATED asset receives evidence', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -712,7 +722,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('updates the lifecycle conflict when a DISCARDED asset receives evidence', async () => {
-    await request(httpServer)
+    await api
       .patch(`/assets/${assetId}/administrative-status`)
       .send({
         administrativeStatus: 'DISCARDED',
@@ -721,7 +731,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       })
       .expect(200);
 
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -744,7 +754,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('does not duplicate an open lifecycle conflict on repeated evidence', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/ingestion/assets')
       .send({
         ...basePayload,
@@ -767,7 +777,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('lists conflicts in the Resolution Center', async () => {
-    const response = await request(httpServer).get('/conflicts').expect(200);
+    const response = await api.get('/conflicts').expect(200);
     const conflicts = (response.body as PaginatedResponse<Record<string, unknown>>).items;
     const conflict = conflicts.find((item) => item.id === lifecycleConflictId);
 
@@ -787,7 +797,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns conflict details, values, metadata and related timeline', async () => {
-    const response = await request(httpServer).get(`/conflicts/${lifecycleConflictId}`).expect(200);
+    const response = await api.get(`/conflicts/${lifecycleConflictId}`).expect(200);
     const body = response.body as ConflictDetailResponse;
 
     expect(body).toEqual(
@@ -809,7 +819,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects an invalid conflict status', async () => {
-    await request(httpServer)
+    await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'INVALID_STATUS',
@@ -820,7 +830,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects blank reason and comment when changing conflict status', async () => {
-    await request(httpServer)
+    await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'IN_REVIEW',
@@ -831,7 +841,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns 404 when the conflict does not exist', async () => {
-    await request(httpServer)
+    await api
       .patch(`/conflicts/${randomUUID()}/status`)
       .send({
         status: 'IN_REVIEW',
@@ -845,7 +855,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const eventCount = await prisma.assetEvent.count({ where: { assetId } });
     const auditLogCount = await prisma.auditLog.count({ where: { assetId } });
 
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'RESOLVED',
@@ -865,7 +875,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('allows IN_REVIEW while the lifecycle conflict asset remains closed', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'IN_REVIEW',
@@ -880,7 +890,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('allows EXCEPTION with reason and comment while the asset remains closed', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'EXCEPTION',
@@ -895,7 +905,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('allows IGNORED with reason and comment while the asset remains closed', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'IGNORED',
@@ -910,7 +920,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('allows RESOLVED after the lifecycle conflict asset is reactivated and audits it', async () => {
-    await request(httpServer)
+    await api
       .patch(`/assets/${assetId}/administrative-status`)
       .send({
         administrativeStatus: 'IN_USE',
@@ -919,7 +929,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       })
       .expect(200);
 
-    const response = await request(httpServer)
+    const response = await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'RESOLVED',
@@ -967,7 +977,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       expect.objectContaining({
         assetId,
         actorType: 'USER',
-        actorId: 'atlas-mvp-user',
+        actorId: auth.actor.id,
         action: 'CONFLICT_STATUS_CHANGED',
         entityType: 'Conflict',
         entityId: lifecycleConflictId,
@@ -985,7 +995,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const eventCount = await prisma.assetEvent.count({ where: { assetId } });
     const auditLogCount = await prisma.auditLog.count({ where: { assetId } });
 
-    await request(httpServer)
+    await api
       .patch(`/conflicts/${lifecycleConflictId}/status`)
       .send({
         status: 'RESOLVED',
@@ -999,9 +1009,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('searches assets by hostname', async () => {
-    const response = await request(httpServer)
-      .get(`/assets?search=${queryPrefix}-notebook`)
-      .expect(200);
+    const response = await api.get(`/assets?search=${queryPrefix}-notebook`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1009,9 +1017,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('searches assets by serial number attribute', async () => {
-    const response = await request(httpServer)
-      .get(`/assets?search=${querySerialNumber}`)
-      .expect(200);
+    const response = await api.get(`/assets?search=${querySerialNumber}`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1019,7 +1025,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('filters assets by administrative status', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/assets?search=${queryPrefix}&administrativeStatus=DEACTIVATED`)
       .expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
@@ -1029,9 +1035,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('filters assets by type', async () => {
-    const response = await request(httpServer)
-      .get(`/assets?search=${queryPrefix}&type=VM`)
-      .expect(200);
+    const response = await api.get(`/assets?search=${queryPrefix}&type=VM`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1039,7 +1043,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('filters assets by minimum confidence score', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/assets?search=${queryPrefix}&minConfidenceScore=90`)
       .expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
@@ -1049,7 +1053,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('paginates assets with total metadata', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/assets?search=${queryPrefix}&page=2&pageSize=2&sortBy=name&sortDirection=asc`)
       .expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
@@ -1061,7 +1065,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('sorts assets by last seen date', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/assets?search=${queryPrefix}&sortBy=lastSeenAt&sortDirection=asc`)
       .expect(200);
     const body = response.body as PaginatedResponse<{ id: string }>;
@@ -1070,17 +1074,15 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects asset page size above 100', async () => {
-    await request(httpServer).get('/assets?pageSize=101').expect(400);
+    await api.get('/assets?pageSize=101').expect(400);
   });
 
   it('rejects an invalid asset score', async () => {
-    await request(httpServer).get('/assets?minConfidenceScore=101').expect(400);
+    await api.get('/assets?minConfidenceScore=101').expect(400);
   });
 
   it('filters conflicts by status', async () => {
-    const response = await request(httpServer)
-      .get(`/conflicts?search=${queryPrefix}&status=IN_REVIEW`)
-      .expect(200);
+    const response = await api.get(`/conflicts?search=${queryPrefix}&status=IN_REVIEW`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1088,9 +1090,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('filters conflicts by impact', async () => {
-    const response = await request(httpServer)
-      .get(`/conflicts?search=${queryPrefix}&impact=HIGH`)
-      .expect(200);
+    const response = await api.get(`/conflicts?search=${queryPrefix}&impact=HIGH`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1098,9 +1098,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('searches conflicts by related asset hostname', async () => {
-    const response = await request(httpServer)
-      .get(`/conflicts?search=${queryPrefix}-server`)
-      .expect(200);
+    const response = await api.get(`/conflicts?search=${queryPrefix}-server`).expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
 
     expect(body.total).toBe(1);
@@ -1108,7 +1106,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('paginates conflicts with total metadata', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/conflicts?search=${queryPrefix}&page=2&pageSize=1`)
       .expect(200);
     const body = response.body as PaginatedResponse<Record<string, unknown>>;
@@ -1120,7 +1118,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('sorts conflicts by updated date', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get(`/conflicts?search=${queryPrefix}&sortBy=updatedAt&sortDirection=asc`)
       .expect(200);
     const body = response.body as PaginatedResponse<{ updatedAt: string }>;
@@ -1130,7 +1128,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects an invalid conflict status filter', async () => {
-    await request(httpServer).get('/conflicts?status=INVALID_STATUS').expect(400);
+    await api.get('/conflicts?status=INVALID_STATUS').expect(400);
   });
 
   it('exposes the stabilized discovery run and result statuses', () => {
@@ -1150,7 +1148,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('creates a valid Network Discovery Lite profile', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/network-discovery/profiles')
       .send({
         name: `Discovery ${sourceAssetId}`,
@@ -1179,7 +1177,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects a discovery profile without allowed CIDRs', async () => {
-    await request(httpServer)
+    await api
       .post('/network-discovery/profiles')
       .send({
         name: 'Sem escopo',
@@ -1192,7 +1190,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects discovery over CIDR 0.0.0.0/0', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/network-discovery/profiles')
       .send({
         name: 'Escopo inseguro',
@@ -1210,7 +1208,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects public CIDRs in the MVP', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/network-discovery/profiles')
       .send({
         name: 'Escopo público',
@@ -1230,7 +1228,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects scheduling without a schedule expression', async () => {
-    await request(httpServer)
+    await api
       .post('/network-discovery/profiles')
       .send({
         name: 'Agendamento incompleto',
@@ -1245,7 +1243,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects a discovery rate limit above 60 per minute', async () => {
-    await request(httpServer)
+    await api
       .post('/network-discovery/profiles')
       .send({
         name: 'Limite inválido',
@@ -1259,7 +1257,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects execution of a disabled discovery profile', async () => {
-    const createResponse = await request(httpServer)
+    const createResponse = await api
       .post('/network-discovery/profiles')
       .send({
         name: `Disabled ${sourceAssetId}`,
@@ -1273,9 +1271,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     disabledDiscoveryProfileId = (createResponse.body as { id: string }).id;
     discoveryProfileIds.push(disabledDiscoveryProfileId);
 
-    await request(httpServer)
-      .post(`/network-discovery/profiles/${disabledDiscoveryProfileId}/run`)
-      .expect(400);
+    await api.post(`/network-discovery/profiles/${disabledDiscoveryProfileId}/run`).expect(400);
 
     const rejectionAudit = await prisma.auditLog.findFirstOrThrow({
       where: {
@@ -1290,7 +1286,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('executes a simulated discovery successfully', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post(`/network-discovery/profiles/${discoveryProfileId}/run`)
       .expect(201);
     const body = response.body as {
@@ -1374,12 +1370,12 @@ describe('Asset ingestion idempotency (e2e)', () => {
       },
     });
     expect(auditLog).toEqual(
-      expect.objectContaining({ actorType: 'SYSTEM', actorId: 'atlas-network-discovery-lite' }),
+      expect.objectContaining({ actorType: 'USER', actorId: auth.actor.id }),
     );
   });
 
   it('lists discovery runs', async () => {
-    const response = await request(httpServer).get('/network-discovery/runs').expect(200);
+    const response = await api.get('/network-discovery/runs').expect(200);
     const runs = response.body as Array<{ id: string; profile: { id: string } }>;
     expect(runs).toEqual(
       expect.arrayContaining([
@@ -1392,9 +1388,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns discovery run details and related assets', async () => {
-    const response = await request(httpServer)
-      .get(`/network-discovery/runs/${discoveryRunId}`)
-      .expect(200);
+    const response = await api.get(`/network-discovery/runs/${discoveryRunId}`).expect(200);
     const body = response.body as {
       id: string;
       profile: { id: string };
@@ -1415,7 +1409,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       .spyOn(failurePoint, 'processObservation')
       .mockRejectedValueOnce(new Error('Controlled E2E simulation failure'));
 
-    const response = await request(httpServer)
+    const response = await api
       .post(`/network-discovery/profiles/${discoveryProfileId}/run`)
       .expect(500);
     failureSpy.mockRestore();
@@ -1446,7 +1440,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns the dashboard summary with all operational sections', async () => {
-    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const response = await api.get('/dashboard/summary').expect(200);
 
     expect(response.body).toEqual(
       expect.objectContaining({
@@ -1468,14 +1462,14 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('reports the current asset count in the dashboard', async () => {
     const expectedTotal = await prisma.asset.count();
-    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const response = await api.get('/dashboard/summary').expect(200);
 
     expect((response.body as { assets: { total: number } }).assets.total).toBe(expectedTotal);
   });
 
   it('reports the current open conflict count in the dashboard', async () => {
     const expectedTotal = await prisma.conflict.count({ where: { status: 'OPEN' } });
-    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const response = await api.get('/dashboard/summary').expect(200);
 
     expect((response.body as { conflicts: { totalOpen: number } }).conflicts.totalOpen).toBe(
       expectedTotal,
@@ -1488,7 +1482,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       take: 8,
       select: { id: true },
     });
-    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const response = await api.get('/dashboard/summary').expect(200);
     const activity = (response.body as { recentActivity: Array<{ id: string }> }).recentActivity;
 
     expect(activity.map((event) => event.id)).toEqual(expectedEvents.map((event) => event.id));
@@ -1504,7 +1498,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
         where: { status: 'OPEN', conflictType: 'LIFECYCLE_CONFLICT' },
       }),
     ]);
-    const response = await request(httpServer).get('/dashboard/summary').expect(200);
+    const response = await api.get('/dashboard/summary').expect(200);
     const body = response.body as {
       inventoryHealth: {
         attentionSignals: {
@@ -1529,7 +1523,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('lists audit logs with pagination and summary', async () => {
-    const response = await request(httpServer).get('/audit-logs').expect(200);
+    const response = await api.get('/audit-logs').expect(200);
     const body = response.body as AuditLogListResponse;
 
     expect(body).toEqual(
@@ -1546,7 +1540,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns an empty audit log page when no record matches', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/audit-logs')
       .query({ search: `missing-${randomUUID()}` })
       .expect(200);
@@ -1558,7 +1552,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('filters audit logs by action', async () => {
     const existing = await prisma.auditLog.findFirstOrThrow();
-    const response = await request(httpServer)
+    const response = await api
       .get('/audit-logs')
       .query({ action: existing.action, pageSize: 100 })
       .expect(200);
@@ -1570,7 +1564,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('filters audit logs by entity type', async () => {
     const existing = await prisma.auditLog.findFirstOrThrow();
-    const response = await request(httpServer)
+    const response = await api
       .get('/audit-logs')
       .query({ entityType: existing.entityType, pageSize: 100 })
       .expect(200);
@@ -1584,7 +1578,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const existing = await prisma.auditLog.findFirstOrThrow({ orderBy: { occurredAt: 'asc' } });
     const dateFrom = new Date(existing.occurredAt.getTime() - 1_000).toISOString();
     const dateTo = new Date(existing.occurredAt.getTime() + 1_000).toISOString();
-    const response = await request(httpServer)
+    const response = await api
       .get('/audit-logs')
       .query({ dateFrom, dateTo, pageSize: 100 })
       .expect(200);
@@ -1601,10 +1595,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('paginates audit logs', async () => {
-    const response = await request(httpServer)
-      .get('/audit-logs')
-      .query({ page: 1, pageSize: 1 })
-      .expect(200);
+    const response = await api.get('/audit-logs').query({ page: 1, pageSize: 1 }).expect(200);
     const body = response.body as AuditLogListResponse;
 
     expect(body.items).toHaveLength(1);
@@ -1613,7 +1604,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('orders audit logs by occurredAt', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/audit-logs')
       .query({ sortBy: 'occurredAt', sortDirection: 'desc', pageSize: 100 })
       .expect(200);
@@ -1625,7 +1616,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('returns an audit log detail by id', async () => {
     const existing = await prisma.auditLog.findFirstOrThrow();
-    const response = await request(httpServer).get(`/audit-logs/${existing.id}`).expect(200);
+    const response = await api.get(`/audit-logs/${existing.id}`).expect(200);
     const body = response.body as AuditLogItem;
 
     expect(body).toEqual(
@@ -1639,15 +1630,15 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns 404 for an unknown audit log', async () => {
-    await request(httpServer).get(`/audit-logs/${randomUUID()}`).expect(404);
+    await api.get(`/audit-logs/${randomUUID()}`).expect(404);
   });
 
   it('rejects audit log pageSize above 100', async () => {
-    await request(httpServer).get('/audit-logs').query({ pageSize: 101 }).expect(400);
+    await api.get('/audit-logs').query({ pageSize: 101 }).expect(400);
   });
 
   it('returns the data quality summary with current inventory data', async () => {
-    const response = await request(httpServer).get('/data-quality/summary').expect(200);
+    const response = await api.get('/data-quality/summary').expect(200);
     const body = response.body as DataQualitySummaryResponse;
 
     expect(body.totalAssets).toBeGreaterThan(0);
@@ -1662,7 +1653,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('lists data quality assets with pagination', async () => {
-    const response = await request(httpServer).get('/data-quality/assets').expect(200);
+    const response = await api.get('/data-quality/assets').expect(200);
     const body = response.body as PaginatedResponse<DataQualityAssetResponse>;
 
     expect(body).toEqual(
@@ -1678,7 +1669,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('shows quality and confidence as separate derived score analyses', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ search: `quality-incomplete-${sourceAssetId.slice(-8)}`, pageSize: 100 })
       .expect(200);
@@ -1703,7 +1694,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('reports positive and negative factors with related evidence when available', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ search: `quality-incomplete-${sourceAssetId.slice(-8)}`, pageSize: 100 })
       .expect(200);
@@ -1734,7 +1725,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     ['MISSING_NETWORK_INFO', 'MISSING_NETWORK_INFO'],
     ['WITHOUT_RECENT_EVIDENCE', 'WITHOUT_RECENT_EVIDENCE'],
   ])('filters by %s and reports the issue', async (issue, expectedIssue) => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ issue, pageSize: 100 })
       .expect(200);
@@ -1746,7 +1737,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('paginates data quality assets', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ page: 1, pageSize: 1 })
       .expect(200);
@@ -1757,7 +1748,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('orders low-quality assets by dataQualityScore', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({
         issue: 'LOW_DATA_QUALITY',
@@ -1775,11 +1766,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects data quality pageSize above 100', async () => {
-    await request(httpServer).get('/data-quality/assets').query({ pageSize: 101 }).expect(400);
+    await api.get('/data-quality/assets').query({ pageSize: 101 }).expect(400);
   });
 
   it('exports data quality assets as CSV with Portuguese headers', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets/export')
       .query({ search: csvAssetName, sortBy: 'name', sortDirection: 'asc' })
       .expect(200);
@@ -1798,11 +1789,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('applies LOW_CONFIDENCE and MISSING_OPERATING_SYSTEM filters to the CSV export', async () => {
-    const lowConfidence = await request(httpServer)
+    const lowConfidence = await api
       .get('/data-quality/assets/export')
       .query({ issue: 'LOW_CONFIDENCE', search: csvAssetName })
       .expect(200);
-    const missingOperatingSystem = await request(httpServer)
+    const missingOperatingSystem = await api
       .get('/data-quality/assets/export')
       .query({ issue: 'MISSING_OPERATING_SYSTEM', search: csvAssetName })
       .expect(200);
@@ -1814,7 +1805,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('uses Portuguese labels instead of technical enums in the CSV export', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets/export')
       .query({ search: csvAssetName })
       .expect(200);
@@ -1828,7 +1819,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('escapes commas, quotes and newlines in CSV fields', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets/export')
       .query({ search: csvAssetName })
       .expect(200);
@@ -1837,7 +1828,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('protects CSV cells against formula injection', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets/export')
       .query({ search: csvAssetName })
       .expect(200);
@@ -1847,7 +1838,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns a valid CSV with only headers when no data matches', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets/export')
       .query({ search: `no-match-${randomUUID()}` })
       .expect(200);
@@ -1857,21 +1848,18 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('requires the mandatory manual declaration fields', async () => {
-    await request(httpServer).post('/assets/manual').send({}).expect(400);
+    await api.post('/assets/manual').send({}).expect(400);
   });
 
   it('requires a non-empty reason for manual declaration', async () => {
-    await request(httpServer)
+    await api
       .post('/assets/manual')
       .send({ ...manualPayload, reason: '   ' })
       .expect(400);
   });
 
   it('creates a manually declared asset with conservative operational state', async () => {
-    const response = await request(httpServer)
-      .post('/assets/manual')
-      .send(manualPayload)
-      .expect(201);
+    const response = await api.post('/assets/manual').send(manualPayload).expect(201);
     const body = response.body as ManualAssetResponse;
     manualAssetId = body.asset.id;
 
@@ -1915,7 +1903,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     });
 
     expect(auditLog).toEqual(
-      expect.objectContaining({ actorType: 'USER', actorId: 'atlas-mvp-user' }),
+      expect.objectContaining({ actorType: 'USER', actorId: auth.actor.id }),
     );
     expect(auditLog.metadata).toEqual(
       expect.objectContaining({ reason: manualPayload.reason, origin: 'manual-declaration' }),
@@ -1923,7 +1911,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects a manual declaration with duplicate hostname', async () => {
-    await request(httpServer)
+    await api
       .post('/assets/manual')
       .send({
         ...manualPayload,
@@ -1934,7 +1922,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('rejects a manual declaration with duplicate serial number', async () => {
-    await request(httpServer)
+    await api
       .post('/assets/manual')
       .send({
         ...manualPayload,
@@ -1945,10 +1933,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('lists the manually declared asset in the inventory', async () => {
-    const response = await request(httpServer)
-      .get('/assets')
-      .query({ search: manualPayload.hostname })
-      .expect(200);
+    const response = await api.get('/assets').query({ search: manualPayload.hostname }).expect(200);
     const body = response.body as PaginatedResponse<{ id: string }>;
 
     expect(body.items).toEqual(
@@ -1957,7 +1942,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('returns the manually declared asset detail', async () => {
-    const response = await request(httpServer).get(`/assets/${manualAssetId}`).expect(200);
+    const response = await api.get(`/assets/${manualAssetId}`).expect(200);
     const body = response.body as { id: string; attributes: Array<{ key: string }> };
 
     expect(body.id).toBe(manualAssetId);
@@ -1971,7 +1956,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('keeps the manual-only asset visible in data quality', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ search: manualPayload.hostname, pageSize: 100 })
       .expect(200);
@@ -1985,7 +1970,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('reports a CSV row without hostname without blocking the request', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/csv')
       .send({
         csv: 'hostname;ipAddress;comment\n;10.20.1.15;linha sem hostname',
@@ -1998,7 +1983,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('reports a CSV row without ipAddress without blocking the request', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/csv')
       .send({
         csv: `hostname;ipAddress;comment\nCSV-NO-IP-${sourceAssetId.slice(-8)};;linha sem ip`,
@@ -2011,7 +1996,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('reports a CSV row with invalid ipAddress without blocking the request', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/csv')
       .send({
         csv: `hostname;ipAddress;comment\nCSV-BAD-IP-${sourceAssetId.slice(-8)};999.1.1.1;ip inválido`,
@@ -2030,7 +2015,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `CSV-DUP-${sourceAssetId.slice(-8)};10.20.1.11;segunda linha`,
     ].join('\n');
 
-    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/csv').send({ csv }).expect(201);
     const body = response.body as CsvImportResponse;
     csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
 
@@ -2047,7 +2032,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `CSV-SRV-${sourceAssetId.slice(-8)};10.30.1.20;Windows Server;2019;Datacenter;Infraestrutura;TI;Servidor;Em uso;Servidor de aplicação principal`,
     ].join('\n');
 
-    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/csv').send({ csv }).expect(201);
     const body = response.body as CsvImportResponse;
     csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
 
@@ -2087,7 +2072,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   it('previews and partially imports four valid rows while skipping an existing hostname', async () => {
     const suffix = sourceAssetId.slice(-8);
     const duplicateHostname = `PREVIEW-EXISTING-${suffix}`;
-    const existingResponse = await request(httpServer)
+    const existingResponse = await api
       .post('/assets/import/csv')
       .send({ csv: `hostname;ipAddress;comment\n${duplicateHostname};10.40.1.10;Ativo existente` })
       .expect(201);
@@ -2105,10 +2090,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `SRV-DB-${suffix};10.40.1.15;Servidor;Linha válida`,
     ].join('\n');
 
-    const previewResponse = await request(httpServer)
-      .post('/assets/import/preview')
-      .send({ csv })
-      .expect(201);
+    const previewResponse = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = previewResponse.body as ImportPreviewResponse;
     expect(preview.summary).toEqual({ total: 5, valid: 4, duplicates: 1, invalid: 0, warnings: 0 });
     expect(preview.rows[2]).toEqual(
@@ -2116,27 +2098,44 @@ describe('Asset ingestion idempotency (e2e)', () => {
         rowNumber: 4,
         hostname: duplicateHostname,
         status: 'DUPLICATE',
-        existingAsset: expect.objectContaining({ id: existingAsset.id, hostname: duplicateHostname }),
+        existingAsset: expect.objectContaining({
+          id: existingAsset.id,
+          hostname: duplicateHostname,
+        }),
       }),
     );
     expect(preview.rows[2]?.errors).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'DUPLICATE_HOSTNAME' })]),
     );
 
-    const commitResponse = await request(httpServer)
-      .post('/assets/import/commit')
-      .send({ csv })
-      .expect(201);
+    const commitResponse = await api.post('/assets/import/commit').send({ csv }).expect(201);
     const committed = commitResponse.body as CsvImportResponse;
     csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
-    expect(committed.summary).toEqual({ total: 5, created: 4, skipped: 1, invalid: 0, failed: 0, warnings: 0 });
+    expect(committed.summary).toEqual({
+      total: 5,
+      created: 4,
+      skipped: 1,
+      invalid: 0,
+      failed: 0,
+      warnings: 0,
+    });
     expect(committed.skippedRows[0]).toEqual(
-      expect.objectContaining({ rowNumber: 4, hostname: duplicateHostname, existingAssetId: existingAsset.id }),
+      expect.objectContaining({
+        rowNumber: 4,
+        hostname: duplicateHostname,
+        existingAssetId: existingAsset.id,
+      }),
     );
-    expect(await prisma.asset.count({ where: { name: { equals: duplicateHostname, mode: 'insensitive' } } })).toBe(1);
+    expect(
+      await prisma.asset.count({
+        where: { name: { equals: duplicateHostname, mode: 'insensitive' } },
+      }),
+    ).toBe(1);
 
     for (const asset of committed.assets) {
-      await expect(prisma.networkInterface.count({ where: { assetId: asset.id } })).resolves.toBe(1);
+      await expect(prisma.networkInterface.count({ where: { assetId: asset.id } })).resolves.toBe(
+        1,
+      );
       await expect(prisma.assetEvidence.count({ where: { assetId: asset.id } })).resolves.toBe(1);
       await expect(prisma.assetEvent.count({ where: { assetId: asset.id } })).resolves.toBe(1);
       await expect(prisma.auditLog.count({ where: { assetId: asset.id } })).resolves.toBe(1);
@@ -2145,13 +2144,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('keeps a valid hostname importable when an earlier occurrence has an invalid IP', async () => {
     const hostname = `PREVIEW-INVALID-FIRST-${sourceAssetId.slice(-8)}`;
-    const csv = [
-      'hostname;ipAddress',
-      `${hostname};999.1.1.1`,
-      `${hostname};10.40.5.10`,
-    ].join('\n');
+    const csv = ['hostname;ipAddress', `${hostname};999.1.1.1`, `${hostname};10.40.5.10`].join(
+      '\n',
+    );
 
-    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = response.body as ImportPreviewResponse;
 
     expect(preview.summary).toEqual({ total: 2, valid: 1, duplicates: 0, invalid: 1, warnings: 0 });
@@ -2164,13 +2161,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('marks only the second of two valid rows with the same hostname as duplicate', async () => {
     const hostname = `PREVIEW-TWO-VALID-${sourceAssetId.slice(-8)}`;
-    const csv = [
-      'hostname;ipAddress',
-      `${hostname};10.40.5.20`,
-      `${hostname};10.40.5.21`,
-    ].join('\n');
+    const csv = ['hostname;ipAddress', `${hostname};10.40.5.20`, `${hostname};10.40.5.21`].join(
+      '\n',
+    );
 
-    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = response.body as ImportPreviewResponse;
 
     expect(preview.rows[0]).toEqual(expect.objectContaining({ rowNumber: 2, status: 'VALID' }));
@@ -2182,13 +2177,11 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('keeps the intrinsic error when a valid row is followed by an invalid row with the same hostname', async () => {
     const hostname = `PREVIEW-VALID-FIRST-${sourceAssetId.slice(-8)}`;
-    const csv = [
-      'hostname;ipAddress',
-      `${hostname};10.40.5.30`,
-      `${hostname};999.1.1.1`,
-    ].join('\n');
+    const csv = ['hostname;ipAddress', `${hostname};10.40.5.30`, `${hostname};999.1.1.1`].join(
+      '\n',
+    );
 
-    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = response.body as ImportPreviewResponse;
 
     expect(preview.rows[0]).toEqual(expect.objectContaining({ rowNumber: 2, status: 'VALID' }));
@@ -2207,7 +2200,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `${hostname};10.40.5.40`,
     ].join('\n');
 
-    const response = await request(httpServer).post('/assets/import/preview').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = response.body as ImportPreviewResponse;
 
     expect(preview.summary).toEqual({ total: 3, valid: 1, duplicates: 0, invalid: 2, warnings: 0 });
@@ -2219,7 +2212,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('continues blocking an intrinsically valid hostname that already exists in the database', async () => {
     const hostname = `PREVIEW-DB-DUPLICATE-${sourceAssetId.slice(-8)}`;
-    const existingResponse = await request(httpServer)
+    const existingResponse = await api
       .post('/assets/import/csv')
       .send({ csv: `hostname;ipAddress\n${hostname};10.40.5.50` })
       .expect(201);
@@ -2228,7 +2221,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const existingAsset = existingBody.assets[0];
     if (!existingAsset) throw new Error('Existing hostname fixture was not created.');
 
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/preview')
       .send({ csv: `hostname;ipAddress\n${hostname};10.40.5.51` })
       .expect(201);
@@ -2247,19 +2240,24 @@ describe('Asset ingestion idempotency (e2e)', () => {
 
   it('commits the valid occurrence after an invalid hostname occurrence and creates audit artifacts', async () => {
     const hostname = `COMMIT-INVALID-FIRST-${sourceAssetId.slice(-8)}`;
-    const csv = [
-      'hostname;ipAddress',
-      `${hostname};999.1.1.1`,
-      `${hostname};10.40.5.60`,
-    ].join('\n');
+    const csv = ['hostname;ipAddress', `${hostname};999.1.1.1`, `${hostname};10.40.5.60`].join(
+      '\n',
+    );
 
-    const response = await request(httpServer).post('/assets/import/commit').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/commit').send({ csv }).expect(201);
     const committed = response.body as CsvImportResponse;
     csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
     const imported = committed.assets[0];
     if (!imported) throw new Error('The valid occurrence was not imported.');
 
-    expect(committed.summary).toEqual({ total: 2, created: 1, skipped: 0, invalid: 1, failed: 0, warnings: 0 });
+    expect(committed.summary).toEqual({
+      total: 2,
+      created: 1,
+      skipped: 0,
+      invalid: 1,
+      failed: 0,
+      warnings: 0,
+    });
     expect(imported.name).toBe(hostname);
     expect(committed.createdRows).toEqual([
       expect.objectContaining({
@@ -2270,7 +2268,9 @@ describe('Asset ingestion idempotency (e2e)', () => {
       }),
     ]);
     expect(committed.invalidRows[0]).toEqual(expect.objectContaining({ rowNumber: 2, hostname }));
-    await expect(prisma.networkInterface.count({ where: { assetId: imported.id } })).resolves.toBe(1);
+    await expect(prisma.networkInterface.count({ where: { assetId: imported.id } })).resolves.toBe(
+      1,
+    );
     await expect(prisma.assetEvidence.count({ where: { assetId: imported.id } })).resolves.toBe(1);
     await expect(prisma.assetEvent.count({ where: { assetId: imported.id } })).resolves.toBe(1);
     await expect(prisma.auditLog.count({ where: { assetId: imported.id } })).resolves.toBe(1);
@@ -2279,7 +2279,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   it('imports a row with duplicate IP and identifies the related asset in the warning', async () => {
     const suffix = sourceAssetId.slice(-8);
     const existingHostname = `IP-OWNER-${suffix}`;
-    const existingResponse = await request(httpServer)
+    const existingResponse = await api
       .post('/assets/import/csv')
       .send({ csv: `hostname;ipAddress\n${existingHostname};10.40.2.20` })
       .expect(201);
@@ -2289,10 +2289,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     if (!existingAsset) throw new Error('Duplicate IP fixture asset was not created.');
     const csv = `hostname;ipAddress\nIP-REUSE-${suffix};10.40.2.20`;
 
-    const previewResponse = await request(httpServer)
-      .post('/assets/import/preview')
-      .send({ csv })
-      .expect(201);
+    const previewResponse = await api.post('/assets/import/preview').send({ csv }).expect(201);
     const preview = previewResponse.body as ImportPreviewResponse;
     expect(preview.rows[0]).toEqual(expect.objectContaining({ status: 'VALID_WITH_WARNINGS' }));
     expect(preview.rows[0]?.warnings).toEqual(
@@ -2300,15 +2297,14 @@ describe('Asset ingestion idempotency (e2e)', () => {
         expect.objectContaining({
           code: 'DUPLICATE_IP',
           message: expect.stringContaining(existingHostname),
-          relatedAssets: expect.arrayContaining([expect.objectContaining({ id: existingAsset.id })]),
+          relatedAssets: expect.arrayContaining([
+            expect.objectContaining({ id: existingAsset.id }),
+          ]),
         }),
       ]),
     );
 
-    const commitResponse = await request(httpServer)
-      .post('/assets/import/commit')
-      .send({ csv })
-      .expect(201);
+    const commitResponse = await api.post('/assets/import/commit').send({ csv }).expect(201);
     const committed = commitResponse.body as CsvImportResponse;
     csvImportAssetIds.push(...committed.assets.map((asset) => asset.id));
     expect(committed.summary).toEqual(expect.objectContaining({ created: 1, warnings: 1 }));
@@ -2324,13 +2320,12 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `PARTIAL-BAD-IP-${suffix};999.1.1.1;IP inválido`,
     ].join('\n');
 
-    const response = await request(httpServer)
-      .post('/assets/import/commit')
-      .send({ csv })
-      .expect(201);
+    const response = await api.post('/assets/import/commit').send({ csv }).expect(201);
     const body = response.body as CsvImportResponse;
     csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
-    expect(body.summary).toEqual(expect.objectContaining({ total: 3, created: 1, invalid: 2, failed: 0 }));
+    expect(body.summary).toEqual(
+      expect.objectContaining({ total: 3, created: 1, invalid: 2, failed: 0 }),
+    );
     expect(body.invalidRows.map((row) => row.rowNumber)).toEqual([3, 4]);
     expect(body.assets[0]?.name).toBe(validHostname);
   });
@@ -2338,26 +2333,19 @@ describe('Asset ingestion idempotency (e2e)', () => {
   it('revalidates rows during commit instead of trusting an earlier preview', async () => {
     const hostname = `REVALIDATE-${sourceAssetId.slice(-8)}`;
     const csv = `hostname;ipAddress\n${hostname};10.40.4.40`;
-    const previewResponse = await request(httpServer)
-      .post('/assets/import/preview')
-      .send({ csv })
-      .expect(201);
+    const previewResponse = await api.post('/assets/import/preview').send({ csv }).expect(201);
     expect((previewResponse.body as ImportPreviewResponse).rows[0]?.status).toBe('VALID');
 
-    const competingResponse = await request(httpServer)
-      .post('/assets/import/csv')
-      .send({ csv })
-      .expect(201);
+    const competingResponse = await api.post('/assets/import/csv').send({ csv }).expect(201);
     const competingBody = competingResponse.body as CsvImportResponse;
     csvImportAssetIds.push(...competingBody.assets.map((asset) => asset.id));
 
-    const commitResponse = await request(httpServer)
-      .post('/assets/import/commit')
-      .send({ csv })
-      .expect(201);
+    const commitResponse = await api.post('/assets/import/commit').send({ csv }).expect(201);
     const committed = commitResponse.body as CsvImportResponse;
     expect(committed.summary).toEqual(expect.objectContaining({ created: 0, skipped: 1 }));
-    expect(await prisma.asset.count({ where: { name: { equals: hostname, mode: 'insensitive' } } })).toBe(1);
+    expect(
+      await prisma.asset.count({ where: { name: { equals: hostname, mode: 'insensitive' } } }),
+    ).toBe(1);
   });
 
   it('imports duplicate ipAddress from CSV as a warning instead of absolute duplicate', async () => {
@@ -2367,7 +2355,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       `CSV-IP-B-${sourceAssetId.slice(-8)};10.20.1.99;Notebook;Em uso;IP reutilizado`,
     ].join('\n');
 
-    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/csv').send({ csv }).expect(201);
     const body = response.body as CsvImportResponse;
     csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
 
@@ -2387,7 +2375,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   it('imports TAB-separated pasted spreadsheet content through the compatible CSV endpoint', async () => {
     const hostname = `PASTED-${sourceAssetId.slice(-8)}`;
     const csv = `hostname\tipAddress\toperatingSystem\tcomment\n${hostname}\t10.20.2.15\tWindows 11\tCopiado do Excel`;
-    const response = await request(httpServer).post('/assets/import/csv').send({ csv }).expect(201);
+    const response = await api.post('/assets/import/csv').send({ csv }).expect(201);
     const body = response.body as CsvImportResponse;
     csvImportAssetIds.push(...body.assets.map((asset) => asset.id));
 
@@ -2404,7 +2392,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     sheet.addRow([hostname, '10.20.2.20', 'Ubuntu Server 24.04', 'Servidor', 'Planilha E2E']);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    const previewResponse = await request(httpServer)
+    const previewResponse = await api
       .post('/assets/import/preview/spreadsheet')
       .attach('file', buffer, {
         filename: 'ativos.xlsx',
@@ -2418,7 +2406,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
       }),
     );
 
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/commit/spreadsheet')
       .attach('file', buffer, {
         filename: 'ativos.xlsx',
@@ -2453,7 +2441,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     sheet.addRow([hostname, '10.20.2.21', { formula: '1+1', result: 'valor armazenado' }]);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    const response = await request(httpServer)
+    const response = await api
       .post('/assets/import/spreadsheet')
       .attach('file', buffer, {
         filename: 'ativos.xlsm',
@@ -2472,7 +2460,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     sheet.addRow([`XLSX-BAD-${sourceAssetId.slice(-8)}`, '999.1.1.1']);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
-    const invalidIpResponse = await request(httpServer)
+    const invalidIpResponse = await api
       .post('/assets/import/spreadsheet')
       .attach('file', buffer, {
         filename: 'invalid-ip.xlsx',
@@ -2482,42 +2470,45 @@ describe('Asset ingestion idempotency (e2e)', () => {
     expect((invalidIpResponse.body as CsvImportResponse).summary).toEqual(
       expect.objectContaining({ created: 0, invalid: 1 }),
     );
-    await request(httpServer)
+    await api
       .post('/assets/import/spreadsheet')
       .attach('file', Buffer.from('arquivo corrompido'), {
         filename: 'corrompido.xlsx',
         contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       })
       .expect(400);
-    await request(httpServer)
+    await api
       .post('/assets/import/spreadsheet')
-      .attach('file', buffer, { filename: 'ativos.ods', contentType: 'application/vnd.oasis.opendocument.spreadsheet' })
+      .attach('file', buffer, {
+        filename: 'ativos.ods',
+        contentType: 'application/vnd.oasis.opendocument.spreadsheet',
+      })
       .expect(400);
   });
 
   it('requires a reason for manual enrichment', async () => {
-    await request(httpServer)
+    await api
       .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
       .send({ reason: '   ', attributes: { operatingSystem: 'Windows Server' } })
       .expect(400);
   });
 
   it('rejects manual enrichment without non-empty attributes', async () => {
-    await request(httpServer)
+    await api
       .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
       .send({ reason: 'Validação E2E', attributes: { operatingSystem: '   ' } })
       .expect(400);
   });
 
   it('returns 404 when enriching an unknown asset', async () => {
-    await request(httpServer)
+    await api
       .post(`/assets/${randomUUID()}/manual-enrichment`)
       .send({ reason: 'Validação E2E', attributes: { operatingSystem: 'Windows Server' } })
       .expect(404);
   });
 
   it('fills missing attributes through manual enrichment', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
       .send({
         reason: 'Validado com o time de infraestrutura',
@@ -2559,7 +2550,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const beforeCount = await prisma.assetAttribute.count({
       where: { assetId: dataQualityAssetId, key: 'operatingSystem' },
     });
-    const response = await request(httpServer)
+    const response = await api
       .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
       .send({
         reason: 'Segunda confirmação manual',
@@ -2580,7 +2571,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
     const evidenceCount = await prisma.assetEvidence.count({
       where: { assetId: dataQualityAssetId },
     });
-    await request(httpServer)
+    await api
       .post(`/assets/${dataQualityAssetId}/manual-enrichment`)
       .send({
         reason: 'Tentativa de sobrescrita',
@@ -2598,7 +2589,7 @@ describe('Asset ingestion idempotency (e2e)', () => {
   });
 
   it('removes the filled field from data-quality missing issues', async () => {
-    const response = await request(httpServer)
+    const response = await api
       .get('/data-quality/assets')
       .query({ issue: 'MISSING_OPERATING_SYSTEM', pageSize: 100 })
       .expect(200);

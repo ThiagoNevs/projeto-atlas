@@ -7,8 +7,10 @@ infraestrutura local:
 
 ```text
 Browser
-  -> apps/web (Next.js)
-  -> apps/api (NestJS)
+  -> OIDC Authorization Code + PKCE
+  -> apps/web (Next.js; access token somente em memória)
+  -> Bearer access token
+  -> apps/api (NestJS; JWT/JWKS e default-deny)
   -> Prisma
   -> PostgreSQL
 ```
@@ -32,7 +34,24 @@ duplicá-los.
 ### Decisão administrativa
 
 Mudanças de status administrativo atualizam o ativo, geram timeline e `AuditLog` na mesma
-transação. O ator ainda é simulado porque o MVP não possui autenticação.
+transação. A autoria vem do `CurrentActor` confiável derivado de `issuer + subject`; display name e
+e-mail nunca são usados como identidade persistida.
+
+### Autenticação e ator confiável
+
+A SPA pública usa OIDC Authorization Code + PKCE com state e nonce gerenciados por
+`oidc-client-ts`. O access token não é persistido em Web Storage e não há refresh token ou silent
+renew. O Nest valida assinatura, issuer, audience, expiração, `nbf`, algoritmo allowlisted e JWKS com
+`jose`. O guard global é default-deny; somente `GET /health` usa a exceção pública explícita.
+
+O gate atual mapeia o claim configurado para a permissão única `atlas:access`. Controllers recebem
+`CurrentActor` explicitamente e services não leem request/header. IDs persistidos são hashes
+namespaced e estáveis de `{issuer, subject}`; atores humanos são convertidos para `USER` no
+`AuditLog`. Não existe tabela `User`, sessão própria do Atlas ou backfill de autores históricos.
+
+O issuer em `tests/auth/test-oidc-provider.mjs` usa `oidc-provider`, chaves e storage descartáveis e
+serve apenas aos testes locais/CI. Não é componente de produção. O Browser E2E executa o redirect e
+PKCE reais; os E2E de API usam tokens realmente assinados pelo mesmo boundary de verificação.
 
 ### Conflitos
 
@@ -57,6 +76,7 @@ sem tráfego real, e usa o mesmo núcleo de ativos, evidências, interfaces, tim
 
 ## Limites atuais
 
-Não existem autenticação, multi-tenant produtivo, conectores externos, filas, observabilidade
-estruturada, Collector real ou descoberta ativa de rede. Consulte [technical-risks.md](technical-risks.md)
-e [roadmap.md](roadmap.md).
+Ainda não existem RBAC granular, multi-tenant produtivo, conectores externos, filas, observabilidade
+estruturada, Collector real ou descoberta ativa de rede. Também permanecem fora do escopo refresh
+token, BFF, readiness, CSP geral e rate limiting. Consulte [technical-risks.md](technical-risks.md) e
+[roadmap.md](roadmap.md).

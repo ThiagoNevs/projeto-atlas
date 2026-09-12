@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 
 import { assetDetailSelect, presentAssetDetail } from '../assets/asset.presenter';
+import type { CurrentActor } from '../auth/auth.types';
 import {
   AdministrativeStatus,
   AttributeValueType,
@@ -48,7 +49,7 @@ type ExistingInterface = {
 export class IngestionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async ingestAsset(dto: IngestAssetDto) {
+  async ingestAsset(dto: IngestAssetDto, actor: CurrentActor) {
     const observedAt = new Date(dto.lastSeenAt);
     const source = dto.source.trim().toLowerCase();
     const sourceAssetId = dto.sourceAssetId.trim();
@@ -201,6 +202,7 @@ export class IngestionService {
                 source,
                 evidenceId: evidence.id,
                 message: lifecycleMessage!,
+                actorId: actor.id,
               }
             : {
                 source,
@@ -208,6 +210,7 @@ export class IngestionService {
                 confidenceScore,
                 dataQualityScore,
                 changedFields,
+                actorId: actor.id,
               },
           occurredAt: observedAt,
         },

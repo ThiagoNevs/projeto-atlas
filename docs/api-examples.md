@@ -410,6 +410,12 @@ Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `
 `type`, `administrativeStatus`, `manufacturer`, `model`, `serialNumber`, `macAddress`,
 `environment`, `criticality` e `comment`.
 
+Todos os endpoints de domínio deste documento exigem `Authorization: Bearer <access-token>` com a
+permissão coarse-grained `atlas:access`. Somente `GET /health` é público. A identidade e a autoria são
+derivadas pelo backend do token validado; campos `createdBy`, `actorId`, roles ou permissions enviados
+pelo cliente não escolhem o autor. `GET /auth/me` retorna apenas `id`, `kind`, `displayName` opcional e
+`permissions`.
+
 ### Importar XLSX ou XLSM
 
 ```powershell
@@ -740,9 +746,10 @@ O detalhe recebe foco programático em seu heading, com `tabIndex="-1"`, somente
 termina em sucesso ou erro. Frames pendentes são cancelados ao fechar, trocar de caso ou desmontar a tela;
 o foco não é movido para um painel obsoleto.
 
-A funcionalidade está desabilitada por padrão e ainda não possui autenticação ou RBAC reais. Para testar em
-desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API. O ator
-`atlas-mvp-user` é somente uma identificação provisória do MVP.
+A funcionalidade está desabilitada por padrão. Para testar em
+desenvolvimento local, configure `FINDING_REVIEW_CASES_ENABLED=true` e reinicie a API.
+Registros históricos podem continuar exibindo `atlas-mvp-user`; novas operações persistem o ID OIDC
+namespaced do `CurrentActor`. RBAC granular ainda não está implementado.
 
 A flag controla todo o fluxo implementado de Finding Review: criação, listagem, detalhe, comparação de
 contexto, transições, decisão, resolução, reabertura e respectivos replays retornam HTTP 503 quando ela
@@ -788,7 +795,7 @@ promete uma fotografia imutável entre requisições. Cursor pagination permanec
       "status": "OPEN",
       "staleness": "CURRENT",
       "version": 1,
-      "createdBy": "atlas-mvp-user",
+      "createdBy": "human:oidc:v1:<fingerprint>",
       "createdAt": "2026-07-20T00:00:00.000Z",
       "updatedAt": "2026-07-20T00:00:00.000Z",
       "assetCount": 2,
@@ -920,7 +927,7 @@ detalhes Prisma como `P2020` nunca fazem parte da resposta.
 Esse PATCH não usa `Idempotency-Key` e não deve receber retry automático. Se a conexão falhar ou
 expirar, o resultado pode ser incerto: consulte novamente o detalhe antes de oferecer outra alteração.
 Na interface, a ação “Recarregar caso” trata tanto a versão obsoleta quanto essa verificação explícita.
-O ator `atlas-mvp-user` continua provisório; autenticação, RBAC e comandos para `DISMISSED` e
+O ator é derivado do access token OIDC validado. O RBAC granular e os comandos para `DISMISSED` e
 `CANCELLED` permanecem futuros.
 
 ### Registrar a primeira decisão de identidade
@@ -954,7 +961,7 @@ Uma criação nova retorna HTTP `201`:
     "identityConclusion": "SAME_ASSET",
     "justification": "As evidências indicam que os registros representam o mesmo equipamento.",
     "caseVersion": 5,
-    "createdBy": "atlas-mvp-user",
+    "createdBy": "human:oidc:v1:<fingerprint>",
     "createdAt": "2026-08-22T12:00:00.000Z"
   },
   "idempotentReplay": false
@@ -1007,7 +1014,7 @@ mesma chave pode ser usada de forma independente em outro caso.
     "versionAfter": 6,
     "previousStatus": "IN_REVIEW",
     "status": "RESOLVED",
-    "resolvedBy": "atlas-mvp-user",
+    "resolvedBy": "human:oidc:v1:<fingerprint>",
     "resolvedAt": "2026-08-23T12:00:00.000Z"
   }
 }
@@ -1049,7 +1056,7 @@ diferente retorna `409 IDEMPOTENCY_KEY_REUSED`.
     "versionAfter": 7,
     "previousStatus": "RESOLVED",
     "status": "IN_REVIEW",
-    "reopenedBy": "atlas-mvp-user",
+    "reopenedBy": "human:oidc:v1:<fingerprint>",
     "reopenedAt": "2026-08-24T12:00:00.000Z"
   }
 }
@@ -1085,7 +1092,7 @@ Uma criação nova retorna HTTP 201 e uma representação resumida do caso:
   "staleness": "CURRENT",
   "version": 1,
   "affectedAssets": [],
-  "createdBy": "atlas-mvp-user",
+  "createdBy": "human:oidc:v1:<fingerprint>",
   "idempotentReplay": false
 }
 ```
@@ -1102,7 +1109,7 @@ valor não é. Headers duplicados são rejeitados com HTTP 400 depois que o tran
 valores em uma única string separada por vírgula.
 
 O fingerprint é o SHA-256 hexadecimal da serialização canônica de uma estrutura que contém a operação
-`CREATE_FINDING_REVIEW_CASE`, o ator provisório `atlas-mvp-user` e o valor exato da chave. Um vetor
+`CREATE_FINDING_REVIEW_CASE`, o ID estável do `CurrentActor` e o valor exato da chave. Um vetor
 sintético ASCII fixo protege a compatibilidade dessa fórmula sem publicar dados reais.
 
 O replay é procurado pelo fingerprint antes de o servidor recalcular o finding. Portanto, uma

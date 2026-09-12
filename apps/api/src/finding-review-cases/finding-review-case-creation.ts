@@ -6,7 +6,6 @@ import type {
   ConflictObservation,
 } from '../conflict-analysis/types/conflict-analysis';
 
-export const FINDING_REVIEW_ACTOR_ID = 'atlas-mvp-user';
 export const FINDING_REVIEW_CREATE_OPERATION = 'CREATE_FINDING_REVIEW_CASE';
 export const FINDING_REVIEW_CASE_CREATED_EVENT = 'CASE_CREATED';
 export const FINDING_REVIEW_SNAPSHOT_VERSION = 1;
@@ -76,11 +75,11 @@ export function normalizeIdempotencyKey(value: unknown): string {
   return value;
 }
 
-export function creationRequestFingerprint(idempotencyKey: string): string {
+export function creationRequestFingerprint(actorId: string, idempotencyKey: string): string {
   return sha256(
     canonicalSerialize({
       operation: FINDING_REVIEW_CREATE_OPERATION,
-      actorId: FINDING_REVIEW_ACTOR_ID,
+      actorId,
       idempotencyKey,
     }),
   );

@@ -23,6 +23,7 @@ export default {
         },
         module: {
           type: 'commonjs',
+          ignoreDynamic: true,
         },
       },
     ],

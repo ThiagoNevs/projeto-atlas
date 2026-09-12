@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { CurrentActor as Actor } from '../auth/current-actor.decorator';
+import type { CurrentActor } from '../auth/auth.types';
 
 import { ConflictsService } from './conflicts.service';
 import { QueryConflictsDto } from './dto/query-conflicts.dto';
@@ -22,7 +24,8 @@ export class ConflictsController {
   updateStatus(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() payload: UpdateConflictStatusDto,
+    @Actor() actor: CurrentActor,
   ) {
-    return this.conflictsService.updateStatus(id, payload);
+    return this.conflictsService.updateStatus(id, payload, actor);
   }
 }

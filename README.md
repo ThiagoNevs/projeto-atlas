@@ -88,7 +88,7 @@ atlas/
 - Node.js 22.13 ou superior.
 - Corepack habilitado.
 - Docker Desktop com engine em execução.
-- Portas locais 3000, 3001 e 5432 disponíveis.
+- Portas locais 3000, 3001, 3199 e 5432 disponíveis.
 
 ## Como rodar localmente
 
@@ -105,11 +105,26 @@ Em outro computador, ajuste apenas o caminho usado no `Set-Location`. O frontend
 `NEXT_PUBLIC_API_URL` para localizar a API. Variáveis `NEXT_PUBLIC_*` são públicas e nunca devem
 conter segredos.
 
+O baseline agora exige autenticação OIDC Authorization Code + PKCE. Para desenvolvimento local
+isolado, o repositório oferece um issuer descartável e exclusivamente test-only:
+
+```powershell
+corepack pnpm dev:oidc:test
+```
+
+Inicie-o antes da API e do frontend quando usar os valores dos arquivos `.env.example`. Em qualquer
+ambiente compartilhado ou produtivo, substitua-o por um issuer OIDC administrado. O Atlas não possui
+tabela `User`, formulário de senha ou client secret no browser. A API protege todos os endpoints por
+padrão e mantém apenas `GET /health` público; `GET /auth/me` retorna a projeção segura do ator validado.
+O access token fica somente em memória e desaparece em reload/logout; apenas state, nonce e PKCE
+transitórios do redirect podem usar o namespace `atlas:oidc:transaction:` no `sessionStorage`.
+
 A funcionalidade experimental de casos de revisão permanece desabilitada por padrão. Para validá-la
 apenas em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. A
 flag controla o fluxo implementado de Finding Review: criação, listagem, detalhe, transições,
-decisão, resolução, reabertura e respectivos replays. O fluxo ainda usa o ator provisório `atlas-mvp-user` e não
-representa autenticação, autorização ou RBAC reais. Com a flag desabilitada ou inválida, todos esses
+decisão, resolução, reabertura e respectivos replays. A autoria de novas operações vem do
+`CurrentActor` derivado exclusivamente do access token validado; registros históricos com
+`atlas-mvp-user` não são reescritos. Com a flag desabilitada ou inválida, todos esses
 endpoints retornam HTTP 503, inclusive em tentativas de replay. A `Idempotency-Key` é case-sensitive,
 aceita somente caracteres ASCII seguros e nunca é persistida em formato bruto. O nome HTTP do header
 não diferencia maiúsculas de minúsculas, mas o valor diferencia; headers duplicados são rejeitados.
@@ -133,9 +148,10 @@ Como a versão é um PostgreSQL `INT4` e a transição sempre incrementa o valor
 sem escrita e sem exposição de erro Prisma.
 A primeira decisão de identidade, a resolução lógica para `RESOLVED` e a reabertura lógica para
 `IN_REVIEW` estão implementadas e preservam o histórico sem alterar inventário ou `Conflict`.
-Correção ou superseding de decisões, comandos para `DISMISSED`/`CANCELLED`, comentários, atribuição,
-refresh e revalidação continuam fora do escopo. O ator `atlas-mvp-user` permanece provisório, sem
-autenticação ou RBAC.
+Comandos para `DISMISSED`/`CANCELLED`, comentários, atribuição, refresh e adoção persistente de novo
+contexto continuam fora do escopo. A autorização do PR #40 é deliberadamente coarse-grained:
+qualquer ator com `atlas:access` possui o mesmo acesso funcional; Viewer/Analyst/Admin ficam para o
+PR #41.
 
 Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
 navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e trata como incerto um
@@ -199,7 +215,13 @@ Também é possível iniciar separadamente:
 ```powershell
 corepack pnpm dev:api
 corepack pnpm dev:web
+corepack pnpm dev:oidc:test
 ```
+
+Frontend e backend autenticados devem ser publicados atomicamente. Rollback também deve restaurar os
+dois juntos; não existe fallback anônimo nem `AUTH_ENABLED=false`. Em implantação separada, só é
+seguro publicar primeiro um frontend já compatível com Bearer e imediatamente depois ativar o backend
+default-deny, dentro da mesma janela controlada.
 
 ## URLs principais
 

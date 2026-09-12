@@ -12,6 +12,7 @@
     "dev": "corepack pnpm --parallel --filter @atlas/shared --filter @atlas/web --filter @atlas/api dev",
     "dev:web": "corepack pnpm --filter @atlas/web dev",
     "dev:api": "corepack pnpm --filter @atlas/api dev",
+    "dev:oidc:test": "node tests/auth/test-oidc-provider.mjs",
     "build": "corepack pnpm --recursive --if-present build",
     "lint": "corepack pnpm --recursive --if-present lint",
     "test": "corepack pnpm --recursive --if-present test",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "oidc-provider": "9.12.0",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3"
   }

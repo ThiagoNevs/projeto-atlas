@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Server } from 'node:http';
 import { resolve } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
@@ -11,6 +10,7 @@ import { config as loadEnv } from 'dotenv';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { startTestAuthHarness, type TestAuthHarness } from './auth-test-harness';
 import { UpdateFindingReviewCaseStatusDto } from '../src/finding-review-cases/dto/update-finding-review-case-status.dto';
 import {
   ACTIVE_FINDING_REVIEW_CASE_STATUSES,
@@ -68,11 +68,8 @@ class StatusFaultInjectingPrismaService extends PrismaService {
     return new Proxy(client, {
       get: (target, property) => {
         const delegate = (target as unknown as Record<PropertyKey, unknown>)[property];
-        const step = property === 'findingReviewEvent'
-          ? 'event'
-          : property === 'auditLog'
-            ? 'audit'
-            : null;
+        const step =
+          property === 'findingReviewEvent' ? 'event' : property === 'auditLog' ? 'audit' : null;
         if (!step || typeof delegate !== 'object' || delegate === null) return delegate;
         return new Proxy(delegate, {
           get: (delegateTarget, method) => {
@@ -178,7 +175,8 @@ describe('Finding review case status transition contract', () => {
 
 describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
   let app: INestApplication;
-  let server: Server;
+  let auth: TestAuthHarness;
+  let api: ReturnType<typeof request.agent>;
   let prisma: StatusFaultInjectingPrismaService;
   let cases: FindingReviewCasesService;
   const testRunId = randomUUID();
@@ -187,6 +185,8 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
 
   beforeAll(async () => {
     loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
+
+    auth = await startTestAuthHarness();
     process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = 'true';
     const module = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(PrismaService)
@@ -198,7 +198,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
       new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
     );
     await app.init();
-    server = app.getHttpServer() as Server;
+    api = await auth.createAuthenticatedAgent(app);
     prisma = app.get<StatusFaultInjectingPrismaService>(PrismaService);
     cases = app.get(FindingReviewCasesService);
   });
@@ -215,6 +215,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     if (previousFlag === undefined) delete process.env[FINDING_REVIEW_CASES_FEATURE_FLAG];
     else process.env[FINDING_REVIEW_CASES_FEATURE_FLAG] = previousFlag;
     if (app) await app.close();
+    if (auth) await auth.close();
   });
 
   async function createCase(
@@ -233,14 +234,16 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
         reviewSubjectKey: sha256(`subject:${testRunId}:${token}`),
         activeReviewSubjectKey: ACTIVE_FINDING_REVIEW_CASE_STATUSES.includes(
           status as ActiveFindingReviewCaseStatus,
-        ) ? sha256(`active:${testRunId}:${token}`) : null,
+        )
+          ? sha256(`active:${testRunId}:${token}`)
+          : null,
         creationRequestFingerprint: sha256(`request:${testRunId}:${token}`),
         status,
         staleness: FindingReviewStaleness.CURRENT,
         originalSnapshot: { testRunId, token },
         originalSnapshotHash: sha256(`snapshot:${testRunId}:${token}`),
         version,
-        createdBy: 'atlas-mvp-user',
+        createdBy: auth.actor.id,
         findingGeneratedAt: createdAt,
         createdAt,
         updatedAt: createdAt,
@@ -252,7 +255,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
         eventType: 'CASE_CREATED',
         versionBefore: null,
         versionAfter: version,
-        actorId: 'atlas-mvp-user',
+        actorId: auth.actor.id,
         nextStatus: status,
         after: { status, version },
         occurredAt: createdAt,
@@ -269,7 +272,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     expectedVersion: unknown,
     extra: Record<string, unknown> = {},
   ) {
-    return request(server)
+    return api
       .patch(`/conflict-review-cases/${id}/status`)
       .send({ status, expectedVersion, ...extra });
   }
@@ -284,25 +287,43 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
   }
 
   async function inventoryCounts() {
-    const [assets, attributes, interfaces, evidence, conflicts, values, events] = await Promise.all([
-      prisma.asset.count(),
-      prisma.assetAttribute.count(),
-      prisma.networkInterface.count(),
-      prisma.assetEvidence.count(),
-      prisma.conflict.count(),
-      prisma.conflictValue.count(),
-      prisma.assetEvent.count(),
-    ]);
+    const [assets, attributes, interfaces, evidence, conflicts, values, events] = await Promise.all(
+      [
+        prisma.asset.count(),
+        prisma.assetAttribute.count(),
+        prisma.networkInterface.count(),
+        prisma.assetEvidence.count(),
+        prisma.conflict.count(),
+        prisma.conflictValue.count(),
+        prisma.assetEvent.count(),
+      ],
+    );
     return { assets, attributes, interfaces, evidence, conflicts, values, events };
   }
 
   it.each([
     [FindingReviewCaseStatus.OPEN, FindingReviewCaseStatus.IN_REVIEW, undefined],
-    [FindingReviewCaseStatus.OPEN, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 'Aguardando validação da origem.'],
+    [
+      FindingReviewCaseStatus.OPEN,
+      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      'Aguardando validação da origem.',
+    ],
     [FindingReviewCaseStatus.IN_REVIEW, FindingReviewCaseStatus.OPEN, undefined],
-    [FindingReviewCaseStatus.IN_REVIEW, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 'Falta a confirmação técnica.'],
-    [FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, FindingReviewCaseStatus.OPEN, 'Triagem retomada com novo contexto.'],
-    [FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, FindingReviewCaseStatus.IN_REVIEW, 'A evidência solicitada foi recebida.'],
+    [
+      FindingReviewCaseStatus.IN_REVIEW,
+      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      'Falta a confirmação técnica.',
+    ],
+    [
+      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      FindingReviewCaseStatus.OPEN,
+      'Triagem retomada com novo contexto.',
+    ],
+    [
+      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      FindingReviewCaseStatus.IN_REVIEW,
+      'A evidência solicitada foi recebida.',
+    ],
   ])('persists %s -> %s with event and AuditLog', async (current, next, justification) => {
     const id = await createCase(current);
     const before = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
@@ -337,7 +358,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
       versionAfter: 2,
       previousStatus: current,
       nextStatus: next,
-      actorId: 'atlas-mvp-user',
+      actorId: auth.actor.id,
       requestId: null,
       metadata: {
         statusBefore: current,
@@ -351,7 +372,7 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     });
     expect(audit).toMatchObject({
       actorType: 'USER',
-      actorId: 'atlas-mvp-user',
+      actorId: auth.actor.id,
       action: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
       before: { status: current, version: 1 },
       after: { status: next, version: 2 },
@@ -408,12 +429,13 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     expect((audit.metadata as { justification: string }).justification).toBe('a'.repeat(500));
 
     const rejectedId = await createCase();
-    expect((await patchStatus(
-      rejectedId,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-      1,
-      { justification: 'a'.repeat(501) },
-    )).status).toBe(400);
+    expect(
+      (
+        await patchStatus(rejectedId, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 1, {
+          justification: 'a'.repeat(501),
+        })
+      ).status,
+    ).toBe(400);
     expect(await persistenceCounts(rejectedId)).toEqual({ events: 1, audits: 0 });
   });
 
@@ -444,12 +466,13 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     const id = await createCase();
     const stale = await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, 2);
     expect(stale.status).toBe(409);
-    expect(responseBody<{ code: string }>(stale).code).toBe(
-      'FINDING_REVIEW_CASE_VERSION_CONFLICT',
+    expect(responseBody<{ code: string }>(stale).code).toBe('FINDING_REVIEW_CASE_VERSION_CONFLICT');
+    expect((await patchStatus(randomUUID(), FindingReviewCaseStatus.IN_REVIEW, 1)).status).toBe(
+      404,
     );
-    expect((await patchStatus(randomUUID(), FindingReviewCaseStatus.IN_REVIEW, 1)).status).toBe(404);
-    expect((await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, 1, { comment: 'x' })).status)
-      .toBe(400);
+    expect(
+      (await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, 1, { comment: 'x' })).status,
+    ).toBe(400);
     expect(await persistenceCounts(id)).toEqual({ events: 1, audits: 0 });
   });
 
@@ -483,12 +506,9 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     const caseBefore = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
     const persistenceBefore = await persistenceCounts(id);
 
-    const response = await patchStatus(
-      id,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-      2,
-      { justification: 'a'.repeat(MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH + 1) },
-    );
+    const response = await patchStatus(id, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 2, {
+      justification: 'a'.repeat(MAX_FINDING_REVIEW_CASE_JUSTIFICATION_LENGTH + 1),
+    });
 
     expect(response.status).toBe(409);
     expect(responseBody<{ code: string }>(response).code).toBe(
@@ -506,12 +526,13 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
   it('does not alter inventory tables during a justified transition', async () => {
     const id = await createCase();
     const before = await inventoryCounts();
-    expect((await patchStatus(
-      id,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-      1,
-      { justification: 'Aguardando confirmação sem alterar o inventário.' },
-    )).status).toBe(200);
+    expect(
+      (
+        await patchStatus(id, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 1, {
+          justification: 'Aguardando confirmação sem alterar o inventário.',
+        })
+      ).status,
+    ).toBe(200);
     expect(await inventoryCounts()).toEqual(before);
   });
 
@@ -519,8 +540,9 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     'rejects invalid expectedVersion %p through HTTP',
     async (expectedVersion) => {
       const id = await createCase();
-      expect((await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, expectedVersion)).status)
-        .toBe(400);
+      expect(
+        (await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, expectedVersion)).status,
+      ).toBe(400);
       expect(await persistenceCounts(id)).toEqual({ events: 1, audits: 0 });
     },
   );
@@ -533,16 +555,14 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
       const persistenceBefore = await persistenceCounts(id);
       const transactionCallsBefore = prisma.getTransactionCalls();
 
-      const response = await patchStatus(
-        id,
-        FindingReviewCaseStatus.IN_REVIEW,
-        expectedVersion,
-      );
+      const response = await patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, expectedVersion);
 
       expect(response.status).toBe(400);
       expect(JSON.stringify(response.body)).not.toMatch(/P2020|Prisma|out of range/i);
       expect(prisma.getTransactionCalls()).toBe(transactionCallsBefore);
-      expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } })).toEqual(caseBefore);
+      expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } })).toEqual(
+        caseBefore,
+      );
       expect(await persistenceCounts(id)).toEqual(persistenceBefore);
     },
   );
@@ -572,10 +592,16 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
     const persistenceBefore = await persistenceCounts(id);
     const transactionCallsBefore = prisma.getTransactionCalls();
 
-    await expect(cases.updateStatus(id, {
-      status: FindingReviewCaseStatus.IN_REVIEW,
-      expectedVersion: 2_147_483_647,
-    })).rejects.toMatchObject({ status: 400 });
+    await expect(
+      cases.updateStatus(
+        id,
+        {
+          status: FindingReviewCaseStatus.IN_REVIEW,
+          expectedVersion: 2_147_483_647,
+        },
+        auth.actor,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
 
     expect(prisma.getTransactionCalls()).toBe(transactionCallsBefore);
     expect(await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } })).toEqual(caseBefore);
@@ -597,18 +623,21 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
 
   it('exposes the updated status, version and safe event through reads', async () => {
     const id = await createCase();
-    expect((await patchStatus(
-      id,
-      FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
-      1,
-      { justification: '  Aguardando\nconfirmação técnica.  ' },
-    )).status).toBe(200);
+    expect(
+      (
+        await patchStatus(id, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 1, {
+          justification: '  Aguardando\nconfirmação técnica.  ',
+        })
+      ).status,
+    ).toBe(200);
 
-    const detail = await request(server).get(`/conflict-review-cases/${id}`);
+    const detail = await api.get(`/conflict-review-cases/${id}`);
     expect(detail.status).toBe(200);
-    expect(responseBody<{ status: string; version: number; events: Array<Record<string, unknown>> }>(
-      detail,
-    )).toMatchObject({
+    expect(
+      responseBody<{ status: string; version: number; events: Array<Record<string, unknown>> }>(
+        detail,
+      ),
+    ).toMatchObject({
       status: 'WAITING_FOR_EVIDENCE',
       version: 2,
       events: expect.arrayContaining([
@@ -625,28 +654,33 @@ describe('PATCH /conflict-review-cases/:id/status (PostgreSQL e2e)', () => {
       ]),
     });
 
-    const list = await request(server).get(`/conflict-review-cases?findingId=${
-      responseBody<{ findingId: string }>(detail).findingId
-    }`);
+    const list = await api.get(
+      `/conflict-review-cases?findingId=${responseBody<{ findingId: string }>(detail).findingId}`,
+    );
     const item = responseBody<{ items: Array<Record<string, unknown>> }>(list).items[0];
     expect(item).toMatchObject({ id, status: 'WAITING_FOR_EVIDENCE', version: 2, eventCount: 2 });
   });
 
-  it.each([1, 2])('allows only one real concurrent update with the same version (run %s)', async () => {
-    const id = await createCase();
-    const [first, second] = await Promise.all([
-      patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, 1),
-      patchStatus(id, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 1, {
-        justification: 'Aguardando evidência concorrente.',
-      }),
-    ]);
-    expect([first.status, second.status].sort()).toEqual([200, 409]);
-    const persisted = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
-    expect(persisted.version).toBe(2);
-    expect([FindingReviewCaseStatus.IN_REVIEW, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE])
-      .toContain(persisted.status);
-    expect(await persistenceCounts(id)).toEqual({ events: 2, audits: 1 });
-  });
+  it.each([1, 2])(
+    'allows only one real concurrent update with the same version (run %s)',
+    async () => {
+      const id = await createCase();
+      const [first, second] = await Promise.all([
+        patchStatus(id, FindingReviewCaseStatus.IN_REVIEW, 1),
+        patchStatus(id, FindingReviewCaseStatus.WAITING_FOR_EVIDENCE, 1, {
+          justification: 'Aguardando evidência concorrente.',
+        }),
+      ]);
+      expect([first.status, second.status].sort()).toEqual([200, 409]);
+      const persisted = await prisma.findingReviewCase.findUniqueOrThrow({ where: { id } });
+      expect(persisted.version).toBe(2);
+      expect([
+        FindingReviewCaseStatus.IN_REVIEW,
+        FindingReviewCaseStatus.WAITING_FOR_EVIDENCE,
+      ]).toContain(persisted.status);
+      expect(await persistenceCounts(id)).toEqual({ events: 2, audits: 1 });
+    },
+  );
 
   async function expectRollback(step: FailureStep) {
     const id = await createCase();

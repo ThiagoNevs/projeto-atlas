@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { CurrentActor as Actor } from '../auth/current-actor.decorator';
+import type { CurrentActor } from '../auth/auth.types';
 
 import { CreateNetworkDiscoveryProfileDto } from './dto/create-network-discovery-profile.dto';
 import { UpdateNetworkDiscoveryProfileDto } from './dto/update-network-discovery-profile.dto';
@@ -32,8 +34,11 @@ export class NetworkDiscoveryController {
   }
 
   @Post('profiles/:id/run')
-  runProfile(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
-    return this.networkDiscoveryService.runProfile(id);
+  runProfile(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Actor() actor: CurrentActor,
+  ) {
+    return this.networkDiscoveryService.runProfile(id, actor);
   }
 
   @Get('runs')

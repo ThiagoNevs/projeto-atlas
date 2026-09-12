@@ -28,6 +28,7 @@ import {
   getFindingReviewCaseStatusLabel,
   isFindingReviewCaseId,
 } from '../../lib/finding-review-cases';
+import { useAuth } from '../auth-provider';
 import {
   MAX_FINDING_REVIEW_REOPEN_JUSTIFICATION_LENGTH,
   MAX_FINDING_REVIEW_RESOLUTION_JUSTIFICATION_LENGTH,
@@ -222,6 +223,8 @@ export function useReviewCaseCommands({
   retryDetail,
   retryList,
 }: UseReviewCaseCommandsOptions) {
+  const { actor } = useAuth();
+  const actorId = actor?.id ?? '';
   const mounted = useRef(false);
 
   const [statusLoading, setStatusLoading] = useState(false);
@@ -359,7 +362,7 @@ export function useReviewCaseCommands({
       setDecisionUncertain(false);
       return;
     }
-    const stored = readPendingFindingReviewDecisionAttempt(value.id);
+    const stored = readPendingFindingReviewDecisionAttempt(value.id, actorId);
     if (stored.status === 'valid') {
       assignDecisionAttempt(stored.attempt);
       setDecisionUncertain(true);
@@ -390,7 +393,7 @@ export function useReviewCaseCommands({
   }
 
   function restorePendingSupersessionForDetail(value: FindingReviewCaseDetail): void {
-    const stored = readPendingFindingReviewDecisionSupersessionAttempt(value.id);
+    const stored = readPendingFindingReviewDecisionSupersessionAttempt(value.id, actorId);
     if (stored.status === 'valid') {
       assignSupersessionAttempt(stored.attempt);
       setSupersessionUncertain(true);
@@ -428,7 +431,7 @@ export function useReviewCaseCommands({
       setResolutionUncertain(false);
       return;
     }
-    const stored = readPendingFindingReviewResolutionAttempt(value.id);
+    const stored = readPendingFindingReviewResolutionAttempt(value.id, actorId);
     if (stored.status === 'valid') {
       assignResolutionAttempt(stored.attempt);
       setResolutionUncertain(true);
@@ -465,7 +468,7 @@ export function useReviewCaseCommands({
       setReopenUncertain(false);
       return;
     }
-    const stored = readPendingFindingReviewReopenAttempt(value.id);
+    const stored = readPendingFindingReviewReopenAttempt(value.id, actorId);
     if (stored.status === 'valid') {
       assignReopenAttempt(stored.attempt);
       setReopenUncertain(true);
@@ -683,6 +686,7 @@ export function useReviewCaseCommands({
       const inspected = inspectPendingFindingReviewDecisionAttempt(
         JSON.stringify(attempt),
         current.id,
+        actorId,
       );
       if (inspected.status !== 'valid') {
         clearPendingFindingReviewDecisionAttempt(current.id, attempt);
@@ -699,6 +703,7 @@ export function useReviewCaseCommands({
       if (!identityConclusion || normalizedJustification.length < 1) return;
       attempt = createPendingFindingReviewDecisionAttempt(
         current.id,
+        actorId,
         identityConclusion,
         normalizedJustification,
         current.version,
@@ -870,6 +875,7 @@ export function useReviewCaseCommands({
       const inspected = inspectPendingFindingReviewDecisionSupersessionAttempt(
         JSON.stringify(attempt),
         current.id,
+        actorId,
       );
       if (inspected.status !== 'valid') {
         clearPendingFindingReviewDecisionSupersessionAttempt(current.id, attempt);
@@ -895,6 +901,7 @@ export function useReviewCaseCommands({
       ) return;
       attempt = createPendingFindingReviewDecisionSupersessionAttempt(
         current.id,
+        actorId,
         currentDecision.id,
         identityConclusion,
         normalizedJustification,
@@ -1094,6 +1101,7 @@ export function useReviewCaseCommands({
       const inspected = inspectPendingFindingReviewResolutionAttempt(
         JSON.stringify(attempt),
         current.id,
+        actorId,
       );
       if (inspected.status !== 'valid') {
         clearPendingFindingReviewResolutionAttempt(current.id, attempt);
@@ -1115,6 +1123,7 @@ export function useReviewCaseCommands({
       ) return;
       attempt = createPendingFindingReviewResolutionAttempt(
         current.id,
+        actorId,
         normalizedJustification,
         current.version,
         createFindingReviewIdempotencyKey(() => crypto.randomUUID()),
@@ -1295,6 +1304,7 @@ export function useReviewCaseCommands({
       const inspected = inspectPendingFindingReviewReopenAttempt(
         JSON.stringify(attempt),
         current.id,
+        actorId,
       );
       if (inspected.status !== 'valid') {
         clearPendingFindingReviewReopenAttempt(current.id, attempt);
@@ -1316,6 +1326,7 @@ export function useReviewCaseCommands({
       ) return;
       attempt = createPendingFindingReviewReopenAttempt(
         current.id,
+        actorId,
         normalizedJustification,
         current.version,
         createFindingReviewIdempotencyKey(() => crypto.randomUUID()),

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 
 import { ConflictFindingsService } from '../conflict-analysis/conflict-findings.service';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import {
   FindingReviewCaseStatus,
   FindingReviewStaleness,
@@ -22,7 +23,6 @@ import {
 import {
   buildFindingReviewSnapshot,
   creationRequestFingerprint,
-  FINDING_REVIEW_ACTOR_ID,
   FINDING_REVIEW_CASE_CREATED_EVENT,
   normalizeIdempotencyKey,
   reviewSubjectKey,
@@ -192,10 +192,10 @@ export class FindingReviewCasesService {
     return this.presentDetail(record);
   }
 
-  async create(payload: CreateFindingReviewCaseDto, rawIdempotencyKey: unknown) {
+  async create(payload: CreateFindingReviewCaseDto, rawIdempotencyKey: unknown, actor: CurrentActor) {
     this.feature.assertEnabled();
     const idempotencyKey = this.validateIdempotencyKey(rawIdempotencyKey);
-    const fingerprint = creationRequestFingerprint(idempotencyKey);
+    const fingerprint = creationRequestFingerprint(actor.id, idempotencyKey);
 
     const existingRequest = await this.findByFingerprint(fingerprint);
     if (existingRequest) return this.replayOrReject(existingRequest, payload.findingId);
@@ -262,7 +262,7 @@ export class FindingReviewCasesService {
             originalSnapshot: snapshot as unknown as Prisma.InputJsonValue,
             originalSnapshotHash: hash,
             version: 1,
-            createdBy: FINDING_REVIEW_ACTOR_ID,
+            createdBy: actor.id,
             findingGeneratedAt: new Date(current.generatedAt),
           },
           select: { id: true },
@@ -284,7 +284,7 @@ export class FindingReviewCasesService {
             eventType: FINDING_REVIEW_CASE_CREATED_EVENT,
             versionBefore: null,
             versionAfter: 1,
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorId: actor.id,
             requestId: fingerprint,
             previousStatus: null,
             nextStatus: FindingReviewCaseStatus.OPEN,
@@ -302,8 +302,8 @@ export class FindingReviewCasesService {
 
         await transaction.auditLog.create({
           data: {
-            actorType: 'USER',
-            actorId: FINDING_REVIEW_ACTOR_ID,
+            actorType: auditActorType(actor),
+            actorId: actor.id,
             action: FINDING_REVIEW_CASE_CREATED_EVENT,
             entityType: 'FindingReviewCase',
             entityId: reviewCase.id,
@@ -351,7 +351,7 @@ export class FindingReviewCasesService {
     }
   }
 
-  async updateStatus(id: string, payload: UpdateFindingReviewCaseStatusDto) {
+  async updateStatus(id: string, payload: UpdateFindingReviewCaseStatusDto, actor: CurrentActor) {
     this.feature.assertEnabled();
     if (!isUpdatableFindingReviewCaseVersion(payload.expectedVersion)) {
       throw new BadRequestException({
@@ -416,7 +416,7 @@ export class FindingReviewCasesService {
           eventType: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
           versionBefore: payload.expectedVersion,
           versionAfter,
-          actorId: FINDING_REVIEW_ACTOR_ID,
+          actorId: actor.id,
           previousStatus: current.status,
           nextStatus: payload.status,
           before: { status: current.status, version: payload.expectedVersion },
@@ -433,8 +433,8 @@ export class FindingReviewCasesService {
 
       await transaction.auditLog.create({
         data: {
-          actorType: 'USER',
-          actorId: FINDING_REVIEW_ACTOR_ID,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
           action: FINDING_REVIEW_CASE_STATUS_CHANGED_EVENT,
           entityType: 'FindingReviewCase',
           entityId: id,
