@@ -5,6 +5,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
+import type { AuthenticatedRequest, CurrentActor } from '../src/auth/auth.types';
 import { DataQualityController } from '../src/data-quality/data-quality.controller';
 import { DataQualityService } from '../src/data-quality/data-quality.service';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -14,6 +15,11 @@ describe('Data quality with an empty database (e2e)', () => {
   let httpServer: Server;
 
   beforeAll(async () => {
+    const actor: CurrentActor = {
+      id: 'human:test:data-quality-empty',
+      kind: 'HUMAN',
+      permissions: new Set(),
+    };
     const prismaMock = {
       asset: {
         count: jest.fn<() => Promise<number>>().mockResolvedValue(0),
@@ -28,6 +34,9 @@ describe('Data quality with an empty database (e2e)', () => {
             _avg: { dataQualityScore: null, confidenceScore: null },
           }),
       },
+      auditLog: {
+        create: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id: 'audit-empty' }),
+      },
       $transaction: jest
         .fn<(operations: Promise<unknown>[]) => Promise<unknown[]>>()
         .mockImplementation((operations) => Promise.all(operations)),
@@ -38,6 +47,10 @@ describe('Data quality with an empty database (e2e)', () => {
     }).compile();
 
     app = testingModule.createNestApplication();
+    app.use((incoming: AuthenticatedRequest, _response: unknown, next: () => void) => {
+      incoming.currentActor = actor;
+      next();
+    });
     await app.init();
     httpServer = app.getHttpServer() as Server;
   });

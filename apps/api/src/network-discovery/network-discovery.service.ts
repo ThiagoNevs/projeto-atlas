@@ -44,18 +44,33 @@ export class NetworkDiscoveryService {
     });
   }
 
-  async createProfile(dto: CreateNetworkDiscoveryProfileDto) {
+  async createProfile(dto: CreateNetworkDiscoveryProfileDto, actor: CurrentActor) {
     this.validateScope(dto.allowedCidrs);
 
-    return this.prisma.networkDiscoveryProfile.create({
-      data: {
-        ...dto,
-        description: dto.description || null,
-        deniedCidrs: dto.deniedCidrs ?? [],
-        scheduleEnabled: dto.scheduleEnabled ?? false,
-        scheduleExpression: dto.scheduleExpression || null,
-      },
-      include: { _count: { select: { runs: true } } },
+    return this.prisma.$transaction(async (transaction) => {
+      const profile = await transaction.networkDiscoveryProfile.create({
+        data: {
+          ...dto,
+          description: dto.description || null,
+          deniedCidrs: dto.deniedCidrs ?? [],
+          scheduleEnabled: dto.scheduleEnabled ?? false,
+          scheduleExpression: dto.scheduleExpression || null,
+        },
+        include: { _count: { select: { runs: true } } },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          actorType: auditActorType(actor),
+          actorId: actor.id,
+          action: 'NETWORK_DISCOVERY_PROFILE_CREATED',
+          entityType: 'NetworkDiscoveryProfile',
+          entityId: profile.id,
+          after: this.profileAuditSnapshot(profile),
+        },
+      });
+
+      return profile;
     });
   }
 
@@ -72,22 +87,78 @@ export class NetworkDiscoveryService {
     return profile;
   }
 
-  async updateProfile(id: string, dto: UpdateNetworkDiscoveryProfileDto) {
-    const current = await this.prisma.networkDiscoveryProfile.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException(`Network discovery profile ${id} was not found.`);
+  async updateProfile(id: string, dto: UpdateNetworkDiscoveryProfileDto, actor: CurrentActor) {
+    if (dto.allowedCidrs !== undefined) this.validateScope(dto.allowedCidrs);
 
-    this.validateScope(dto.allowedCidrs ?? current.allowedCidrs);
+    return this.prisma.$transaction(async (transaction) => {
+      const lockedRows = await transaction.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`
+          SELECT "id"
+          FROM "network_discovery_profiles"
+          WHERE "id" = CAST(${id} AS uuid)
+          FOR UPDATE
+        `,
+      );
+      if (lockedRows.length === 0) {
+        throw new NotFoundException(`Network discovery profile ${id} was not found.`);
+      }
 
-    return this.prisma.networkDiscoveryProfile.update({
-      where: { id },
-      data: {
-        ...dto,
-        description: dto.description === undefined ? undefined : dto.description || null,
-        scheduleExpression:
-          dto.scheduleExpression === undefined ? undefined : dto.scheduleExpression || null,
-      },
-      include: { _count: { select: { runs: true } } },
+      const current = await transaction.networkDiscoveryProfile.findUnique({ where: { id } });
+      if (!current) throw new NotFoundException(`Network discovery profile ${id} was not found.`);
+
+      if (dto.allowedCidrs === undefined) this.validateScope(current.allowedCidrs);
+
+      const updated = await transaction.networkDiscoveryProfile.update({
+        where: { id },
+        data: {
+          ...dto,
+          description: dto.description === undefined ? undefined : dto.description || null,
+          scheduleExpression:
+            dto.scheduleExpression === undefined ? undefined : dto.scheduleExpression || null,
+        },
+        include: { _count: { select: { runs: true } } },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          actorType: auditActorType(actor),
+          actorId: actor.id,
+          action: 'NETWORK_DISCOVERY_PROFILE_UPDATED',
+          entityType: 'NetworkDiscoveryProfile',
+          entityId: updated.id,
+          before: this.profileAuditSnapshot(current),
+          after: this.profileAuditSnapshot(updated),
+        },
+      });
+
+      return updated;
     });
+  }
+
+  private profileAuditSnapshot(profile: {
+    name: string;
+    description: string | null;
+    enabled: boolean;
+    mode: string;
+    allowedCidrs: string[];
+    deniedCidrs: string[];
+    rateLimitPerMinute: number;
+    scheduleEnabled: boolean;
+    scheduleExpression: string | null;
+    methods: string[];
+  }): Prisma.InputJsonObject {
+    return {
+      name: profile.name,
+      description: profile.description,
+      enabled: profile.enabled,
+      mode: profile.mode,
+      allowedCidrs: profile.allowedCidrs,
+      deniedCidrs: profile.deniedCidrs,
+      rateLimitPerMinute: profile.rateLimitPerMinute,
+      scheduleEnabled: profile.scheduleEnabled,
+      scheduleExpression: profile.scheduleExpression,
+      methods: profile.methods,
+    };
   }
 
   findRuns() {

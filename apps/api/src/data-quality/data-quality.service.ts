@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { BadRequestException, Injectable } from '@nestjs/common';
 
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -249,7 +252,7 @@ export class DataQualityService {
     };
   }
 
-  async exportAssets(query: QueryDataQualityAssetsDto): Promise<string> {
+  async exportAssets(query: QueryDataQualityAssetsDto, actor: CurrentActor): Promise<string> {
     this.validateScoreRanges(query);
     const recentCutoff = this.recentCutoff();
     const assets = await this.prisma.asset.findMany({
@@ -259,7 +262,40 @@ export class DataQualityService {
       take: DATA_QUALITY_CSV_EXPORT_LIMIT,
     });
 
-    return this.buildCsv(assets.map((asset) => this.presentAsset(asset, recentCutoff)));
+    const csv = this.buildCsv(assets.map((asset) => this.presentAsset(asset, recentCutoff)));
+    const exportId = randomUUID();
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorType: auditActorType(actor),
+        actorId: actor.id,
+        action: 'DATA_QUALITY_EXPORT_PREPARED',
+        entityType: 'DataQualityExport',
+        entityId: exportId,
+        after: { rowCount: assets.length },
+        metadata: {
+          filters: {
+            search: query.search?.trim() ?? null,
+            issue: query.issue ?? null,
+            type: query.type ?? null,
+            administrativeStatus: query.administrativeStatus ?? null,
+            operationalStatus: query.operationalStatus ?? null,
+            minDataQualityScore: query.minDataQualityScore ?? null,
+            maxDataQualityScore: query.maxDataQualityScore ?? null,
+            minConfidenceScore: query.minConfidenceScore ?? null,
+            maxConfidenceScore: query.maxConfidenceScore ?? null,
+          },
+          ordering: [
+            { field: query.sortBy, direction: query.sortDirection },
+            { field: 'id', direction: 'asc' },
+          ],
+          rowCount: assets.length,
+          limit: DATA_QUALITY_CSV_EXPORT_LIMIT,
+        },
+      },
+    });
+
+    return csv;
   }
 
   private buildWhere(query: QueryDataQualityAssetsDto, recentCutoff: Date): Prisma.AssetWhereInput {

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 
 import { assetDetailSelect, presentAssetDetail } from '../assets/asset.presenter';
-import type { CurrentActor } from '../auth/auth.types';
+import { auditActorType, type CurrentActor } from '../auth/auth.types';
 import {
   AdministrativeStatus,
   AttributeValueType,
@@ -213,6 +213,31 @@ export class IngestionService {
                 actorId: actor.id,
               },
           occurredAt: observedAt,
+        },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          assetId: asset.id,
+          actorType: auditActorType(actor),
+          actorId: actor.id,
+          action: 'ASSET_INGESTION_COMPLETED',
+          entityType: 'Asset',
+          entityId: asset.id,
+          after: {
+            result: action,
+            eventType,
+          },
+          metadata: {
+            assetId: asset.id,
+            evidenceId: evidence.id,
+            eventId: event.id,
+            source,
+            sourceRecordId: sourceAssetId,
+            result: action,
+            eventType,
+            changedFields,
+          },
         },
       });
 
