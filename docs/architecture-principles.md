@@ -158,6 +158,17 @@ Cada registro de auditoria deve conter, sempre que aplicável:
 
 No MVP, o ator pode ser simulado. Em produção, deve ser vinculado a um usuário autenticado.
 
+### Eventos de domínio, auditoria e logs de segurança
+
+Esses três mecanismos têm responsabilidades distintas. `AssetEvent` registra o histórico do ativo e
+`FindingReviewEvent` preserva o histórico append-only da investigação. `AuditLog` registra a trilha de
+responsabilidade — quem fez o quê, sobre qual entidade e com qual contexto seguro. Logs de segurança
+são telemetria operacional para autenticação, autorização, policies ausentes e comportamento
+suspeito; eles não substituem o histórico de domínio nem o `AuditLog`.
+
+Leituras comuns não geram auditoria. Exportações e acessos em massa sensíveis são a exceção aprovada:
+o acesso só é liberado depois que o respectivo `AuditLog` foi persistido.
+
 ---
 
 ## 8. Idempotência

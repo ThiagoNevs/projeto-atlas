@@ -34,6 +34,10 @@ const actions = [
   'NETWORK_DISCOVERY_RUN_EXECUTED',
   'NETWORK_DISCOVERY_RUN_REJECTED',
   'NETWORK_DISCOVERY_RUN_FAILED',
+  'NETWORK_DISCOVERY_PROFILE_CREATED',
+  'NETWORK_DISCOVERY_PROFILE_UPDATED',
+  'ASSET_INGESTION_COMPLETED',
+  'DATA_QUALITY_EXPORT_PREPARED',
 ];
 const entityTypes = [
   'FindingReviewCase',
@@ -41,6 +45,7 @@ const entityTypes = [
   'Conflict',
   'NetworkDiscoveryRun',
   'NetworkDiscoveryProfile',
+  'DataQualityExport',
 ];
 const actorTypes = ['USER', 'SYSTEM', 'SERVICE'];
 

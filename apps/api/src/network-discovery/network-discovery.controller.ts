@@ -20,8 +20,8 @@ export class NetworkDiscoveryController {
 
   @Post('profiles')
   @RequirePermissions(ATLAS_PERMISSIONS.discoveryConfigure)
-  createProfile(@Body() payload: CreateNetworkDiscoveryProfileDto) {
-    return this.networkDiscoveryService.createProfile(payload);
+  createProfile(@Body() payload: CreateNetworkDiscoveryProfileDto, @Actor() actor: CurrentActor) {
+    return this.networkDiscoveryService.createProfile(payload, actor);
   }
 
   @Get('profiles/:id')
@@ -35,8 +35,9 @@ export class NetworkDiscoveryController {
   updateProfile(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() payload: UpdateNetworkDiscoveryProfileDto,
+    @Actor() actor: CurrentActor,
   ) {
-    return this.networkDiscoveryService.updateProfile(id, payload);
+    return this.networkDiscoveryService.updateProfile(id, payload, actor);
   }
 
   @Post('profiles/:id/run')

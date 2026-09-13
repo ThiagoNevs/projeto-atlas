@@ -31,9 +31,15 @@ conectores e descoberta real permanecem fora do estado atual.
 - Massa demo com 15 ativos e cenários variados.
 - Network Discovery Lite seguro e integralmente simulado.
 - Persistência e auditoria de execuções concluídas, rejeitadas e com falha.
+- Criação e atualização de perfis de Network Discovery com `CurrentActor`, configuração anterior/nova
+  e `AuditLog` na mesma transação.
+- Ingestão manual/simulada com `AssetEvent` de domínio preservado e um `AuditLog` transacional por
+  requisição concluída.
 - Consulta visual dos registros de auditoria com filtros, resumo e detalhe.
 - Visão operacional de qualidade, confiança, campos ausentes, rede e recência das evidências.
 - Exportação CSV da tela de Qualidade dos Dados com filtros aplicados, labels em português e proteção contra fórmulas em planilhas.
+- Registro fail-closed de cada exportação de Qualidade dos Dados preparada, com ator, filtros,
+  ordenação e quantidade de linhas, sem armazenar o CSV.
 - Importação de ativos por CSV, XLSX, XLSM ou conteúdo colado, com pré-validação por linha, importação parcial controlada e identificação detalhada de duplicidades, inválidos e avisos; macros e fórmulas nunca são executadas.
 - Download dos relatórios CSV da análise e do resultado final da importação, gerados em memória e protegidos contra CSV Injection.
 - Declaração manual auditável de ativos ainda sem confirmação por fonte técnica.
@@ -58,12 +64,18 @@ aprovação, atribuição de responsável, SLA, comentários encadeados ou resol
 
 ### Auditoria
 
-Eventos críticos geram `AuditLog` e podem ser consultados na tela dedicada. Exportação e
-política de retenção ainda não fazem parte do MVP. O ator continua simulado porque não há
-autenticação. A tela reconhece criação, transições operacionais, decisão de identidade, resolução e
+Eventos críticos geram `AuditLog` e podem ser consultados na tela dedicada. A exportação de
+Qualidade dos Dados registra acesso auditável antes de liberar o CSV; exportação da própria trilha e
+política de retenção ainda não fazem parte do MVP. O ator é derivado da identidade OIDC validada. A
+tela reconhece criação, transições operacionais, decisão de identidade, resolução e
 reabertura dos casos de revisão,
 apresenta seus estados em português e oferece acesso ao caso relacionado quando o identificador
-persistido é válido.
+persistido é válido. Também reconhece criação/atualização de perfis de descoberta, ingestão de ativo
+e preparação da exportação de qualidade.
+
+`AssetEvent` permanece o histórico do ativo e `FindingReviewEvent`, o histórico append-only da
+investigação. `AuditLog` é a trilha de responsabilidade sobre ações concluídas. Logs de segurança são
+telemetria operacional de autenticação e autorização e não substituem nenhum desses registros.
 
 ### Qualidade e confiança
 
@@ -286,8 +298,8 @@ frontend.
 - Sem tabela de usuários local, refresh token, silent renew ou sessão persistente do Atlas.
 - RBAC é configurado por mapping OIDC e não possui gestão persistida de usuários, roles ou permissions.
 - Service principals e autenticação machine-to-machine permanecem fora do escopo.
-- Configuração de profiles de Network Discovery ainda não registra `CurrentActor`/`AuditLog`; ingestão
-  registra ator no `AssetEvent`, mas não em `AuditLog`; exportação de qualidade não cria `AuditLog`.
+- Correlation ID para encadear request, execução e auditoria permanece uma melhoria útil antes dos
+  conectores.
 - Listagens de Network Discovery sem paginação.
 - Sem observabilidade estruturada, métricas ou tracing distribuído.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.

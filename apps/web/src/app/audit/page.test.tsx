@@ -101,6 +101,20 @@ test('traduz ações, entidade e todos os estados dos casos de revisão', () => 
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'SAME_ASSET'), 'Mesmo ativo');
   assert.equal(getAuditPresentedValueLabel('FindingReviewCase', 'DIFFERENT_ASSETS'), 'Ativos diferentes');
   assert.equal(getAuditEntityTypeLabel('FindingReviewCase'), 'Caso de revisão');
+  assert.equal(
+    getAuditActionLabel('NETWORK_DISCOVERY_PROFILE_CREATED'),
+    'Perfil de descoberta criado',
+  );
+  assert.equal(
+    getAuditActionLabel('NETWORK_DISCOVERY_PROFILE_UPDATED'),
+    'Perfil de descoberta atualizado',
+  );
+  assert.equal(getAuditActionLabel('ASSET_INGESTION_COMPLETED'), 'Ingestão de ativo concluída');
+  assert.equal(
+    getAuditActionLabel('DATA_QUALITY_EXPORT_PREPARED'),
+    'Exportação de qualidade preparada',
+  );
+  assert.equal(getAuditEntityTypeLabel('DataQualityExport'), 'Exportação de qualidade');
   assert.deepEqual(
     ['OPEN', 'IN_REVIEW', 'WAITING_FOR_EVIDENCE', 'RESOLVED', 'DISMISSED', 'CANCELLED']
       .map((status) => getAuditPresentedValueLabel('FindingReviewCase', status)),
@@ -337,7 +351,12 @@ test('filtros apresentam labels e enviam valores técnicos inalterados', async (
     assert.match(action.textContent ?? '', /Decisão de identidade registrada/);
     assert.match(action.textContent ?? '', /Decisão de identidade corrigida/);
     assert.match(action.textContent ?? '', /Investigação reaberta/);
+    assert.match(action.textContent ?? '', /Perfil de descoberta criado/);
+    assert.match(action.textContent ?? '', /Perfil de descoberta atualizado/);
+    assert.match(action.textContent ?? '', /Ingestão de ativo concluída/);
+    assert.match(action.textContent ?? '', /Exportação de qualidade preparada/);
     assert.match(entityType.textContent ?? '', /Caso de revisão/);
+    assert.match(entityType.textContent ?? '', /Exportação de qualidade/);
 
     await act(async () => {
       setControlValue(action, 'CASE_CREATED');
@@ -349,7 +368,17 @@ test('filtros apresentam labels e enviam valores técnicos inalterados', async (
     assert.equal(queries.at(-1)?.entityType, 'FindingReviewCase');
 
     await act(async () => {
+      setControlValue(action, 'DATA_QUALITY_EXPORT_PREPARED');
+      setControlValue(entityType, 'DataQualityExport');
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+    });
+    assert.equal(queries.at(-1)?.action, 'DATA_QUALITY_EXPORT_PREPARED');
+    assert.equal(queries.at(-1)?.entityType, 'DataQualityExport');
+
+    await act(async () => {
       setControlValue(action, 'CASE_STATUS_CHANGED');
+      setControlValue(entityType, 'FindingReviewCase');
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       await flush();
     });

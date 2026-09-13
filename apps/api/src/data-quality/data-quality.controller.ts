@@ -1,4 +1,6 @@
 import { Controller, Get, Header, Query } from '@nestjs/common';
+import { CurrentActor as Actor } from '../auth/current-actor.decorator';
+import type { CurrentActor } from '../auth/auth.types';
 import { ATLAS_PERMISSIONS } from '../auth/permissions';
 import { RequirePermissions } from '../auth/require-permissions.decorator';
 
@@ -25,7 +27,7 @@ export class DataQualityController {
   @RequirePermissions(ATLAS_PERMISSIONS.inventoryExport)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="atlas-qualidade-dos-dados.csv"')
-  exportAssets(@Query() query: QueryDataQualityAssetsDto) {
-    return this.dataQualityService.exportAssets(query);
+  exportAssets(@Query() query: QueryDataQualityAssetsDto, @Actor() actor: CurrentActor) {
+    return this.dataQualityService.exportAssets(query, actor);
   }
 }
