@@ -119,6 +119,35 @@ padrão e mantém apenas `GET /health` público; `GET /auth/me` retorna a proje�
 O access token fica somente em memória e desaparece em reload/logout; apenas state, nonce e PKCE
 transitórios do redirect podem usar o namespace `atlas:oidc:transaction:` no `sessionStorage`.
 
+A autorização granular é derivada de roles externas do token OIDC e aplicada pela API com política
+explícita em cada handler. O gate `atlas:access` permanece independente: possuir uma role granular não
+concede acesso ao Atlas. Configure valores externos exatos e case-sensitive em
+`AUTH_VIEWER_ROLE_VALUES`, `AUTH_ANALYST_ROLE_VALUES` e `AUTH_ADMIN_ROLE_VALUES`; um mesmo valor em
+mais de uma lista impede a inicialização. Para Microsoft Entra ID, prefira App Roles emitidas na claim
+`roles` e configure `AUTH_ROLE_CLAIM=roles`; a implementação permanece genérica e não consulta o
+Microsoft Graph.
+
+Os controllers dependem somente das 16 permissions tipadas, nunca de nomes de roles. Viewer possui
+leituras de inventário, análises, conflitos, casos e discovery. Analyst acrescenta manutenção manual,
+exportação, tratamento de conflitos e casos, execução de discovery e auditoria. Admin acrescenta
+alteração administrativa, importação, configuração de discovery e ingestão. Admin não possui bypass.
+Handlers autenticados sem `@RequirePermissions(...)` falham fechados com HTTP 403, e um teste de
+completude protege os 44 handlers autenticados atuais. O frontend consome apenas as permissions de
+`/auth/me`, oculta navegação e comandos não autorizados e apresenta “Acesso negado” em deep links; a
+API continua sendo a autoridade. HTTP 403 não encerra a sessão, enquanto HTTP 401 preserva o fluxo de
+reautenticação existente.
+
+```text
+atlas:access
+inventory:read | inventory:maintain | inventory:status:update | inventory:import | inventory:export
+analysis:read
+conflict:read | conflict:manage
+review-case:read | review-case:manage
+discovery:read | discovery:configure | discovery:execute
+ingestion:execute
+audit:read
+```
+
 A funcionalidade experimental de casos de revisão permanece desabilitada por padrão. Para validá-la
 apenas em desenvolvimento local, defina `FINDING_REVIEW_CASES_ENABLED=true` antes de iniciar a API. A
 flag controla o fluxo implementado de Finding Review: criação, listagem, detalhe, transições,
@@ -149,9 +178,7 @@ sem escrita e sem exposição de erro Prisma.
 A primeira decisão de identidade, a resolução lógica para `RESOLVED` e a reabertura lógica para
 `IN_REVIEW` estão implementadas e preservam o histórico sem alterar inventário ou `Conflict`.
 Comandos para `DISMISSED`/`CANCELLED`, comentários, atribuição, refresh e adoção persistente de novo
-contexto continuam fora do escopo. A autorização do PR #40 é deliberadamente coarse-grained:
-qualquer ator com `atlas:access` possui o mesmo acesso funcional; Viewer/Analyst/Admin ficam para o
-PR #41.
+contexto continuam fora do escopo.
 
 Filtros, paginação, ordenação e o detalhe compartilhável por `caseId` acompanham a URL e o histórico do
 navegador. O frontend cancela leituras obsoletas, valida respostas em runtime e trata como incerto um

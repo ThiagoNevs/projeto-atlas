@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
+import { createExternalRoleMapping, type AtlasRole } from './role-mapping';
+
 const SAFE_ALGORITHMS = new Set(['RS256', 'PS256', 'ES256', 'EdDSA']);
 
 function required(name: string): string {
@@ -21,17 +23,33 @@ function validUrl(name: string, value: string): string {
   return value;
 }
 
+function configuredValues(name: string): readonly string[] {
+  const raw = required(name);
+  const entries = raw.split(',');
+  if (entries.some((entry) => !entry.trim())) {
+    throw new Error(`${name} contém um valor vazio.`);
+  }
+  const values = entries.map((entry) => entry.trim());
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${name} contém um valor duplicado.`);
+  }
+  return Object.freeze(values);
+}
+
 @Injectable()
 export class AuthConfig {
   readonly issuer = validUrl('AUTH_ISSUER', required('AUTH_ISSUER'));
   readonly audience = required('AUTH_AUDIENCE');
   readonly humanClientId = required('AUTH_HUMAN_CLIENT_ID');
   readonly roleClaim = required('AUTH_ROLE_CLAIM');
-  readonly accessValues = new Set(
-    required('AUTH_ATLAS_ACCESS_VALUES')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean),
+  readonly accessValues = new Set(configuredValues('AUTH_ATLAS_ACCESS_VALUES'));
+  readonly externalRoleMapping = createExternalRoleMapping(
+    {
+      VIEWER: configuredValues('AUTH_VIEWER_ROLE_VALUES'),
+      ANALYST: configuredValues('AUTH_ANALYST_ROLE_VALUES'),
+      ADMIN: configuredValues('AUTH_ADMIN_ROLE_VALUES'),
+    } satisfies Record<AtlasRole, readonly string[]>,
+    [...this.accessValues],
   );
   readonly algorithms = required('AUTH_ALLOWED_ALGORITHMS')
     .split(',')
@@ -43,8 +61,6 @@ export class AuthConfig {
     : undefined;
 
   constructor() {
-    if (this.accessValues.size === 0)
-      throw new Error('AUTH_ATLAS_ACCESS_VALUES não pode ser vazio.');
     if (
       this.algorithms.length === 0 ||
       this.algorithms.some((item) => !SAFE_ALGORITHMS.has(item))

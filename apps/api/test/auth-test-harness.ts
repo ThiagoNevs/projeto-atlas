@@ -2,15 +2,20 @@ import type { KeyObject, webcrypto } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 
 import type { INestApplication } from '@nestjs/common';
+import { ATLAS_PERMISSIONS, type AtlasPermission } from '@atlas/shared';
 import request from 'supertest';
 
 import { oidcActorId } from '../src/auth/actor-id';
 import type { CurrentActor } from '../src/auth/auth.types';
+import { ROLE_PERMISSIONS } from '../src/auth/role-mapping';
 
 export const TEST_AUTH_AUDIENCE = 'atlas-api';
 export const TEST_AUTH_CLIENT_ID = 'atlas-web';
 export const TEST_AUTH_SUBJECT = 'atlas-test-user';
 export const TEST_AUTH_ACCESS_VALUE = 'atlas-user';
+export const TEST_AUTH_VIEWER_ROLE = 'atlas-viewer';
+export const TEST_AUTH_ANALYST_ROLE = 'atlas-analyst';
+export const TEST_AUTH_ADMIN_ROLE = 'atlas-admin';
 
 interface TestTokenOptions {
   subject?: string;
@@ -80,6 +85,9 @@ export async function startTestAuthHarness(): Promise<TestAuthHarness> {
   process.env.AUTH_HUMAN_CLIENT_ID = TEST_AUTH_CLIENT_ID;
   process.env.AUTH_ROLE_CLAIM = 'groups';
   process.env.AUTH_ATLAS_ACCESS_VALUES = TEST_AUTH_ACCESS_VALUE;
+  process.env.AUTH_VIEWER_ROLE_VALUES = TEST_AUTH_VIEWER_ROLE;
+  process.env.AUTH_ANALYST_ROLE_VALUES = TEST_AUTH_ANALYST_ROLE;
+  process.env.AUTH_ADMIN_ROLE_VALUES = TEST_AUTH_ADMIN_ROLE;
   process.env.AUTH_ALLOWED_ALGORITHMS = 'RS256';
   process.env.AUTH_CLOCK_TOLERANCE_SECONDS = '0';
   process.env.AUTH_JWKS_URI = `${issuer}/jwks`;
@@ -88,7 +96,7 @@ export async function startTestAuthHarness(): Promise<TestAuthHarness> {
     id: oidcActorId('HUMAN', issuer, TEST_AUTH_SUBJECT),
     kind: 'HUMAN',
     displayName: 'Atlas Test User',
-    permissions: new Set(['atlas:access']),
+    permissions: new Set<AtlasPermission>([ATLAS_PERMISSIONS.access, ...ROLE_PERMISSIONS.ADMIN]),
   };
 
   async function issueToken(options: TestTokenOptions = {}): Promise<string> {
@@ -100,7 +108,7 @@ export async function startTestAuthHarness(): Promise<TestAuthHarness> {
         ? new TextEncoder().encode('test-only-invalid-algorithm-secret')
         : privateKey);
     return new jose.SignJWT({
-      groups: options.roles ?? [TEST_AUTH_ACCESS_VALUE],
+      groups: options.roles ?? [TEST_AUTH_ACCESS_VALUE, TEST_AUTH_ADMIN_ROLE],
       name: options.name ?? 'Atlas Test User',
       azp: options.clientId ?? TEST_AUTH_CLIENT_ID,
     })

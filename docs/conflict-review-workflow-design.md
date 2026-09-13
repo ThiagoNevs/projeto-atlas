@@ -124,8 +124,9 @@ relacionado ao caso.
 
 O baseline atual usa OIDC Authorization Code + PKCE no browser, valida access tokens JWT/JWKS no Nest
 e protege os endpoints de domínio por default-deny. A autoria vem do `CurrentActor` derivado do token;
-registros históricos com `atlas-mvp-user` permanecem inalterados. O gate atual é somente
-`atlas:access`; RBAC granular continua reservado para uma etapa posterior.
+registros históricos com `atlas-mvp-user` permanecem inalterados. O gate `atlas:access` controla a
+admissão geral e permanece independente do mapping de roles externas para Viewer, Analyst e Admin.
+Essas roles derivam permissions tipadas que cada handler exige explicitamente; a API é a autoridade.
 
 Antes da implementação persistida do Finding Review, as mudanças administrativas já existentes usavam
 transação, mas não `version`, ETag, `If-Match` ou update condicional. Esse contexto histórico permitia
@@ -580,22 +581,21 @@ outro caso ativo. Assunto diferente poderá originar novo caso; nenhuma relaçã
 reabertura é preferível quando a política aprovada considerar continuidade da mesma investigação;
 novo caso histórico exigirá razão formal e auditável.
 
-## 13. Autorização proposta
+## 13. Autorização atual
 
-O mecanismo ainda não existe. Antes de comandos de escrita, recomenda-se RBAC mínimo:
+O RBAC atual é derivado de valores externos exatos e case-sensitive da claim OIDC configurada. O gate
+`atlas:access` é obrigatório e independente; depois dele, Viewer, Analyst e Admin concedem permissions
+cumulativas sem bypass administrativo:
 
-| Permissão | Viewer | Reviewer | Review Lead | Inventory Operator |
-| --- | ---: | ---: | ---: | ---: |
-| visualizar findings/casos | sim | sim | sim | sim |
-| criar caso | não | sim | sim | sim |
-| assumir caso/comentar | não | sim | sim | sim |
-| atribuir a terceiros | não | não | sim | não |
-| registrar decisão | não | sim | sim | não |
-| dispensar/reabrir/cancelar | não | não | sim | não |
-| executar ação futura no inventário | não | não | aprovar | executar com aprovação |
+| Capacidade de Finding Review                                     |                   Viewer |                    Analyst | Admin |
+| ---------------------------------------------------------------- | -----------------------: | -------------------------: | ----: |
+| visualizar findings                                              |    sim (`analysis:read`) |                        sim |   sim |
+| visualizar casos                                                 | sim (`review-case:read`) |                        sim |   sim |
+| criar, transicionar, decidir, corrigir, resolver e reabrir casos |                      não | sim (`review-case:manage`) |   sim |
 
-Separação de funções é recomendada para ações futuras sobre inventário. O ator simulado não deverá
-ser aceito como identidade produtiva.
+Roles externas não são expostas por `/auth/me`; o frontend consome somente permissions e a API continua
+sendo a autoridade. Atribuição, comentários, ações sobre inventário e service principals permanecem
+fora do escopo e exigirão políticas próprias. O ator simulado não é aceito como identidade produtiva.
 
 ## 14. Contratos de API
 
@@ -607,7 +607,8 @@ Comentários, atribuição e adoção persistente de contexto por refresh perman
 
 - **Objetivo:** criar caso explicitamente a partir de finding recalculado.
 - **Request:** somente `findingId`.
-- **Headers:** `Idempotency-Key` obrigatória; autenticação ainda não existe.
+- **Headers:** `Idempotency-Key` obrigatória; autenticação OIDC, `atlas:access` e
+  `review-case:manage` também são obrigatórios.
 - **Response:** `201` com resumo do caso; `200` em replay idempotente.
 - **Validações:** finding existe, paridade material e cálculo servidor da
   `reviewSubjectKey` e ausência de caso ativo duplicado.
@@ -650,9 +651,9 @@ Comentários, atribuição e adoção persistente de contexto por refresh perman
 - **Concorrência:** update condicional por ID, versão e estado atual; versão divergente retorna `409`.
 - **Efeitos:** incrementa a versão e atualiza o estado e `updatedAt`, cria `CASE_STATUS_CHANGED` e
   `AuditLog` na mesma transação PostgreSQL. Não altera inventário.
-- **Limitações:** o ator vem do `CurrentActor` autenticado, mas o gate ainda é somente
-  `atlas:access`, sem RBAC granular. `RESOLVED` possui comando de domínio próprio; `DISMISSED` e
-  `CANCELLED` continuam futuros.
+- **Autorização:** o ator vem do `CurrentActor` autenticado; `atlas:access` controla a admissão e
+  `review-case:manage` protege a transição. `RESOLVED` possui comando de domínio próprio;
+  `DISMISSED` e `CANCELLED` continuam futuros.
 
 ### 14.6 `PATCH /conflict-review-cases/:id/assignment` — proposto
 
@@ -740,8 +741,9 @@ Comentários, atribuição e adoção persistente de contexto por refresh perman
 
 #### Contrato implementado atualmente
 
-O MVP autentica por OIDC, aplica default-deny e exige `atlas:access`. Os comandos usam o ID estável do
-`CurrentActor`; ainda não existe diferenciação funcional por papéis Viewer/Analyst/Admin.
+O MVP autentica por OIDC, aplica default-deny e exige `atlas:access`. Roles externas são mapeadas para
+Viewer, Analyst e Admin e derivam permissions tipadas. Leituras de casos exigem `review-case:read`; os
+comandos exigem `review-case:manage` e usam o ID estável do `CurrentActor`.
 
 | Endpoint | Idempotência | Concorrência | Auditoria |
 | --- | --- | --- | --- |
@@ -758,9 +760,10 @@ mudança técnica do ativo.
 
 #### Propostas históricas e extensões futuras
 
-Permissões como `case:create` e `case:read`, respostas `401`/`403` por autenticação ou RBAC e o uso de
-ETag/`If-Match` fizeram parte do desenho original, mas não integram o contrato atual. Atribuição,
-comentários e refresh persistente continuam planejados e exigirão contratos próprios antes da implementação.
+Nomes como `case:create` e `case:read` e o uso de ETag/`If-Match` fizeram parte do desenho original, mas
+não integram o contrato atual. O contrato implementado usa `review-case:read`, `review-case:manage` e
+respostas `401`/`403`. Atribuição, comentários e refresh persistente continuam planejados e exigirão
+contratos próprios antes da implementação.
 
 ## 15. Comparação entre snapshots
 
@@ -1156,9 +1159,9 @@ implementados continuam explicitamente futuros.
 
 ## 25. Critérios históricos da fundação inicial
 
-A maior parte dos critérios técnicos abaixo foi atendida pelas entregas incrementais. Autenticação e
-autorização reais continuam pendentes, e referências a lista/detalhe somente leitura descrevem o
-escopo da fundação inicial, não o fluxo atual completo.
+A maior parte dos critérios técnicos abaixo foi atendida pelas entregas incrementais. Autenticação OIDC
+e autorização granular por permissions já foram implementadas; referências a lista/detalhe somente
+leitura descrevem o escopo da fundação inicial, não o fluxo atual completo.
 
 - caso criado somente por ação explícita;
 - finding recalculado e validado na criação;
@@ -1196,14 +1199,14 @@ escopo da fundação inicial, não o fluxo atual completo.
 
 ### 26.2 Decisões que ainda exigem aprovação humana
 
-A tabela preserva perguntas do planejamento original. Nomes da fundação, feature flag, idempotência e
-escopo inicial e autenticação OIDC já foram definidos pelas implementações; RBAC granular, retenção,
+A tabela preserva perguntas do planejamento original. Nomes da fundação, feature flag, idempotência,
+escopo inicial, autenticação OIDC e RBAC granular já foram definidos pelas implementações; retenção,
 comentários, integração com `Conflict` e ações no inventário continuam dependentes de decisão futura.
 
 | Pergunta | Recomendação | Impacto da aprovação |
 | --- | --- | --- |
 | Nomes definitivos das tabelas e enums? | validar os nomes conceituais antes do Prisma | contratos e migration |
-| RBAC granular? | definir a matriz Viewer/Analyst/Admin após o gate `atlas:access` | autorização por operação e UX |
+| RBAC granular? | implementado com Viewer/Analyst/Admin após o gate independente `atlas:access` | permissions por operação e UX; gestão persistida permanece futura |
 | Retenção de snapshots? | política configurável, sem prazo silencioso | volume, privacidade e compliance |
 | Tamanho máximo de comentário? | definir por produto/segurança antes da fase 3 | validação e UX |
 | Política de ocultação? | somente papel autorizado, motivo e auditoria | governança e privacidade |
@@ -1242,7 +1245,7 @@ não otimizações opcionais.
 - persistência automática de findings;
 - criação automática de casos ou conflitos;
 - alteração do Resolution Center;
-- autenticação/RBAC funcional;
+- autenticação/RBAC funcional (posteriormente entregues, fora apenas do desenho original);
 - anexos;
 - SLA e notificações;
 - merge, exclusão ou correção automática de ativos;

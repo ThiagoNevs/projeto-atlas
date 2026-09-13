@@ -1,3 +1,5 @@
+import { ATLAS_PERMISSIONS, isAtlasPermission, type AtlasPermission } from '@atlas/shared';
+
 export type AuthStatus = 'unknown' | 'authenticated' | 'unauthenticated' | 'error';
 export type ActorKind = 'HUMAN' | 'SERVICE' | 'SYSTEM';
 
@@ -5,7 +7,7 @@ export interface AuthenticatedActor {
   id: string;
   kind: ActorKind;
   displayName?: string;
-  permissions: string[];
+  permissions: AtlasPermission[];
 }
 
 export function parseAuthenticatedActor(value: unknown): AuthenticatedActor | null {
@@ -19,12 +21,29 @@ export function parseAuthenticatedActor(value: unknown): AuthenticatedActor | nu
     candidate.id.length > 100 ||
     !['HUMAN', 'SERVICE', 'SYSTEM'].includes(String(candidate.kind)) ||
     !Array.isArray(candidate.permissions) ||
-    !candidate.permissions.every((item) => typeof item === 'string') ||
-    !candidate.permissions.includes('atlas:access') ||
+    !candidate.permissions.every((permission) => typeof permission === 'string') ||
     (candidate.displayName !== undefined && typeof candidate.displayName !== 'string')
   )
     return null;
-  return candidate as unknown as AuthenticatedActor;
+  const permissions = candidate.permissions.filter(isAtlasPermission);
+  if (
+    new Set(permissions).size !== permissions.length ||
+    !permissions.includes(ATLAS_PERMISSIONS.access)
+  )
+    return null;
+  return {
+    id: candidate.id,
+    kind: candidate.kind as ActorKind,
+    ...(candidate.displayName !== undefined ? { displayName: candidate.displayName } : {}),
+    permissions,
+  };
+}
+
+export function hasPermission(
+  actor: AuthenticatedActor | null,
+  permission: AtlasPermission,
+): boolean {
+  return actor?.permissions.includes(permission) ?? false;
 }
 
 export function safeReturnTo(value: unknown, fallback = '/'): string {

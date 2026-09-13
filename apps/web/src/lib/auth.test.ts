@@ -6,7 +6,8 @@ import {
   clearAuthenticatedTransport,
   configureAuthenticatedTransport,
 } from './auth-transport.ts';
-import { parseAuthenticatedActor, safeReturnTo } from './auth.ts';
+import { hasPermission, parseAuthenticatedActor, safeReturnTo } from './auth.ts';
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 
 afterEach(() => clearAuthenticatedTransport());
 
@@ -42,6 +43,93 @@ test('parses only the safe /auth/me projection with atlas access', () => {
     }),
     null,
   );
+  assert.deepEqual(
+    parseAuthenticatedActor({
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'invented:permission'],
+    }),
+    {
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access'],
+    },
+  );
+  assert.equal(
+    parseAuthenticatedActor({
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'atlas:access'],
+    }),
+    null,
+  );
+});
+
+test('ignores unknown permissions while preserving known permissions', () => {
+  assert.deepEqual(
+    parseAuthenticatedActor({
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'inventory:read', 'future:new-permission'],
+    }),
+    {
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'inventory:read'],
+    },
+  );
+  assert.deepEqual(
+    parseAuthenticatedActor({
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'future:new-permission'],
+    }),
+    {
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access'],
+    },
+  );
+});
+
+test('rejects malformed permission arrays and known permissions without atlas access', () => {
+  for (const permissions of [
+    ['inventory:read', 'future:new-permission'],
+    ['atlas:access', 123],
+    ['atlas:access', 'inventory:read', 'inventory:read'],
+  ]) {
+    assert.equal(
+      parseAuthenticatedActor({ id: 'human:oidc:v1:actor', kind: 'HUMAN', permissions }),
+      null,
+    );
+  }
+});
+
+test('ignores duplicate unknown permissions before validating known duplicates', () => {
+  assert.deepEqual(
+    parseAuthenticatedActor({
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access', 'future:new-permission', 'future:new-permission'],
+    }),
+    {
+      id: 'human:oidc:v1:actor',
+      kind: 'HUMAN',
+      permissions: ['atlas:access'],
+    },
+  );
+});
+
+test('checks permissions against the trusted actor projection', () => {
+  const actor = parseAuthenticatedActor({
+    id: 'human:oidc:v1:actor',
+    kind: 'HUMAN',
+    permissions: ['atlas:access', 'inventory:read'],
+  });
+  assert.ok(actor);
+  assert.equal(hasPermission(actor, ATLAS_PERMISSIONS.inventoryRead), true);
+  assert.equal(hasPermission(actor, ATLAS_PERMISSIONS.inventoryMaintain), false);
+  assert.equal(hasPermission(null, ATLAS_PERMISSIONS.inventoryRead), false);
 });
 
 test('allows only internal relative returnTo values', () => {

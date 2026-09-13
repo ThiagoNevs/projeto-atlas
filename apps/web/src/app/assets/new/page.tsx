@@ -1,5 +1,6 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
@@ -12,6 +13,7 @@ import {
 } from '@/lib/api';
 import { getAssetTypeLabel, getManualIdentifierTypeLabel } from '@/lib/labels';
 import { getStatusLabel } from '@/lib/status';
+import { PermissionBoundary } from '@/components/permission-boundary';
 
 const identifierTypes: ManualIdentifierType[] = [
   'HOSTNAME',
@@ -79,7 +81,7 @@ const optionalFields: Array<keyof CreateManualAssetPayload> = [
   'comment',
 ];
 
-export default function NewAssetPage() {
+function NewAssetPageContent() {
   const router = useRouter();
   const [form, setForm] = useState<FormState>(initialForm);
   const [submitting, setSubmitting] = useState(false);
@@ -326,5 +328,13 @@ export default function NewAssetPage() {
         </div>
       </form>
     </main>
+  );
+}
+
+export default function NewAssetPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryMaintain}>
+      <NewAssetPageContent />
+    </PermissionBoundary>
   );
 }

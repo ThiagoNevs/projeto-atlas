@@ -1,8 +1,10 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import { useCallback, useEffect, useState } from 'react';
 
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { DataSourceItem, DataSourceStatus, getDataSources } from '@/lib/api';
 
 const statusLabels: Record<DataSourceStatus, string> = {
@@ -48,7 +50,7 @@ function DataSourceCard({ source }: { source: DataSourceItem }) {
   );
 }
 
-export default function DataSourcesPage() {
+function DataSourcesPageContent() {
   const [data, setData] = useState<Awaited<ReturnType<typeof getDataSources>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,5 +160,13 @@ export default function DataSourcesPage() {
         </p>
       </section>
     </main>
+  );
+}
+
+export default function DataSourcesPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryRead}>
+      <DataSourcesPageContent />
+    </PermissionBoundary>
   );
 }

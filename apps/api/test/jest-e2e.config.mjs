@@ -5,6 +5,7 @@ export default {
   moduleFileExtensions: ['ts', 'js', 'json'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^@atlas/shared$': '<rootDir>/../../packages/shared/src/index.ts',
   },
   transform: {
     '^.+\\.(t|j)s$': [

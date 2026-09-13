@@ -1,5 +1,6 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link.js';
 import {
   FormEvent,
@@ -12,6 +13,7 @@ import {
 } from 'react';
 
 import { ErrorState, LoadingState } from './page-state';
+import { PermissionBoundary } from './permission-boundary';
 import {
   createFindingReviewCaseReopen,
   createFindingReviewCaseResolution,
@@ -417,19 +419,21 @@ export function FindingReviewCasesPage({
       </header>
 
       {requestedFindingId ? (
-        <section className="review-create-card" aria-labelledby="review-create-title">
-          <div>
-            <p className="section-kicker">Achado selecionado</p>
-            <h2 id="review-create-title">Criar caso de revisão</h2>
-            <code>{requestedFindingId}</code>
-            <p>A criação preserva um snapshot histórico. Ela não decide o achado e não altera ativos.</p>
-          </div>
-          <button className="button button-primary" type="button" disabled={creationLoading || Boolean(creationResult)} onClick={() => void creationController.submit(requestedFindingId)}>
-            {creationLoading ? 'Criando…' : creationResult ? 'Caso registrado' : 'Criar caso'}
-          </button>
-          {creationResult ? <p className="form-message form-message-success" role="status">{creationResult.idempotentReplay ? 'Caso recuperado por replay idempotente.' : 'Caso criado com sucesso.'}</p> : null}
-          {creationError ? <div className="form-message form-message-error" role="alert">{creationError}{existingCaseId ? <button className="table-link-button" type="button" onClick={(event) => openDetail(existingCaseId, event.currentTarget)}> Abrir caso existente</button> : null}</div> : null}
-        </section>
+        <PermissionBoundary permission={ATLAS_PERMISSIONS.reviewCaseManage} fallback={null}>
+          <section className="review-create-card" aria-labelledby="review-create-title">
+            <div>
+              <p className="section-kicker">Achado selecionado</p>
+              <h2 id="review-create-title">Criar caso de revisão</h2>
+              <code>{requestedFindingId}</code>
+              <p>A criação preserva um snapshot histórico. Ela não decide o achado e não altera ativos.</p>
+            </div>
+            <button className="button button-primary" type="button" disabled={creationLoading || Boolean(creationResult)} onClick={() => void creationController.submit(requestedFindingId)}>
+              {creationLoading ? 'Criando…' : creationResult ? 'Caso registrado' : 'Criar caso'}
+            </button>
+            {creationResult ? <p className="form-message form-message-success" role="status">{creationResult.idempotentReplay ? 'Caso recuperado por replay idempotente.' : 'Caso criado com sucesso.'}</p> : null}
+            {creationError ? <div className="form-message form-message-error" role="alert">{creationError}{existingCaseId ? <button className="table-link-button" type="button" onClick={(event) => openDetail(existingCaseId, event.currentTarget)}> Abrir caso existente</button> : null}</div> : null}
+          </section>
+        </PermissionBoundary>
       ) : null}
 
       <section className="filter-card" aria-labelledby="review-filter-title">
@@ -530,7 +534,8 @@ function ReviewCaseDetail({
           || commands.reopen.loading || commands.reopen.uncertain || commands.reopen.reloadRequired}
         reloadDetail={retry}
       />
-      <IdentityDecisionControl
+      <PermissionBoundary permission={ATLAS_PERMISSIONS.reviewCaseManage} fallback={null}>
+        <IdentityDecisionControl
         key={`decision:${detail.id}:${detail.version}:${detail.currentDecision?.id ?? 'none'}`}
         detail={detail}
         loading={commands.decision.loading}
@@ -594,7 +599,7 @@ function ReviewCaseDetail({
         reload={commands.reopen.reload}
         clearError={commands.reopen.clearError}
       />
-      <StatusTransitionControl
+        <StatusTransitionControl
         key={`status:${detail.id}:${detail.status}:${detail.version}`}
         detail={detail}
         loading={commands.status.loading}
@@ -604,7 +609,8 @@ function ReviewCaseDetail({
         submit={commands.status.submit}
         reload={commands.status.reload}
         mutationBlocked={commands.statusMutationBlocked}
-      />
+        />
+      </PermissionBoundary>
       <div className="review-detail-grid review-detail-grid-single">
         <article><h3>Histórico de eventos</h3><ol className="review-event-list">{detail.events.map((event) => <li key={event.id}><strong>{getFindingReviewEventLabel(event.eventType)}</strong>{formatStatusTransition(event.metadata)}{formatDecisionEvent(event.eventType, event.metadata)}{formatResolutionEvent(event.eventType, event.metadata)}{formatReopenEvent(event.eventType)}{formatTransitionJustification(event.metadata)}<span>Versão {event.versionBefore ?? 0} → {event.versionAfter}</span><small>{formatDateTime(event.createdAt)} · {event.actor}</small></li>)}</ol></article>
       </div>

@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 
 import { oidcActorId } from './actor-id';
 import { AuthConfig } from './auth.config';
-import { ATLAS_ACCESS_PERMISSION, type CurrentActor } from './auth.types';
+import { ATLAS_ACCESS_PERMISSION, type AtlasPermission, type CurrentActor } from './auth.types';
+import { permissionsForExternalRoles } from './role-mapping';
 
 export class AuthenticationInvalidError extends Error {}
 export class AuthenticationInfrastructureError extends Error {}
@@ -46,6 +47,16 @@ export class AuthTokenVerifier {
 
       const roles = claimValues(result.payload[this.config.roleClaim]);
       const hasAccess = roles?.some((role) => this.config.accessValues.has(role)) ?? false;
+      const permissions = new Set<AtlasPermission>();
+      if (hasAccess) {
+        permissions.add(ATLAS_ACCESS_PERMISSION);
+        for (const permission of permissionsForExternalRoles(
+          roles ?? [],
+          this.config.externalRoleMapping,
+        )) {
+          permissions.add(permission);
+        }
+      }
       const displayName =
         typeof result.payload.name === 'string' && result.payload.name.length <= 200
           ? result.payload.name
@@ -54,7 +65,7 @@ export class AuthTokenVerifier {
       return {
         id: oidcActorId('HUMAN', this.config.issuer, subject),
         kind: 'HUMAN',
-        permissions: hasAccess ? new Set([ATLAS_ACCESS_PERMISSION]) : new Set(),
+        permissions,
         ...(displayName ? { displayName } : {}),
       };
     } catch (error) {

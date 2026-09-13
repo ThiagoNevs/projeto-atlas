@@ -16,7 +16,7 @@
     "build": "corepack pnpm --recursive --if-present build",
     "lint": "corepack pnpm --recursive --if-present lint",
     "test": "corepack pnpm --recursive --if-present test",
-    "test:e2e:browser": "playwright test",
+    "test:e2e:browser": "corepack pnpm --filter @atlas/shared build && playwright test",
     "typecheck": "corepack pnpm --recursive --if-present typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

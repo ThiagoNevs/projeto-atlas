@@ -139,8 +139,10 @@ a adoção persistente de um novo snapshot por refresh continua fora do escopo.
 A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetAttribute`,
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
 de novas operações é um `CurrentActor` derivado do token OIDC validado. Autores históricos
-`atlas-mvp-user` permanecem intactos. O gate atual concede apenas `atlas:access`; RBAC granular e
-isolamento multi-tenant ainda não existem.
+`atlas-mvp-user` permanecem intactos. O gate `atlas:access` permanece independente do RBAC granular.
+Roles externas exatas são mapeadas para Viewer, Analyst e Admin e então para permissions tipadas;
+controllers aplicam policies por permission, com runtime e teste de completude fail-closed. Isolamento
+multi-tenant ainda não existe.
 
 Agora existem consultas somente leitura em `GET /conflict-review-cases`,
 `GET /conflict-review-cases/:id` e `GET /conflict-review-cases/:id/context-comparison`. A listagem é
@@ -252,9 +254,9 @@ resolução anterior; `CASE_REOPENED` aparece na timeline e na Auditoria global 
 #### Limitações e próximas evoluções
 
 Ainda não existem atribuição, comentários, refresh persistente, comandos para
-`DISMISSED`/`CANCELLED`, integração com `Conflict` ou Resolution Center. A autenticação OIDC e a
-autoria confiável existem, mas Viewer/Analyst/Admin permanecem no PR #41. O finding derivado não passa
-a ser persistido como fonte de verdade.
+`DISMISSED`/`CANCELLED`, integração com `Conflict` ou Resolution Center. A autenticação OIDC, a autoria
+confiável e a autorização Viewer/Analyst/Admin existem. O finding derivado não passa a ser persistido
+como fonte de verdade.
 
 ### Tipos compartilhados
 
@@ -263,7 +265,6 @@ frontend.
 
 ## Fora do escopo atual
 
-- RBAC granular por papéis Viewer/Analyst/Admin.
 - Multi-tenant produtivo e isolamento por organização.
 - Conectores reais para Microsoft Intune, Defender, Entra ID ou CMDBs.
 - Collector instalado na infraestrutura do cliente.
@@ -283,7 +284,10 @@ frontend.
 
 - Ambiente orientado a desenvolvimento local.
 - Sem tabela de usuários local, refresh token, silent renew ou sessão persistente do Atlas.
-- Todos os atores com `atlas:access` ainda possuem o mesmo acesso funcional.
+- RBAC é configurado por mapping OIDC e não possui gestão persistida de usuários, roles ou permissions.
+- Service principals e autenticação machine-to-machine permanecem fora do escopo.
+- Configuração de profiles de Network Discovery ainda não registra `CurrentActor`/`AuditLog`; ingestão
+  registra ator no `AssetEvent`, mas não em `AuditLog`; exportação de qualidade não cria `AuditLog`.
 - Listagens de Network Discovery sem paginação.
 - Sem observabilidade estruturada, métricas ou tracing distribuído.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.

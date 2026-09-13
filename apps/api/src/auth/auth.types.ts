@@ -1,6 +1,9 @@
-export const ATLAS_ACCESS_PERMISSION = 'atlas:access' as const;
+import type { AtlasPermission } from '@atlas/shared';
 
-export type AtlasPermission = typeof ATLAS_ACCESS_PERMISSION;
+import { ATLAS_PERMISSIONS } from './permissions';
+
+export const ATLAS_ACCESS_PERMISSION = ATLAS_PERMISSIONS.access;
+export type { AtlasPermission } from '@atlas/shared';
 export type ActorKind = 'HUMAN' | 'SERVICE' | 'SYSTEM';
 
 export interface CurrentActor {

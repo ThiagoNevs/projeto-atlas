@@ -1,0 +1,18 @@
+{
+  "access": "atlas:access",
+  "inventoryRead": "inventory:read",
+  "inventoryMaintain": "inventory:maintain",
+  "inventoryStatusUpdate": "inventory:status:update",
+  "inventoryImport": "inventory:import",
+  "inventoryExport": "inventory:export",
+  "analysisRead": "analysis:read",
+  "conflictRead": "conflict:read",
+  "conflictManage": "conflict:manage",
+  "reviewCaseRead": "review-case:read",
+  "reviewCaseManage": "review-case:manage",
+  "discoveryRead": "discovery:read",
+  "discoveryConfigure": "discovery:configure",
+  "discoveryExecute": "discovery:execute",
+  "ingestionExecute": "ingestion:execute",
+  "auditRead": "audit:read"
+}

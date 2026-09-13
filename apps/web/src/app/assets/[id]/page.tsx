@@ -1,5 +1,6 @@
 'use client';
 
+import { ATLAS_PERMISSIONS } from '@atlas/shared';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -9,6 +10,7 @@ import { EvidenceProvenanceSection } from '@/components/evidence-provenance-sect
 import { LifecycleConflictAlert } from '@/components/lifecycle-conflict-alert';
 import { ManualEnrichmentForm } from '@/components/manual-enrichment-form';
 import { ErrorState, LoadingState } from '@/components/page-state';
+import { PermissionBoundary } from '@/components/permission-boundary';
 import { RelativeTime } from '@/components/relative-time';
 import { Score } from '@/components/score';
 import { StatusBadge } from '@/components/status-badge';
@@ -78,7 +80,7 @@ function getAdministrativeStatusChangeData(value: unknown): AdministrativeStatus
   };
 }
 
-export default function AssetDetailPage() {
+function AssetDetailPageContent() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<AssetPageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -280,17 +282,21 @@ export default function AssetDetailPage() {
         </article>
       </section>
 
-      <AdministrativeStatusForm
-        assetId={asset.id}
-        currentStatus={asset.administrativeStatus}
-        onChanged={refreshAssetData}
-      />
+      <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryStatusUpdate} fallback={null}>
+        <AdministrativeStatusForm
+          assetId={asset.id}
+          currentStatus={asset.administrativeStatus}
+          onChanged={refreshAssetData}
+        />
+      </PermissionBoundary>
 
-      <ManualEnrichmentForm
-        assetId={asset.id}
-        existingAttributeKeys={asset.attributes.map((attribute) => attribute.key)}
-        onChanged={refreshAssetData}
-      />
+      <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryMaintain} fallback={null}>
+        <ManualEnrichmentForm
+          assetId={asset.id}
+          existingAttributeKeys={asset.attributes.map((attribute) => attribute.key)}
+          onChanged={refreshAssetData}
+        />
+      </PermissionBoundary>
 
       <section className="panel full-panel">
         <div className="panel-heading">
@@ -434,5 +440,13 @@ export default function AssetDetailPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function AssetDetailPage() {
+  return (
+    <PermissionBoundary permission={ATLAS_PERMISSIONS.inventoryRead}>
+      <AssetDetailPageContent />
+    </PermissionBoundary>
   );
 }

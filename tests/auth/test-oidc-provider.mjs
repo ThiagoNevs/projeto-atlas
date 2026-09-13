@@ -47,8 +47,16 @@ const provider = new oidc.Provider(issuer, {
     accountId,
     claims: async () => ({ sub: accountId, name: 'Atlas Browser User' }),
   }),
-  extraTokenClaims: async () => ({
-    groups: ['atlas-user'],
+  extraTokenClaims: async (ctx, token) => ({
+    groups: [
+      'atlas-user',
+      token.accountId === 'atlas-viewer-user' || ctx.oidc.session?.accountId === 'atlas-viewer-user'
+        ? 'atlas-viewer'
+        : token.accountId === 'atlas-analyst-user' ||
+            ctx.oidc.session?.accountId === 'atlas-analyst-user'
+          ? 'atlas-analyst'
+          : 'atlas-admin',
+    ],
     name: 'Atlas Browser User',
   }),
   pkce: {
