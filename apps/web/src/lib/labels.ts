@@ -117,6 +117,10 @@ const auditActionLabels: Record<string, string> = {
   NETWORK_DISCOVERY_RUN_EXECUTED: 'Descoberta de rede executada',
   NETWORK_DISCOVERY_RUN_REJECTED: 'Descoberta de rede rejeitada',
   NETWORK_DISCOVERY_RUN_FAILED: 'Descoberta de rede com falha',
+  NETWORK_DISCOVERY_PROFILE_CREATED: 'Perfil de descoberta criado',
+  NETWORK_DISCOVERY_PROFILE_UPDATED: 'Perfil de descoberta atualizado',
+  ASSET_INGESTION_COMPLETED: 'Ingestão de ativo concluída',
+  DATA_QUALITY_EXPORT_PREPARED: 'Exportação de qualidade preparada',
   ASSET_MANUALLY_DECLARED: 'Ativo declarado manualmente',
   ASSET_MANUALLY_ENRICHED: 'Ativo enriquecido manualmente',
   ASSET_IMPORTED_FROM_CSV: 'Ativo importado',
@@ -142,6 +146,7 @@ const auditEntityTypeLabels: Record<string, string> = {
   CONFLICT: 'Conflito',
   NETWORKDISCOVERYRUN: 'Execução de descoberta',
   NETWORKDISCOVERYPROFILE: 'Perfil de descoberta',
+  DATAQUALITYEXPORT: 'Exportação de qualidade',
 };
 
 const auditValueLabels: Record<string, string> = {
