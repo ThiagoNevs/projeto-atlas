@@ -303,7 +303,8 @@ frontend.
 - Listagens de Network Discovery sem paginação.
 - Sem métricas, tracing distribuído, OpenTelemetry ou integração SIEM.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
-- Sem gestão produtiva de secrets.
+- Fundação interna de referências de segredo disponível com provider `ENV` restrito, sem persistência,
+  API, UI, cache ou gestão produtiva do lifecycle das credenciais.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.
 - Sem política formal de backup, retenção e recuperação.
 - Fontes de Dados ainda é um catálogo estático; conectores reais, credenciais e sincronização continuam fora do escopo.

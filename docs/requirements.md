@@ -618,13 +618,16 @@ PostgreSQL. A evolução de observabilidade ainda deve incluir:
 
 ### RNF15 — Proteção de secrets
 
-O sistema não deve armazenar secrets, tokens ou credenciais em texto puro.
+O sistema não deve armazenar material secreto, tokens ou credenciais em texto puro ou criptografado
+no PostgreSQL. Referência de segredo e material secreto são conceitos distintos. O provisionamento é
+out-of-band, e o valor deve ser resolvido somente quando necessário, sem resposta HTTP, AuditLog,
+logging operacional ou cache da aplicação.
 
 Futuramente, integrações devem usar:
 
-- Secret manager.
-- Vault.
-- Criptografia.
+- Referências estruturadas e providers allowlisted.
+- Secret manager ou vault externo quando o ambiente exigir.
+- Workload/managed identity quando disponível.
 - Rotação de credenciais.
 - Controle de acesso.
 
@@ -803,7 +806,8 @@ O MVP possui limitações conhecidas:
 - Não possui Collector real.
 - Network Discovery é simulado.
 - Não executa scan real.
-- Não possui gestão segura de secrets.
+- Possui foundation interna para referências `ENV`; ainda não possui gestão persistente, API, UI,
+  providers de cofre externo nem credenciais operacionais.
 - Possui observabilidade operacional inicial, sem métricas, tracing distribuído ou alertas.
 - Não possui CI/CD completo.
 - Possui tela dedicada de auditoria; exportações da própria trilha e retenção formal permanecem futuras.
