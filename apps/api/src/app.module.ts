@@ -14,11 +14,13 @@ import { EvidenceEngineModule } from './evidence-engine/evidence-engine.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { FindingReviewCasesModule } from './finding-review-cases/finding-review-cases.module';
 import { NetworkDiscoveryModule } from './network-discovery/network-discovery.module';
+import { OperationalContextModule } from './operational-context/operational-context.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TimelineModule } from './timeline/timeline.module';
 
 @Module({
   imports: [
+    OperationalContextModule,
     AuthModule,
     PrismaModule,
     IngestionModule,
