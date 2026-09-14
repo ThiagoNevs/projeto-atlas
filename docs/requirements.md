@@ -62,10 +62,9 @@ O MVP atual contempla:
 
 ### Fora do escopo atual
 
-Ainda não fazem parte do MVP atual:
+O MVP atual já possui autenticação corporativa OIDC para atores humanos e autorização granular por
+permissions derivadas de roles externas. Permanecem fora do escopo:
 
-- Autenticação real.
-- Autorização por perfil.
 - Multi-tenant real.
 - Conectores reais com Microsoft Intune, Defender ou Entra ID.
 - Collector real instalado em ambiente de cliente.
@@ -74,7 +73,7 @@ Ainda não fazem parte do MVP atual:
 - Integração com CMDB externa.
 - Integração com ITSM.
 - Gestão segura de secrets.
-- CI/CD completo.
+- CI mínima com testes, qualidade, build, migrations e Browser E2E; supply-chain gates completos permanecem futuros.
 - Observabilidade estruturada.
 - Produção com dados reais.
 
@@ -206,7 +205,7 @@ Ao alterar, o sistema deve:
 - Registrar status anterior.
 - Registrar novo status.
 - Registrar data/hora.
-- Registrar ator responsável, ainda que simulado no MVP.
+- Registrar o `CurrentActor` derivado da identidade OIDC humana validada.
 
 ---
 
@@ -496,7 +495,8 @@ Cada auditoria deve conter:
 - Comentário.
 - Data/hora.
 
-No MVP, o ator pode ser simulado. Em produção, deve ser associado a um usuário autenticado.
+No MVP, o ator humano é derivado do `CurrentActor` associado à identidade OIDC validada. Autenticação
+de Service Actors e identidades machine-to-machine permanecem planejadas.
 
 ---
 
@@ -574,7 +574,7 @@ Exemplos:
 - Audit.
 - Network Discovery.
 - Connectors.
-- Auth, futuramente.
+- Auth com OIDC humano, `CurrentActor` e autorização por permissions.
 
 Essa separação deve facilitar manutenção, evolução e testes.
 
@@ -598,7 +598,7 @@ O MVP não precisa nascer com arquitetura distribuída, mas deve permitir evolu�
 - Collector real.
 - Multi-tenant.
 - Observabilidade.
-- Autenticação corporativa.
+- Autenticação corporativa completa para Service Actors e operação multi-tenant.
 - Integrações reais.
 
 ---
@@ -807,10 +807,10 @@ O MVP possui limitações conhecidas:
 - Não possui gestão segura de secrets.
 - Não possui observabilidade estruturada.
 - Não possui CI/CD completo.
-- Não possui tela dedicada de auditoria.
-- Não possui exportação CSV.
+- Possui tela dedicada de auditoria; exportações da própria trilha e retenção formal permanecem futuras.
+- Exportação CSV existe para Qualidade dos Dados; exportação da trilha de auditoria permanece futura.
 - Não possui dashboard executivo.
-- O ator de auditoria ainda é simulado.
+- O ator humano de auditoria é derivado do OIDC validado; Service Actors ainda não existem.
 - Algumas tipagens do frontend podem duplicar enums da API manualmente.
 
 ---

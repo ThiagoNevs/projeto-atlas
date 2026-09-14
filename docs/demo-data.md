@@ -16,7 +16,8 @@ corepack pnpm db:seed
 O comando pode ser repetido. Antes de recriar a massa, ele remove somente:
 
 - ativos com `canonicalKey` iniciado por `atlas-demo:` e seus relacionamentos em cascata;
-- auditorias criadas pelo ator simulado `atlas-demo-seed`.
+- auditorias criadas pela identidade técnica de seed `atlas-demo-seed` (fixture de demonstração, não
+  identidade de usuário produtiva).
 
 Dados criados manualmente, migrations e estrutura do banco não são removidos.
 

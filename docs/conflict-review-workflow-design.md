@@ -1225,7 +1225,7 @@ nova análise, migration própria e testes de corrida.
 
 - duplicação conceitual entre caso e `Conflict` se a interface não for clara;
 - crescimento de snapshots JSON sem retenção e limites;
-- ações de escrita sem autenticação real;
+- autenticação de Service Actors ainda não implementada para ações machine-to-machine;
 - corrida na criação do caso sem constraint/idempotência;
 - decisão aplicada indevidamente ao inventário por acoplamento futuro;
 - mudança da política tornando casos antigos difíceis de comparar;

@@ -118,7 +118,8 @@ curl.exe http://localhost:3001/assets/ASSET_ID/timeline
 
 Use o UUID interno do ativo em `ASSET_ID`. A alteração cria, na mesma transação, um evento
 `ADMIN_STATUS_CHANGED` na timeline e um registro em `audit_logs` com os valores anterior e
-novo, motivo, comentário e o ator simulado do MVP.
+novo, motivo, comentário e o `CurrentActor` derivado da identidade OIDC humana validada. Fixtures de
+seed podem usar uma identidade técnica de demonstração, sem representar o comportamento produtivo.
 
 ```powershell
 curl.exe -X PATCH http://localhost:3001/assets/ASSET_ID/administrative-status `

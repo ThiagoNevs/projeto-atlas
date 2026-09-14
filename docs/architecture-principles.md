@@ -156,7 +156,8 @@ Cada registro de auditoria deve conter, sempre que aplicável:
 - Data/hora.
 - Metadados relevantes.
 
-No MVP, o ator pode ser simulado. Em produção, deve ser vinculado a um usuário autenticado.
+As ações humanas auditadas usam o `CurrentActor` derivado de uma identidade OIDC validada. Identidades
+de Service Actors para operações machine-to-machine ainda são uma decisão e implementação futuras.
 
 ### Eventos de domínio, auditoria e logs de segurança
 
