@@ -119,7 +119,9 @@ No detalhe de um ativo apropriado:
 4. mostre o evento criado na timeline.
 
 Explique que a atualização do ativo, o evento e o `AuditLog` são tratados de forma transacional.
-Informe que a identidade do ator ainda é simulada no MVP.
+Informe que a identidade do ator humano é derivada do `CurrentActor` associado à identidade OIDC
+validada. Identidades simuladas podem existir somente em fixtures de teste e desenvolvimento, não no
+comportamento produtivo.
 
 Abra **Auditoria** e localize a alteração por ação, entidade ou período. Expanda o registro para
 mostrar valor anterior, valor novo, motivo, comentário e data da decisão.

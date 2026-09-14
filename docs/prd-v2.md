@@ -220,8 +220,8 @@ Objetivo: operar o Atlas com segurança, isolamento e suporte para múltiplos cl
 
 Entregas esperadas:
 
-- autenticação corporativa;
-- autorização por papéis;
+- autenticação corporativa OIDC para atores humanos (entregue; Service Actors permanecem futuros);
+- autorização granular por permissions derivadas de roles (entregue; escopos por recurso/tenant permanecem futuros);
 - multi-tenant;
 - CI/CD;
 - observabilidade;
@@ -232,10 +232,10 @@ Entregas esperadas:
 
 ## 9. Fora de escopo atual
 
-Ainda não fazem parte do MVP atual:
+O MVP atual já entrega autenticação corporativa OIDC para atores humanos e autorização granular por
+permissions derivadas de roles OIDC, com o gate independente `atlas:access`. Ainda não fazem parte do
+MVP atual:
 
-- autenticação real;
-- autorização por perfil;
 - multi-tenant produtivo;
 - conectores reais com Microsoft Intune, Defender, Entra ID, cloud, CMDB ou ITSM;
 - armazenamento de tokens, senhas ou secrets;

@@ -68,7 +68,7 @@ visualmente consistente e clara sobre os limites do MVP.
 - Discovery real de rede.
 - Conectores reais Microsoft, CMDB, ITSM ou SIEM.
 - Collector instalado em infraestrutura externa.
-- Autenticação corporativa completa.
+- Autenticação corporativa completa (sessão persistente, Service Actors e operação cloud).
 - Multi-tenant produtivo.
 - Alta disponibilidade e operação cloud em produção.
 - Coleta ou demonstração com secrets reais.

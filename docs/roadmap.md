@@ -35,7 +35,7 @@ devem ser definidos após validação com usuários e priorização de mercado.
 - identidade visual e tela inicial orientada a valor;
 - dashboard com indicadores executivos;
 - roteiro e ambiente de demonstração reproduzível;
-- tela de auditoria;
+- tela de auditoria (entregue e em estabilização);
 - narrativa visual de Fontes de Dados e conectores planejados;
 - exportação CSV do inventário e conflitos;
 - importação controlada de ativos por CSV, XLSX, XLSM e conteúdo colado;
@@ -92,7 +92,7 @@ tenant e revisão de segurança.
 
 **Entregas:**
 
-- autenticação corporativa e RBAC;
+- autenticação corporativa OIDC para atores humanos e autorização granular (entregues; Service Actors permanecem futuros);
 - multi-tenant com isolamento verificável;
 - onboarding, planos e limites de uso;
 - alta disponibilidade, backup e disaster recovery;
@@ -107,3 +107,38 @@ tenant e revisão de segurança.
 
 **Dependências:** validação de mercado, arquitetura de tenants, operação cloud, segurança,
 compliance e modelo comercial.
+
+## Roadmap técnico de arquitetura
+
+O encadeamento técnico aprovado para as próximas fundações é:
+
+```text
+Architecture Decision Records
+↓
+Operational Context Foundation
+↓
+Secrets / Credential References
+↓
+Trusted Service Actors
+↓
+Connector Execution Foundation
+↓
+Connector Framework
+↓
+Active Directory Domain Services
+↓
+Microsoft Entra ID
+↓
+Microsoft Intune
+↓
+Microsoft Defender
+↓
+Azure Resources
+↓
+Identity Engine
+↓
+Trust Engine
+```
+
+Essa sequência não cria uma fila, connector, Service Actor, Identity Engine ou Trust Engine por si só;
+cada etapa depende de requisitos, threat model e autorização próprios.
