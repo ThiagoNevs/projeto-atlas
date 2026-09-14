@@ -603,14 +603,13 @@ O MVP não precisa nascer com arquitetura distribuída, mas deve permitir evolu�
 
 ---
 
-### RNF14 — Observabilidade futura
+### RNF14 — Observabilidade incremental
 
-O sistema deve ser preparado para futura observabilidade com:
+O sistema possui a fundação de logs estruturados, request/correlation IDs e health/readiness do
+PostgreSQL. A evolução de observabilidade ainda deve incluir:
 
-- Logs estruturados.
 - Métricas.
 - Tracing.
-- Request ID.
 - Monitoramento de erros.
 - Monitoramento de jobs.
 - Monitoramento de integrações.
@@ -805,7 +804,7 @@ O MVP possui limitações conhecidas:
 - Network Discovery é simulado.
 - Não executa scan real.
 - Não possui gestão segura de secrets.
-- Não possui observabilidade estruturada.
+- Possui observabilidade operacional inicial, sem métricas, tracing distribuído ou alertas.
 - Não possui CI/CD completo.
 - Possui tela dedicada de auditoria; exportações da própria trilha e retenção formal permanecem futuras.
 - Exportação CSV existe para Qualidade dos Dados; exportação da trilha de auditoria permanece futura.

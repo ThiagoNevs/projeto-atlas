@@ -37,6 +37,7 @@ export function createCorsOptions(value = process.env.WEB_ORIGIN): CorsOptions {
       callback(null, requestOrigin === undefined || requestOrigin === webOrigin);
     },
     credentials: false,
-    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Correlation-ID'],
+    exposedHeaders: ['X-Request-ID', 'X-Correlation-ID'],
   };
 }

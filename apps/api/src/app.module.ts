@@ -13,12 +13,19 @@ import { EvidencesModule } from './evidences/evidences.module';
 import { EvidenceEngineModule } from './evidence-engine/evidence-engine.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { FindingReviewCasesModule } from './finding-review-cases/finding-review-cases.module';
+import {
+  DEFAULT_HEALTH_READINESS_TIMEOUT_MS,
+  HEALTH_READINESS_TIMEOUT_MS,
+  HealthReadinessService,
+} from './health-readiness.service';
 import { NetworkDiscoveryModule } from './network-discovery/network-discovery.module';
+import { OperationalContextModule } from './operational-context/operational-context.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TimelineModule } from './timeline/timeline.module';
 
 @Module({
   imports: [
+    OperationalContextModule,
     AuthModule,
     PrismaModule,
     IngestionModule,
@@ -36,5 +43,12 @@ import { TimelineModule } from './timeline/timeline.module';
     DataSourcesModule,
   ],
   controllers: [HealthController],
+  providers: [
+    HealthReadinessService,
+    {
+      provide: HEALTH_READINESS_TIMEOUT_MS,
+      useValue: DEFAULT_HEALTH_READINESS_TIMEOUT_MS,
+    },
+  ],
 })
 export class AppModule {}

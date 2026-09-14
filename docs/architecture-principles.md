@@ -373,7 +373,7 @@ Erros devem possuir:
 - Mensagem compreensível.
 - Status HTTP adequado.
 - Contexto seguro.
-- Request ID, futuramente.
+- Request ID e correlation ID técnicos, sem dados sensíveis.
 
 O sistema não deve expor ao usuário final:
 

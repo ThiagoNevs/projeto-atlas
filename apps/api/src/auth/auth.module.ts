@@ -6,8 +6,10 @@ import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { AuthTokenVerifier } from './auth-token-verifier.service';
 import { PermissionGuard } from './permission.guard';
+import { OperationalContextModule } from '../operational-context/operational-context.module';
 
 @Module({
+  imports: [OperationalContextModule],
   controllers: [AuthController],
   providers: [
     AuthConfig,

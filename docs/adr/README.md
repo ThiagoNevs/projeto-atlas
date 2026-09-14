@@ -27,7 +27,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 ## Decision backlog
 
 - Secrets e credential management/rotação.
-- Request, correlation e run IDs.
+- Run IDs e sua relação futura com request/correlation IDs já implementados no contexto HTTP.
 - Retenção e classificação de Evidence.
 - Retenção de AuditLog.
 - Segurança de saída e controles SSRF.
@@ -35,7 +35,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 - Large payload storage.
 - Estratégia de Edge Collector.
 - Estratégia futura de multi-tenancy.
-- Limites, rate limiting e readiness.
+- Limites, rate limiting e readiness de futuras dependências externas.
 
 ## Architecture gates
 

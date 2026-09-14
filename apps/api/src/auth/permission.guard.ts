@@ -1,16 +1,11 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { AtlasPermission } from '@atlas/shared';
 
 import type { AuthenticatedRequest } from './auth.types';
 import { PUBLIC_ROUTE } from './public.decorator';
 import { REQUIRED_PERMISSIONS } from './require-permissions.decorator';
+import { OperationalLogger } from '../operational-context/operational-logger.service';
 
 interface AuthorizationRequest extends AuthenticatedRequest {
   method?: string;
@@ -19,9 +14,10 @@ interface AuthorizationRequest extends AuthenticatedRequest {
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
-  private readonly logger = new Logger(PermissionGuard.name);
-
-  constructor(private readonly reflector: Reflector) {}
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly logger: OperationalLogger,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     const handler = context.getHandler();
@@ -30,27 +26,26 @@ export class PermissionGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthorizationRequest>();
     const required = this.reflector.get<readonly AtlasPermission[]>(REQUIRED_PERMISSIONS, handler);
     if (!required?.length) {
-      this.logger.error(
-        JSON.stringify({
-          event: 'AUTHORIZATION_POLICY_MISSING',
-          method: request.method ?? 'UNKNOWN',
-          route: request.route?.path ?? 'unknown',
-          actorId: request.currentActor?.id,
-        }),
-      );
+      this.logger.error({
+        event: 'AUTHORIZATION_POLICY_MISSING',
+        method: request.method ?? 'UNKNOWN',
+        route: request.route?.path ?? 'UNMATCHED',
+        actorKind: request.currentActor?.kind,
+        actorId: request.currentActor?.id,
+      });
       throw insufficientPermission();
     }
 
     const permissions = request.currentActor?.permissions;
     if (!permissions || required.some((permission) => !permissions.has(permission))) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'AUTHORIZATION_DENIED',
-          method: request.method ?? 'UNKNOWN',
-          route: request.route?.path ?? 'unknown',
-          actorId: request.currentActor?.id,
-        }),
-      );
+      this.logger.warn({
+        event: 'AUTHORIZATION_DENIED',
+        method: request.method ?? 'UNKNOWN',
+        route: request.route?.path ?? 'UNMATCHED',
+        actorKind: request.currentActor?.kind,
+        actorId: request.currentActor?.id,
+        requiredPermission: required.length === 1 ? required[0] : undefined,
+      });
       throw insufficientPermission();
     }
     return true;
