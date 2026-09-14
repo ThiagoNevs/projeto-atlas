@@ -298,10 +298,10 @@ frontend.
 - Sem tabela de usuários local, refresh token, silent renew ou sessão persistente do Atlas.
 - RBAC é configurado por mapping OIDC e não possui gestão persistida de usuários, roles ou permissions.
 - Service principals e autenticação machine-to-machine permanecem fora do escopo.
-- Correlation ID para encadear request, execução e auditoria permanece uma melhoria útil antes dos
-  conectores.
+- Request ID gerado pelo servidor, correlation ID HTTP validado, logging operacional allowlisted e
+  health/liveness/readiness do PostgreSQL estão implementados. Run ID de conectores permanece futuro.
 - Listagens de Network Discovery sem paginação.
-- Sem observabilidade estruturada, métricas ou tracing distribuído.
+- Sem métricas, tracing distribuído, OpenTelemetry ou integração SIEM.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
 - Sem gestão produtiva de secrets.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.

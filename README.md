@@ -114,8 +114,9 @@ corepack pnpm dev:oidc:test
 
 Inicie-o antes da API e do frontend quando usar os valores dos arquivos `.env.example`. Em qualquer
 ambiente compartilhado ou produtivo, substitua-o por um issuer OIDC administrado. O Atlas não possui
-tabela `User`, formulário de senha ou client secret no browser. A API protege todos os endpoints por
-padrão e mantém apenas `GET /health` público; `GET /auth/me` retorna a projeção segura do ator validado.
+tabela `User`, formulário de senha ou client secret no browser. A API protege os endpoints de domínio
+por padrão; somente `GET /health`, `GET /health/live` e `GET /health/ready` são públicos.
+`GET /auth/me` retorna a projeção segura do ator validado.
 O access token fica somente em memória e desaparece em reload/logout; apenas state, nonce e PKCE
 transitórios do redirect podem usar o namespace `atlas:oidc:transaction:` no `sessionStorage`.
 
@@ -314,6 +315,7 @@ sem produzir tráfego real de rede.
 - [Roteiro de demo](docs/demo-script.md)
 - [Guia local](docs/getting-started.md)
 - [Arquitetura](docs/architecture.md)
+- [Contexto operacional da API](docs/operational-context.md)
 - [Modelo de dados](docs/data-model.md)
 - [Escopo de produto](docs/product-scope.md)
 - [Exemplos da API](docs/api-examples.md)

@@ -42,7 +42,8 @@ e-mail nunca são usados como identidade persistida.
 A SPA pública usa OIDC Authorization Code + PKCE com state e nonce gerenciados por
 `oidc-client-ts`. O access token não é persistido em Web Storage e não há refresh token ou silent
 renew. O Nest valida assinatura, issuer, audience, expiração, `nbf`, algoritmo allowlisted e JWKS com
-`jose`. O guard global é default-deny; somente `GET /health` usa a exceção pública explícita.
+`jose`. O guard global é default-deny; somente `GET /health`, `GET /health/live` e
+`GET /health/ready` usam a exceção pública explícita.
 
 O gate `atlas:access` controla a admissão geral e permanece independente das roles granulares.
 Valores externos exatos da claim configurada são mapeados para Viewer, Analyst e Admin; essas roles
@@ -80,7 +81,8 @@ sem tráfego real, e usa o mesmo núcleo de ativos, evidências, interfaces, tim
 ## Limites atuais
 
 O RBAC granular é configurado por mapping OIDC e não é persistido no banco. Ainda não existem
-multi-tenant produtivo, service principals, conectores externos, filas, observabilidade estruturada,
+multi-tenant produtivo, service principals, conectores externos, filas, métricas, tracing distribuído,
 Collector real ou descoberta ativa de rede. Também permanecem fora do escopo refresh token, BFF,
-readiness, CSP geral e rate limiting. Consulte [technical-risks.md](technical-risks.md) e
-[roadmap.md](roadmap.md).
+CSP geral e rate limiting. O contexto operacional HTTP, logging estruturado e readiness do PostgreSQL
+estão descritos em [operational-context.md](operational-context.md). Consulte
+[technical-risks.md](technical-risks.md) e [roadmap.md](roadmap.md).

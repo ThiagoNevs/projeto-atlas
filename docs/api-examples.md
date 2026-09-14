@@ -9,6 +9,18 @@ Com a infraestrutura e as aplicações em execução, a API fica disponível em
 curl.exe http://localhost:3001/health
 ```
 
+Liveness e readiness:
+
+```powershell
+curl.exe http://localhost:3001/health/live
+curl.exe http://localhost:3001/health/ready
+```
+
+A API cria um `X-Request-ID` UUID v4 para cada requisição e devolve também
+`X-Correlation-ID`. O cliente pode enviar um único `X-Correlation-ID` UUID v4; valores ausentes ou
+inválidos usam o request ID sem alterar o resultado funcional. Consulte
+[operational-context.md](operational-context.md).
+
 ## Ingerir um ativo manualmente
 
 ```powershell
@@ -412,7 +424,8 @@ Campos opcionais aceitos: `operatingSystem`, `osVersion`, `location`, `owner`, `
 `environment`, `criticality` e `comment`.
 
 Todos os endpoints de domínio deste documento exigem `Authorization: Bearer <access-token>`, o gate
-geral `atlas:access` e a permission granular declarada pelo handler. Somente `GET /health` é público.
+geral `atlas:access` e a permission granular declarada pelo handler. Somente `GET /health`,
+`GET /health/live` e `GET /health/ready` são públicos.
 A identidade, a autoria e as permissions são derivadas pelo backend do token validado; campos
 `createdBy`, `actorId`, roles ou permissions enviados pelo cliente não escolhem o autor nem concedem
 acesso. `GET /auth/me` exige `atlas:access` e retorna apenas `id`, `kind`, `displayName` opcional e

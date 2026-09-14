@@ -12,7 +12,7 @@ de avançar para uso com dados ou ambientes reais.
 | Sem conectores Microsoft reais               | Não há integração com Intune, Defender ou Entra ID.                         | Reduz o valor demonstrável com fontes corporativas existentes.                          | Alta                         | Criar framework de conectores e começar por uma fonte com API estável e ambiente de homologação.                       |
 | Enums duplicados no frontend                 | Alguns tipos técnicos são reproduzidos manualmente na camada web.           | Mudanças no backend podem causar divergência silenciosa ou erro em runtime.             | Alta                         | Gerar cliente/tipos a partir de OpenAPI ou publicar contratos compartilhados versionados.                              |
 | Listagens de Network Discovery sem paginação | Perfis, execuções e resultados são retornados sem envelope paginado.        | Crescimento do histórico pode degradar API, frontend e banco.                           | Média                        | Adotar paginação, filtros, limites máximos e índices orientados às consultas antes de volume real.                     |
-| Ausência de observabilidade estruturada      | Não há logging estruturado, métricas, tracing ou correlação de requisições. | Diagnóstico de falhas e análise de desempenho ficam limitados.                          | Alta                         | Adicionar logs JSON, correlation ID, métricas, tracing, health checks de dependências e alertas.                       |
+| Observabilidade operacional parcial          | Request/correlation IDs, logs estruturados e health do PostgreSQL existem; métricas, tracing e alertas ainda não. | Diagnóstico de desempenho e falhas distribuídas permanece limitado. | Média | Adicionar métricas, tracing e alertas por fases, preservando a política de redaction. |
 | CI/CD ainda mínimo                           | A CI valida backend, frontend, qualidade e Browser E2E, mas ainda não publica artefatos nem faz scanning de supply chain. | Risco de vulnerabilidades e releases não rastreáveis antes do piloto. | Média | Adicionar dependency/secret scan, SBOM, container scan e provenance por fases. |
 | Cobertura Browser E2E mínima                 | Existe smoke autenticado com dois cenários, não cobertura completa de todas as telas. | Regressões visuais específicas podem escapar. | Média | Expandir cenários conforme fluxos comerciais forem priorizados. |
 | Crescimento do schema sem domínio forte      | Regras estão concentradas em services e dependem diretamente do Prisma.     | Aumento de acoplamento, transações extensas e dificuldade de evoluir regras complexas.  | Média                        | Introduzir serviços de domínio, casos de uso, políticas explícitas e testes unitários conforme a complexidade crescer. |
@@ -25,8 +25,7 @@ de avançar para uso com dados ou ambientes reais.
 ## Ordem sugerida de mitigação
 
 1. Gestão de secrets e identidade de Service Actors.
-2. Correlation IDs e observabilidade estruturada.
-3. Backup, retenção e arquitetura multi-tenant.
-4. Observabilidade estruturada.
-5. Framework de conectores reais.
-6. Collector somente após revisão de segurança e pilotos controlados.
+2. Backup, retenção e arquitetura multi-tenant.
+3. Métricas, tracing e alertas operacionais.
+4. Framework de conectores reais.
+5. Collector somente após revisão de segurança e pilotos controlados.
