@@ -1,7 +1,7 @@
-import { Controller, Get, INestApplication } from '@nestjs/common';
+import { Controller, Get, INestApplication, Logger } from '@nestjs/common';
 import type { Server } from 'node:http';
 import { Test } from '@nestjs/testing';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { ATLAS_PERMISSIONS, ATLAS_PERMISSION_VALUES } from '@atlas/shared';
 import request from 'supertest';
 
@@ -11,6 +11,8 @@ import { AuthModule } from '../src/auth/auth.module';
 import { createCorsOptions, readWebOrigin } from '../src/auth/cors.config';
 import { RequirePermissions } from '../src/auth/require-permissions.decorator';
 import { HealthController } from '../src/health.controller';
+import { HealthReadinessService } from '../src/health-readiness.service';
+import { OperationalLogger } from '../src/operational-context/operational-logger.service';
 import {
   startTestAuthHarness,
   TEST_AUTH_ACCESS_VALUE,
@@ -74,13 +76,21 @@ describe('OIDC authentication boundary', () => {
   const webOrigin = 'https://atlas-web.example';
   let auth: TestAuthHarness;
   let app: INestApplication;
+  let operationalLogger: OperationalLogger;
 
   async function createApp(): Promise<INestApplication> {
     const module = await Test.createTestingModule({
       imports: [AuthModule],
       controllers: [HealthController, ProtectedDomainTestController],
+      providers: [
+        {
+          provide: HealthReadinessService,
+          useValue: { isReady: () => Promise.resolve(true) },
+        },
+      ],
     }).compile();
     const created = module.createNestApplication();
+    operationalLogger = module.get(OperationalLogger);
     created.useLogger(false);
     created.enableCors(createCorsOptions(webOrigin));
     await created.init();
@@ -114,6 +124,86 @@ describe('OIDC authentication boundary', () => {
           message: 'Autenticação necessária.',
         }),
       );
+    }
+  });
+
+  it('emits safe authentication telemetry correlated with the response', async () => {
+    const warn = jest.spyOn(operationalLogger, 'warn');
+    const nestWarn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const invalidToken = 'not-a-jwt-sensitive-value';
+
+    try {
+      const required = await request(serverOf(app)).get('/auth/me').expect(401);
+      const invalid = await request(serverOf(app))
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${invalidToken}`)
+        .expect(401);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'AUTHENTICATION_REQUIRED' }),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'AUTHENTICATION_INVALID' }),
+      );
+      expect(required.headers['x-request-id']).toEqual(expect.any(String));
+      expect(invalid.headers['x-request-id']).toEqual(expect.any(String));
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(invalidToken);
+      const finalRecords: unknown[] = [];
+      for (const [record] of nestWarn.mock.calls) finalRecords.push(record as unknown);
+      expect(finalRecords).toContainEqual(
+        expect.objectContaining({
+          event: 'AUTHENTICATION_REQUIRED',
+          requestId: required.headers['x-request-id'],
+          correlationId: required.headers['x-correlation-id'],
+        }),
+      );
+      expect(JSON.stringify(finalRecords)).not.toContain(invalidToken);
+    } finally {
+      warn.mockRestore();
+      nestWarn.mockRestore();
+    }
+  });
+
+  it('emits stable safe events for access, permission and default-deny failures', async () => {
+    const warn = jest.spyOn(operationalLogger, 'warn');
+    const error = jest.spyOn(operationalLogger, 'error');
+    const noAccessToken = await auth.issueToken({ roles: [] });
+    const accessOnlyToken = await auth.issueToken({ roles: [TEST_AUTH_ACCESS_VALUE] });
+    const adminToken = await auth.issueToken();
+
+    try {
+      await request(serverOf(app))
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${noAccessToken}`)
+        .expect(403);
+      await request(serverOf(app))
+        .get('/review-case-manage')
+        .set('Authorization', `Bearer ${accessOnlyToken}`)
+        .expect(403);
+      await request(serverOf(app))
+        .get('/missing-policy')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(403);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'ATLAS_ACCESS_DENIED', actorKind: 'HUMAN' }),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'AUTHORIZATION_DENIED',
+          requiredPermission: ATLAS_PERMISSIONS.reviewCaseManage,
+        }),
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'AUTHORIZATION_POLICY_MISSING' }),
+      );
+      const serialized = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+      expect(serialized).not.toContain(noAccessToken);
+      expect(serialized).not.toContain(accessOnlyToken);
+      expect(serialized).not.toContain(adminToken);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
     }
   });
 
@@ -160,13 +250,24 @@ describe('OIDC authentication boundary', () => {
       .options('/auth/me')
       .set('Origin', webOrigin)
       .set('Access-Control-Request-Method', 'GET')
-      .set('Access-Control-Request-Headers', 'Authorization, Content-Type, Idempotency-Key')
+      .set(
+        'Access-Control-Request-Headers',
+        'Authorization, Content-Type, Idempotency-Key, X-Correlation-ID',
+      )
       .expect(204);
 
     expect(response.headers['access-control-allow-origin']).toBe(webOrigin);
     expect(response.headers['access-control-allow-credentials']).toBeUndefined();
     expect(response.headers['access-control-allow-headers']).toBe(
-      'Authorization,Content-Type,Idempotency-Key',
+      'Authorization,Content-Type,Idempotency-Key,X-Correlation-ID',
+    );
+
+    const actualResponse = await request(serverOf(app))
+      .get('/health')
+      .set('Origin', webOrigin)
+      .expect(200);
+    expect(actualResponse.headers['access-control-expose-headers']).toBe(
+      'X-Request-ID,X-Correlation-ID',
     );
   });
 

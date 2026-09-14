@@ -1,4 +1,4 @@
-import { ValidationPipe } from '@nestjs/common';
+import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { config as loadEnv } from 'dotenv';
 import { resolve } from 'node:path';
@@ -10,7 +10,12 @@ async function bootstrap(): Promise<void> {
   loadEnv({ path: resolve(process.cwd(), '../../.env'), quiet: true });
   const corsOptions = createCorsOptions();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(
+    AppModule,
+    process.env.NODE_ENV === 'production'
+      ? { logger: new ConsoleLogger({ json: true, colors: false, compact: true }) }
+      : undefined,
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({

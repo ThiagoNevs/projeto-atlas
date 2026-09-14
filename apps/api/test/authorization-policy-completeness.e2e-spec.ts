@@ -56,8 +56,12 @@ describe('authorization policy completeness', () => {
       }
     }
 
-    expect(handlers).toHaveLength(45);
-    expect(publicHandlers).toEqual(['HealthController.check (/)']);
+    expect(handlers).toHaveLength(47);
+    expect(publicHandlers).toEqual([
+      'HealthController.check (/)',
+      'HealthController.checkLive (live)',
+      'HealthController.checkReady (ready)',
+    ]);
     expect(missingOrAmbiguous).toEqual([]);
   });
 });
