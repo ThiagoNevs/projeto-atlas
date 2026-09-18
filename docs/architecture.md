@@ -57,6 +57,18 @@ O issuer em `tests/auth/test-oidc-provider.mjs` usa `oidc-provider`, chaves e st
 serve apenas aos testes locais/CI. Não é componente de produção. O Browser E2E executa o redirect e
 PKCE reais; os E2E de API usam tokens realmente assinados pelo mesmo boundary de verificação.
 
+### Referências de segredo
+
+O módulo interno `secrets` separa referência de material secreto. O Atlas não persiste o valor, não o
+expõe por HTTP e não o envia a `AuditLog` ou logging operacional. O provider inicial `ENV` resolve
+somente chaves lógicas validadas sob o namespace `ATLAS_SECRET_`, no momento do uso e sem cache da
+aplicação. O provisionamento é out-of-band.
+
+O wrapper `ResolvedSecret` exige consumo deliberado e é redigido em string, JSON e inspeção. Isso
+reduz exposição acidental, mas strings JavaScript não podem ser zeroizadas de forma confiável.
+Provider `FILE`, cofres externos, referências persistentes, APIs de administração, rotação gerenciada,
+Service Actors e connectors continuam futuros. Consulte [ADR-016](adr/016-secret-references.md).
+
 ### Conflitos
 
 Reaparecimento de ativos encerrados e identidades de rede contraditórias são representados como
@@ -83,6 +95,7 @@ sem tráfego real, e usa o mesmo núcleo de ativos, evidências, interfaces, tim
 O RBAC granular é configurado por mapping OIDC e não é persistido no banco. Ainda não existem
 multi-tenant produtivo, service principals, conectores externos, filas, métricas, tracing distribuído,
 Collector real ou descoberta ativa de rede. Também permanecem fora do escopo refresh token, BFF,
-CSP geral e rate limiting. O contexto operacional HTTP, logging estruturado e readiness do PostgreSQL
+CSP geral, rate limiting e gestão produtiva do lifecycle de credenciais. O contexto operacional HTTP,
+logging estruturado e readiness do PostgreSQL
 estão descritos em [operational-context.md](operational-context.md). Consulte
 [technical-risks.md](technical-risks.md) e [roadmap.md](roadmap.md).

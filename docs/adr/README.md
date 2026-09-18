@@ -18,6 +18,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 - [ADR-011 — Deploy comercial Dedicated-first](011-dedicated-first.md) — Accepted — estratégia inicial de deployment dedicado.
 - [ADR-014 — Princípios de correlação de identidade](014-identity-correlation.md) — Accepted — matching explicável e sem forced match.
 - [ADR-015 — Explicabilidade de confiança](015-trust-explainability.md) — Accepted — direção de avaliação explicável, não contrato final.
+- [ADR-016 — Referências de segredo e propriedade externa](016-secret-references.md) — Accepted — material secreto externo e resolução interna allowlisted.
 
 ## Proposed decisions
 
@@ -26,7 +27,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 
 ## Decision backlog
 
-- Secrets e credential management/rotação.
+- Gestão persistente, lifecycle e rotação operacional de credential references.
 - Run IDs e sua relação futura com request/correlation IDs já implementados no contexto HTTP.
 - Retenção e classificação de Evidence.
 - Retenção de AuditLog.

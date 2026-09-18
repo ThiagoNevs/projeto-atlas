@@ -117,7 +117,7 @@ Architecture Decision Records
 ↓
 Operational Context Foundation
 ↓
-Secrets / Credential References
+Secrets / Credential References       ✅ foundation interna ENV
 ↓
 Trusted Service Actors
 ↓
@@ -142,3 +142,7 @@ Trust Engine
 
 Essa sequência não cria uma fila, connector, Service Actor, Identity Engine ou Trust Engine por si só;
 cada etapa depende de requisitos, threat model e autorização próprios.
+
+A foundation de secrets separa referência e material secreto, usa provisionamento out-of-band e não
+inclui persistência, API, UI, rotação gerenciada, provider `FILE` ou cofre externo. Secret scanning no
+CI permanece gate obrigatório antes da primeira credencial operacional.

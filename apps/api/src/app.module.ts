@@ -21,6 +21,7 @@ import {
 import { NetworkDiscoveryModule } from './network-discovery/network-discovery.module';
 import { OperationalContextModule } from './operational-context/operational-context.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SecretsModule } from './secrets/secrets.module';
 import { TimelineModule } from './timeline/timeline.module';
 
 @Module({
@@ -41,6 +42,7 @@ import { TimelineModule } from './timeline/timeline.module';
     AuditLogsModule,
     DataQualityModule,
     DataSourcesModule,
+    SecretsModule,
   ],
   controllers: [HealthController],
   providers: [
