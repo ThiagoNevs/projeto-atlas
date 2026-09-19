@@ -303,6 +303,9 @@ frontend.
 - Listagens de Network Discovery sem paginação.
 - Sem métricas, tracing distribuído, OpenTelemetry ou integração SIEM.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
+- O workflow dedicado de secret scanning usa Gitleaks fixado, checksum verificado, ranges explícitos
+  e falha fechada. Ele ainda não encerra o gate operacional até passar na CI remota e ser configurado
+  como check obrigatório da `main`; nenhuma credencial operacional pode ser introduzida antes disso.
 - Fundação interna de referências de segredo disponível com provider `ENV` restrito, sem persistência,
   API, UI, cache ou gestão produtiva do lifecycle das credenciais.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.
