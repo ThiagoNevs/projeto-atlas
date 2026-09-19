@@ -8,6 +8,10 @@ readonly SCAN_SCRIPT="${PROJECT_ROOT}/.github/scripts/secret-scan.sh"
 readonly INSTALL_SCRIPT="${PROJECT_ROOT}/.github/scripts/install-gitleaks.sh"
 readonly CONFIG_PATH="${PROJECT_ROOT}/.gitleaks.toml"
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=install-gitleaks.sh
+source "${INSTALL_SCRIPT}"
+
 temporary_root="$(mktemp -d)"
 
 cleanup() {
@@ -81,7 +85,49 @@ expect_failure() {
   [[ "${actual}" -ne 0 ]] || fail "expected a blocking failure"
 }
 
+write_version_scanner() {
+  local target="$1"
+  local version_output="$2"
+  local exit_code="${3:-0}"
+  local quoted_output
+
+  printf -v quoted_output '%q' "${version_output}"
+  printf '#!/usr/bin/env bash\nprintf "%%s" %s\nexit %s\n' \
+    "${quoted_output}" "${exit_code}" > "${target}"
+  chmod 0755 "${target}"
+}
+
+expect_version_validation_failure() {
+  local version_output="$1"
+  local scanner="${temporary_root}/invalid-version-gitleaks"
+
+  write_version_scanner "${scanner}" "${version_output}"
+  expect_status 1 validate_gitleaks_version "${scanner}"
+}
+
 runtime_secret="$(synthetic_secret)"
+
+# The official v8.30.1 Linux binary prints a bare semantic version followed by
+# a newline. The parser also tolerates an optional presentation-only `v` prefix
+# and surrounding whitespace while rejecting mismatches and ambiguous output.
+valid_version_scanner="${temporary_root}/valid-version-gitleaks"
+write_version_scanner "${valid_version_scanner}" $'8.30.1\n'
+validate_gitleaks_version "${valid_version_scanner}"
+write_version_scanner "${valid_version_scanner}" "8.30.1"
+validate_gitleaks_version "${valid_version_scanner}"
+write_version_scanner "${valid_version_scanner}" "v8.30.1"
+validate_gitleaks_version "${valid_version_scanner}"
+write_version_scanner "${valid_version_scanner}" $' \t v8.30.1 \r\n'
+validate_gitleaks_version "${valid_version_scanner}"
+expect_version_validation_failure "8.30.0"
+expect_version_validation_failure "9.0.0"
+expect_version_validation_failure "garbage"
+expect_version_validation_failure ""
+expect_version_validation_failure $'8.30.1\n9.0.0'
+
+failing_version_scanner="${temporary_root}/failing-version-gitleaks"
+write_version_scanner "${failing_version_scanner}" "8.30.1" 19
+expect_status 1 validate_gitleaks_version "${failing_version_scanner}"
 
 # A PR scan must inspect every commit between merge-base and head, even when the
 # final tree no longer contains the generated fixture.
