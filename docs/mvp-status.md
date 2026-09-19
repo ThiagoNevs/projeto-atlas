@@ -152,9 +152,10 @@ A criação registra a investigação e a auditoria sem alterar `Asset`, `AssetA
 `NetworkInterface`, `AssetEvidence`, `Conflict`, `ConflictValue` ou `AssetEvent`. O ator
 de novas operações é um `CurrentActor` derivado do token OIDC validado. Autores históricos
 `atlas-mvp-user` permanecem intactos. O gate `atlas:access` permanece independente do RBAC granular.
-Roles externas exatas são mapeadas para Viewer, Analyst e Admin e então para permissions tipadas;
-controllers aplicam policies por permission, com runtime e teste de completude fail-closed. Isolamento
-multi-tenant ainda não existe.
+Para HUMAN, roles externas exatas são mapeadas para Viewer, Analyst e Admin e então para permissions
+tipadas. SERVICE usa mapping explícito separado e não herda essas roles. Controllers aplicam policies
+por permission, com runtime e teste de completude fail-closed. Isolamento multi-tenant ainda não
+existe.
 
 Agora existem consultas somente leitura em `GET /conflict-review-cases`,
 `GET /conflict-review-cases/:id` e `GET /conflict-review-cases/:id/context-comparison`. A listagem é
@@ -297,15 +298,16 @@ frontend.
 - Ambiente orientado a desenvolvimento local.
 - Sem tabela de usuários local, refresh token, silent renew ou sessão persistente do Atlas.
 - RBAC é configurado por mapping OIDC e não possui gestão persistida de usuários, roles ou permissions.
-- Service principals e autenticação machine-to-machine permanecem fora do escopo.
+- Service Actors OIDC machine-to-machine estão disponíveis por allowlist estática, binding exato de
+  client/subject, tokens de curta duração e permissions explícitas. Gestão dinâmica de principals,
+  emissão de tokens e lifecycle de credenciais permanecem fora do escopo.
 - Request ID gerado pelo servidor, correlation ID HTTP validado, logging operacional allowlisted e
   health/liveness/readiness do PostgreSQL estão implementados. Run ID de conectores permanece futuro.
 - Listagens de Network Discovery sem paginação.
 - Sem métricas, tracing distribuído, OpenTelemetry ou integração SIEM.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
-- O workflow dedicado de secret scanning usa Gitleaks fixado, checksum verificado, ranges explícitos
-  e falha fechada. Ele ainda não encerra o gate operacional até passar na CI remota e ser configurado
-  como check obrigatório da `main`; nenhuma credencial operacional pode ser introduzida antes disso.
+- O workflow dedicado de secret scanning usa Gitleaks fixado, checksum verificado, ranges explícitos,
+  falha fechada e é check obrigatório da `main`, inclusive para administradores.
 - Fundação interna de referências de segredo disponível com provider `ENV` restrito, sem persistência,
   API, UI, cache ou gestão produtiva do lifecycle das credenciais.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.

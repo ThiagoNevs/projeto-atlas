@@ -138,6 +138,14 @@ completude protege os 44 handlers autenticados atuais. O frontend consome apenas
 API continua sendo a autoridade. HTTP 403 não encerra a sessão, enquanto HTTP 401 preserva o fluxo de
 reautenticação existente.
 
+Integrações machine-to-machine usam access tokens JWT obtidos do IdP por OAuth 2.0 Client
+Credentials. A API permanece apenas resource server: ela não recebe client secret nem private key.
+Registrations SERVICE são uma allowlist estática em `AUTH_SERVICE_ACTORS_JSON`, com `clientId`,
+`subject`, `displayName` seguro e permissions explícitas; elas devem ser disjuntas do client humano.
+`AUTH_SERVICE_TOKEN_MAX_LIFETIME_SECONDS` limita o lifetime aceito. Roles humanas não concedem
+permissions a SERVICE e `atlas:access` continua obrigatório no token. O exemplo vazio em
+`.env.example` não registra nenhum principal nem contém credencial.
+
 ```text
 atlas:access
 inventory:read | inventory:maintain | inventory:status:update | inventory:import | inventory:export

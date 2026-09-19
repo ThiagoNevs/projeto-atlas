@@ -156,8 +156,10 @@ Cada registro de auditoria deve conter, sempre que aplicável:
 - Data/hora.
 - Metadados relevantes.
 
-As ações humanas auditadas usam o `CurrentActor` derivado de uma identidade OIDC validada. Identidades
-de Service Actors para operações machine-to-machine ainda são uma decisão e implementação futuras.
+As ações auditadas usam o `CurrentActor` derivado de uma identidade OIDC validada. Atores humanos e
+Service Actors possuem registrations disjuntas, IDs namespaced e autorização pela mesma fronteira
+default-deny. Service Actors usam JWT de curta duração emitido pelo IdP via Client Credentials,
+permissions explícitas próprias e nunca herdam roles humanas ou bypass de sistema.
 
 ### Eventos de domínio, auditoria e logs de segurança
 

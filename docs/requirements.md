@@ -62,8 +62,9 @@ O MVP atual contempla:
 
 ### Fora do escopo atual
 
-O MVP atual já possui autenticação corporativa OIDC para atores humanos e autorização granular por
-permissions derivadas de roles externas. Permanecem fora do escopo:
+O MVP atual já possui autenticação corporativa OIDC para atores humanos, autenticação Client
+Credentials para Service Actors allowlisted e autorização granular por permissions. Permanecem fora
+do escopo:
 
 - Multi-tenant real.
 - Conectores reais com Microsoft Intune, Defender ou Entra ID.
@@ -205,7 +206,7 @@ Ao alterar, o sistema deve:
 - Registrar status anterior.
 - Registrar novo status.
 - Registrar data/hora.
-- Registrar o `CurrentActor` derivado da identidade OIDC humana validada.
+- Registrar o `CurrentActor` derivado da identidade OIDC validada.
 
 ---
 
@@ -495,8 +496,10 @@ Cada auditoria deve conter:
 - Comentário.
 - Data/hora.
 
-No MVP, o ator humano é derivado do `CurrentActor` associado à identidade OIDC validada. Autenticação
-de Service Actors e identidades machine-to-machine permanecem planejadas.
+No MVP, HUMAN e SERVICE são derivados de access tokens OIDC validados e projetados em `CurrentActor`.
+Service Actors exigem registration explícita e disjunta, binding exato entre client e subject,
+lifetime limitado, `atlas:access` no token e permissions próprias; roles humanas não os autorizam.
+O Atlas atua apenas como resource server e não recebe a credencial privada do client.
 
 ---
 
@@ -574,7 +577,7 @@ Exemplos:
 - Audit.
 - Network Discovery.
 - Connectors.
-- Auth com OIDC humano, `CurrentActor` e autorização por permissions.
+- Auth OIDC para HUMAN e SERVICE, `CurrentActor` e autorização por permissions.
 
 Essa separação deve facilitar manutenção, evolução e testes.
 
@@ -598,7 +601,7 @@ O MVP não precisa nascer com arquitetura distribuída, mas deve permitir evolu�
 - Collector real.
 - Multi-tenant.
 - Observabilidade.
-- Autenticação corporativa completa para Service Actors e operação multi-tenant.
+- Lifecycle administrativo de Service Actors, workload federation e operação multi-tenant.
 - Integrações reais.
 
 ---
@@ -813,7 +816,7 @@ O MVP possui limitações conhecidas:
 - Possui tela dedicada de auditoria; exportações da própria trilha e retenção formal permanecem futuras.
 - Exportação CSV existe para Qualidade dos Dados; exportação da trilha de auditoria permanece futura.
 - Não possui dashboard executivo.
-- O ator humano de auditoria é derivado do OIDC validado; Service Actors ainda não existem.
+- A autoria de auditoria deriva do OIDC validado e distingue HUMAN de SERVICE por IDs namespaced.
 - Algumas tipagens do frontend podem duplicar enums da API manualmente.
 
 ---
