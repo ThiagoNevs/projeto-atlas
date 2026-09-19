@@ -4,6 +4,7 @@ import { oidcActorId } from './actor-id';
 import { AuthConfig } from './auth.config';
 import { ATLAS_ACCESS_PERMISSION, type AtlasPermission, type CurrentActor } from './auth.types';
 import { permissionsForExternalRoles } from './role-mapping';
+import type { JWTPayload } from 'jose';
 
 export class AuthenticationInvalidError extends Error {}
 export class AuthenticationInfrastructureError extends Error {}
@@ -40,33 +41,44 @@ export class AuthTokenVerifier {
           requiredClaims: ['iss', 'sub', 'aud', 'exp'],
         },
       );
+      rejectCallerProvidedActorClassification(result.payload);
       const subject = result.payload.sub;
       if (!subject) throw new AuthenticationInvalidError();
-      const clientId = result.payload.azp ?? result.payload.client_id;
-      if (clientId !== this.config.humanClientId) throw new AuthenticationInvalidError();
-
       const roles = claimValues(result.payload[this.config.roleClaim]);
       const hasAccess = roles?.some((role) => this.config.accessValues.has(role)) ?? false;
       const permissions = new Set<AtlasPermission>();
-      if (hasAccess) {
-        permissions.add(ATLAS_ACCESS_PERMISSION);
-        for (const permission of permissionsForExternalRoles(
-          roles ?? [],
-          this.config.externalRoleMapping,
-        )) {
-          permissions.add(permission);
-        }
-      }
-      const displayName =
-        typeof result.payload.name === 'string' && result.payload.name.length <= 200
-          ? result.payload.name
-          : undefined;
+      if (hasAccess) permissions.add(ATLAS_ACCESS_PERMISSION);
 
+      const clientId = exactClientId(result.payload);
+      if (clientId === this.config.humanClientId) {
+        if (hasAccess) {
+          for (const permission of permissionsForExternalRoles(
+            roles ?? [],
+            this.config.externalRoleMapping,
+          )) {
+            permissions.add(permission);
+          }
+        }
+        const displayName = safeDisplayName(result.payload.name);
+        return {
+          id: oidcActorId('HUMAN', this.config.issuer, subject),
+          kind: 'HUMAN',
+          permissions,
+          ...(displayName ? { displayName } : {}),
+        };
+      }
+
+      const registration = this.config.serviceActors.findByClientId(clientId);
+      if (!registration || registration.subject !== subject) {
+        throw new AuthenticationInvalidError();
+      }
+      validateServiceTemporalClaims(result.payload, this.config);
+      for (const permission of registration.permissions) permissions.add(permission);
       return {
-        id: oidcActorId('HUMAN', this.config.issuer, subject),
-        kind: 'HUMAN',
+        id: oidcActorId('SERVICE', this.config.issuer, subject),
+        kind: 'SERVICE',
         permissions,
-        ...(displayName ? { displayName } : {}),
+        displayName: registration.displayName,
       };
     } catch (error) {
       if (error instanceof AuthenticationInfrastructureError) throw error;
@@ -113,6 +125,52 @@ export class AuthTokenVerifier {
       throw new AuthenticationInfrastructureError();
     }
   }
+}
+
+function exactClientId(payload: JWTPayload): string {
+  const authorizedParty = payload.azp;
+  const clientId = payload.client_id;
+  if (authorizedParty !== undefined && typeof authorizedParty !== 'string') {
+    throw new AuthenticationInvalidError();
+  }
+  if (clientId !== undefined && typeof clientId !== 'string') {
+    throw new AuthenticationInvalidError();
+  }
+  if (authorizedParty && clientId && authorizedParty !== clientId) {
+    throw new AuthenticationInvalidError();
+  }
+  const resolved = authorizedParty ?? clientId;
+  if (!resolved) throw new AuthenticationInvalidError();
+  return resolved;
+}
+
+function rejectCallerProvidedActorClassification(payload: JWTPayload): void {
+  for (const claim of ['kind', 'actorKind', 'actor_type', 'actorType', 'service']) {
+    if (Object.hasOwn(payload, claim)) throw new AuthenticationInvalidError();
+  }
+}
+
+function validateServiceTemporalClaims(payload: JWTPayload, config: AuthConfig): void {
+  const { iat, nbf, exp } = payload;
+  if (![iat, nbf, exp].every((value) => Number.isInteger(value))) {
+    throw new AuthenticationInvalidError();
+  }
+  const issuedAt = iat as number;
+  const notBefore = nbf as number;
+  const expiresAt = exp as number;
+  const now = Math.floor(Date.now() / 1_000);
+  if (
+    issuedAt > now + config.clockToleranceSeconds ||
+    expiresAt <= issuedAt ||
+    notBefore > expiresAt ||
+    expiresAt - issuedAt > config.serviceTokenMaxLifetimeSeconds
+  ) {
+    throw new AuthenticationInvalidError();
+  }
+}
+
+function safeDisplayName(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 200 ? value : undefined;
 }
 
 function validDiscoveredJwksUri(value: string, issuer: string): string {
