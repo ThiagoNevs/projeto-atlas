@@ -16,8 +16,11 @@ export const TEST_AUTH_ACCESS_VALUE = 'atlas-user';
 export const TEST_AUTH_VIEWER_ROLE = 'atlas-viewer';
 export const TEST_AUTH_ANALYST_ROLE = 'atlas-analyst';
 export const TEST_AUTH_ADMIN_ROLE = 'atlas-admin';
+export const TEST_AUTH_SERVICE_CLIENT_ID = 'atlas-service';
+export const TEST_AUTH_SERVICE_SUBJECT = 'atlas-test-service';
+export const TEST_AUTH_SERVICE_DISPLAY_NAME = 'Atlas Test Service';
 
-interface TestTokenOptions {
+export interface TestTokenOptions {
   subject?: string;
   audience?: string;
   issuer?: string;
@@ -25,6 +28,13 @@ interface TestTokenOptions {
   roles?: unknown;
   expiresInSeconds?: number;
   notBeforeSeconds?: number;
+  issuedAtSeconds?: number;
+  omitIssuedAt?: boolean;
+  omitNotBefore?: boolean;
+  omitClientId?: boolean;
+  clientIdClaim?: 'azp' | 'client_id' | 'both';
+  secondaryClientId?: string;
+  additionalClaims?: Readonly<Record<string, unknown>>;
   name?: string;
   signingKey?: KeyObject | webcrypto.CryptoKey | Uint8Array;
   keyId?: string;
@@ -90,6 +100,15 @@ export async function startTestAuthHarness(): Promise<TestAuthHarness> {
   process.env.AUTH_ADMIN_ROLE_VALUES = TEST_AUTH_ADMIN_ROLE;
   process.env.AUTH_ALLOWED_ALGORITHMS = 'RS256';
   process.env.AUTH_CLOCK_TOLERANCE_SECONDS = '0';
+  process.env.AUTH_SERVICE_TOKEN_MAX_LIFETIME_SECONDS = '300';
+  process.env.AUTH_SERVICE_ACTORS_JSON = JSON.stringify([
+    {
+      clientId: TEST_AUTH_SERVICE_CLIENT_ID,
+      subject: TEST_AUTH_SERVICE_SUBJECT,
+      displayName: TEST_AUTH_SERVICE_DISPLAY_NAME,
+      permissions: [ATLAS_PERMISSIONS.inventoryRead, ATLAS_PERMISSIONS.discoveryConfigure],
+    },
+  ]);
   process.env.AUTH_JWKS_URI = `${issuer}/jwks`;
 
   const actor: CurrentActor = {
@@ -101,25 +120,35 @@ export async function startTestAuthHarness(): Promise<TestAuthHarness> {
 
   async function issueToken(options: TestTokenOptions = {}): Promise<string> {
     const now = Math.floor(Date.now() / 1_000);
+    const issuedAt = options.issuedAtSeconds ?? now;
     const algorithm = options.algorithm ?? 'RS256';
     const signingKey =
       options.signingKey ??
       (algorithm === 'HS256'
         ? new TextEncoder().encode('test-only-invalid-algorithm-secret')
         : privateKey);
-    return new jose.SignJWT({
+    const claims: Record<string, unknown> = {
       groups: options.roles ?? [TEST_AUTH_ACCESS_VALUE, TEST_AUTH_ADMIN_ROLE],
       name: options.name ?? 'Atlas Test User',
-      azp: options.clientId ?? TEST_AUTH_CLIENT_ID,
-    })
+      ...options.additionalClaims,
+    };
+    if (!options.omitClientId) {
+      const clientId = options.clientId ?? TEST_AUTH_CLIENT_ID;
+      const claim = options.clientIdClaim ?? 'azp';
+      if (claim === 'azp' || claim === 'both') claims.azp = clientId;
+      if (claim === 'client_id') claims.client_id = clientId;
+      if (claim === 'both') claims.client_id = options.secondaryClientId ?? clientId;
+    }
+    let token = new jose.SignJWT(claims)
       .setProtectedHeader({ alg: algorithm, kid: options.keyId ?? keyId, typ: 'JWT' })
       .setIssuer(options.issuer ?? issuer)
       .setSubject(options.subject ?? TEST_AUTH_SUBJECT)
-      .setAudience(options.audience ?? TEST_AUTH_AUDIENCE)
-      .setIssuedAt(now)
-      .setNotBefore(now + (options.notBeforeSeconds ?? 0))
-      .setExpirationTime(now + (options.expiresInSeconds ?? 300))
-      .sign(signingKey);
+      .setAudience(options.audience ?? TEST_AUTH_AUDIENCE);
+    if (!options.omitIssuedAt) token = token.setIssuedAt(issuedAt);
+    if (!options.omitNotBefore) {
+      token = token.setNotBefore(now + (options.notBeforeSeconds ?? 0));
+    }
+    return token.setExpirationTime(issuedAt + (options.expiresInSeconds ?? 300)).sign(signingKey);
   }
 
   return {

@@ -16,6 +16,8 @@ import {
   startTestAuthHarness,
   TEST_AUTH_ACCESS_VALUE,
   TEST_AUTH_ANALYST_ROLE,
+  TEST_AUTH_SERVICE_CLIENT_ID,
+  TEST_AUTH_SERVICE_SUBJECT,
   TEST_AUTH_VIEWER_ROLE,
   type TestAuthHarness,
 } from './auth-test-harness';
@@ -104,6 +106,7 @@ describe('Privileged operation audit coverage (PostgreSQL e2e)', () => {
   let admin: ReturnType<typeof request.agent>;
   let analyst: ReturnType<typeof request.agent>;
   let viewer: ReturnType<typeof request.agent>;
+  let service: ReturnType<typeof request.agent>;
   let prisma: AuditFaultInjectingPrismaService;
   let dataQuality: DataQualityService;
 
@@ -162,9 +165,19 @@ describe('Privileged operation audit coverage (PostgreSQL e2e)', () => {
       subject: viewerSubject,
       roles: [TEST_AUTH_ACCESS_VALUE, TEST_AUTH_VIEWER_ROLE],
     });
+    const serviceToken = await auth.issueToken({
+      clientId: TEST_AUTH_SERVICE_CLIENT_ID,
+      subject: TEST_AUTH_SERVICE_SUBJECT,
+      roles: [TEST_AUTH_ACCESS_VALUE, TEST_AUTH_ANALYST_ROLE],
+      additionalClaims: {
+        raw_subject_copy: TEST_AUTH_SERVICE_SUBJECT,
+        credential: 'test-only-sensitive-claim',
+      },
+    });
     admin = await auth.createAuthenticatedAgent(app);
     analyst = await auth.createAuthenticatedAgent(app, analystToken);
     viewer = await auth.createAuthenticatedAgent(app, viewerToken);
+    service = await auth.createAuthenticatedAgent(app, serviceToken);
     prisma = app.get<AuditFaultInjectingPrismaService>(PrismaService);
     dataQuality = app.get(DataQualityService);
   });
@@ -223,6 +236,31 @@ describe('Privileged operation audit coverage (PostgreSQL e2e)', () => {
       scheduleExpression: null,
       methods: ['ICMP_SIMULATED', 'DNS_REVERSE_SIMULATED'],
     });
+  });
+
+  it('persists safe SERVICE provenance for an authorized audited operation', async () => {
+    const response = await service
+      .post('/network-discovery/profiles')
+      .send(profilePayload(`audit-service-${runId}`))
+      .expect(201);
+    const profileId = (response.body as { id: string }).id;
+    profileIds.add(profileId);
+
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { entityId: profileId, action: 'NETWORK_DISCOVERY_PROFILE_CREATED' },
+    });
+    expect(audit).toEqual(
+      expect.objectContaining({
+        actorId: oidcActorId('SERVICE', auth.issuer, TEST_AUTH_SERVICE_SUBJECT),
+        actorType: 'SERVICE',
+        entityType: 'NetworkDiscoveryProfile',
+        entityId: profileId,
+      }),
+    );
+    const serialized = JSON.stringify(audit);
+    expect(serialized).not.toContain(TEST_AUTH_SERVICE_SUBJECT);
+    expect(serialized).not.toContain(TEST_AUTH_SERVICE_CLIENT_ID);
+    expect(serialized).not.toContain('test-only-sensitive-claim');
   });
 
   it('audits profile update with complete before and after snapshots', async () => {
