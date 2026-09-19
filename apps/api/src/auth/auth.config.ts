@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { createExternalRoleMapping, type AtlasRole } from './role-mapping';
+import { ServiceActorPolicy } from './service-actor-policy';
 
 const SAFE_ALGORITHMS = new Set(['RS256', 'PS256', 'ES256', 'EdDSA']);
 
@@ -56,6 +57,13 @@ export class AuthConfig {
     .map((value) => value.trim())
     .filter(Boolean);
   readonly clockToleranceSeconds = Number(process.env.AUTH_CLOCK_TOLERANCE_SECONDS ?? '60');
+  readonly serviceTokenMaxLifetimeSeconds = Number(
+    process.env.AUTH_SERVICE_TOKEN_MAX_LIFETIME_SECONDS ?? '300',
+  );
+  readonly serviceActors = ServiceActorPolicy.fromEnvironment(
+    process.env.AUTH_SERVICE_ACTORS_JSON,
+    this.humanClientId,
+  );
   readonly jwksUri = process.env.AUTH_JWKS_URI?.trim()
     ? validUrl('AUTH_JWKS_URI', process.env.AUTH_JWKS_URI.trim())
     : undefined;
@@ -73,6 +81,13 @@ export class AuthConfig {
       this.clockToleranceSeconds > 300
     ) {
       throw new Error('AUTH_CLOCK_TOLERANCE_SECONDS deve ser inteiro entre 0 e 300.');
+    }
+    if (
+      !Number.isInteger(this.serviceTokenMaxLifetimeSeconds) ||
+      this.serviceTokenMaxLifetimeSeconds < 60 ||
+      this.serviceTokenMaxLifetimeSeconds > 3600
+    ) {
+      throw new Error('AUTH_SERVICE_TOKEN_MAX_LIFETIME_SECONDS deve ser inteiro entre 60 e 3600.');
     }
   }
 }

@@ -22,6 +22,9 @@ método, template da rota, status, duração, ator seguro, permission exigida e 
 de erro quando aplicáveis. Em produção, o `ConsoleLogger` do NestJS 11 escreve JSON; o record pode
 aparecer aninhado em `message`.
 
+Quando a autenticação é concluída, o evento final inclui somente `actorKind` e o `actorId`
+namespaced. Isso vale para HUMAN e SERVICE e não expõe issuer, subject, client ID ou claims.
+
 Não são copiados para esses logs URL completa, query string, body, headers, cookies, tokens,
 credenciais, secrets ou claims OIDC. Falhas de autenticação e autorização geram telemetria segura,
 mas não criam `AuditLog`. Operações privilegiadas concluídas preservam a auditoria de domínio já
@@ -45,6 +48,5 @@ geram `WARN` sanitizado, sem detalhes de conexão.
 ## Limites atuais
 
 Esta fundação não implementa métricas, tracing distribuído, W3C Trace Context, OpenTelemetry, SIEM,
-Service Actors, conectores ou filas. Uma execução futura poderá carregar um `connectorRunId`, mas ele
-não integra o contexto HTTP atual e deverá manter distinção entre request, correlation, run, trace e
-span IDs.
+conectores ou filas. Uma execução futura poderá carregar um `connectorRunId`, mas ele não integra o
+contexto HTTP atual e deverá manter distinção entre request, correlation, run, trace e span IDs.

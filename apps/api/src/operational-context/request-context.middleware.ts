@@ -4,12 +4,14 @@ import { performance } from 'node:perf_hooks';
 import { OperationalLogger } from './operational-logger.service';
 import { RequestContextService } from './request-context.service';
 import { resolveRequestContext } from './request-context.types';
+import type { CurrentActor } from '../auth/auth.types';
 
 interface OperationalRequest {
   readonly headers: Record<string, string | string[] | undefined>;
   readonly method?: string;
   readonly baseUrl?: string;
   readonly route?: { readonly path?: string };
+  readonly currentActor?: CurrentActor;
 }
 
 interface OperationalResponse {
@@ -44,6 +46,7 @@ export class RequestContextMiddleware implements NestMiddleware {
         if (emitted) return;
         emitted = true;
 
+        const actor = request.currentActor;
         const record = {
           event,
           requestId,
@@ -52,6 +55,7 @@ export class RequestContextMiddleware implements NestMiddleware {
           route: routeTemplate(request),
           statusCode: response.statusCode,
           durationMs: Math.max(0, Math.round((performance.now() - startedAt) * 1000) / 1000),
+          ...(actor === undefined ? {} : { actorKind: actor.kind, actorId: actor.id }),
         } as const;
 
         if (event === 'http.request.aborted') {
