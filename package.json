@@ -28,7 +28,8 @@
     "db:format": "corepack pnpm --filter @atlas/api prisma:format",
     "db:migrate": "corepack pnpm --filter @atlas/api prisma:migrate",
     "db:seed": "corepack pnpm --filter @atlas/api prisma:seed",
-    "db:studio": "corepack pnpm --filter @atlas/api prisma:studio"
+    "db:studio": "corepack pnpm --filter @atlas/api prisma:studio",
+    "connector-execution:migrate": "corepack pnpm --filter @atlas/api connector-execution:migrate"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

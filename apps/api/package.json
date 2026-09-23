@@ -14,7 +14,8 @@
     "prisma:format": "prisma format",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "connector-execution:migrate": "tsx scripts/migrate-connector-execution.ts"
   },
   "dependencies": {
     "@atlas/shared": "workspace:*",
@@ -28,6 +29,7 @@
     "exceljs": "^4.4.0",
     "jose": "6.2.10",
     "pg": "^8.16.3",
+    "pg-boss": "12.33.6",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "yauzl": "^3.4.0"
