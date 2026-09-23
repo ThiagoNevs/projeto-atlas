@@ -1,5 +1,14 @@
 # Estado atual do MVP
 
+## Connector Execution Foundation
+
+A fundação de execução durável aprovada pela ADR-012 está implementada com `pg-boss@12.33.6`,
+runtime `migrate:false`, migration operacional explícita, envelope versionado/limitado, fronteira
+`SecretReference != SecretMaterial`, enqueue transacional via `fromPrisma(tx)` e readiness integrado.
+
+Isso ainda não implementa Connector Framework ou conectores reais. O gate de estabilização e revisão
+para go-live produtivo permanece pendente e deve ser satisfeito explicitamente antes de deployment.
+
 ## Visão geral
 
 O MVP técnico do Atlas está funcional de ponta a ponta em ambiente local. Ele demonstra como
