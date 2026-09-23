@@ -6,6 +6,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AssetsModule } from './assets/assets.module';
 import { ConflictsModule } from './conflicts/conflicts.module';
 import { ConflictAnalysisModule } from './conflict-analysis/conflict-analysis.module';
+import { ConnectorExecutionModule } from './connector-execution/connector-execution.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DataQualityModule } from './data-quality/data-quality.module';
 import { DataSourcesModule } from './data-sources/data-sources.module';
@@ -29,6 +30,7 @@ import { TimelineModule } from './timeline/timeline.module';
     OperationalContextModule,
     AuthModule,
     PrismaModule,
+    ConnectorExecutionModule,
     IngestionModule,
     AssetsModule,
     EvidencesModule,
