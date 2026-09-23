@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import { ConnectorExecutionService } from '../src/connector-execution/connector-execution.service';
 import { HealthController } from '../src/health.controller';
 import {
   HEALTH_READINESS_TIMEOUT_MS,
@@ -113,6 +114,20 @@ describe('health readiness failure boundaries', () => {
     }
   });
 
+  it('returns 503 when enabled Connector Execution is not ready', async () => {
+    const query = jest.fn<() => Promise<unknown>>().mockResolvedValue([{ '?column?': 1 }]);
+    const fixture = await createHealthFixture(query, 100, () => Promise.resolve(false));
+
+    try {
+      await request(serverOf(fixture.app)).get('/health/ready').expect(503, {
+        status: 'not_ready',
+      });
+      expect(query).toHaveBeenCalledTimes(1);
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
   it('times out at the HTTP boundary while retaining one underlying single-flight probe', async () => {
     const firstProbe = deferred<unknown>();
     const query = jest
@@ -158,6 +173,7 @@ describe('health readiness failure boundaries', () => {
 async function createHealthFixture(
   query: () => Promise<unknown>,
   timeoutMs: number,
+  connectorReady: () => Promise<boolean> = () => Promise.resolve(true),
 ): Promise<{ app: INestApplication; logger: OperationalLogger }> {
   const module: TestingModule = await Test.createTestingModule({
     imports: [OperationalContextModule],
@@ -166,6 +182,7 @@ async function createHealthFixture(
       HealthReadinessService,
       { provide: HEALTH_READINESS_TIMEOUT_MS, useValue: timeoutMs },
       { provide: PrismaService, useValue: { $queryRaw: query } },
+      { provide: ConnectorExecutionService, useValue: { isReady: connectorReady } },
     ],
   }).compile();
   const app = module.createNestApplication();
