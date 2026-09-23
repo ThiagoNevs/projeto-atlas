@@ -16,14 +16,11 @@ adotados; `Proposed` registra direção ainda não implementada.
 - [ADR-009 — Arquitetura evidence-first](009-evidence-first.md) — Accepted — evidência e proveniência antes de estado derivado.
 - [ADR-010 — Eventos, AuditLog e Security Logs](010-events-audit-security-logs.md) — Accepted — separação de histórico, auditoria e telemetria.
 - [ADR-011 — Deploy comercial Dedicated-first](011-dedicated-first.md) — Accepted — estratégia inicial de deployment dedicado.
+- [ADR-012 — Execução de conectores](012-connector-execution.md) — Accepted — pg-boss para jobs duráveis, retryable e idempotentes no modelo Dedicated.
 - [ADR-013 — Autenticação de Service Actors](013-service-actor-authentication.md) — Accepted — OAuth 2.0 Client Credentials com JWT/JWKS, identidade SERVICE e RBAC explícito.
 - [ADR-014 — Princípios de correlação de identidade](014-identity-correlation.md) — Accepted — matching explicável e sem forced match.
 - [ADR-015 — Explicabilidade de confiança](015-trust-explainability.md) — Accepted — direção de avaliação explicável, não contrato final.
 - [ADR-016 — Referências de segredo e propriedade externa](016-secret-references.md) — Accepted — material secreto externo e resolução interna allowlisted.
-
-## Proposed decisions
-
-- [ADR-012 — Execução de conectores](012-connector-execution.md) — Proposed — critérios para jobs duráveis, retry e workers.
 
 ## Decision backlog
 
