@@ -159,6 +159,88 @@ describe('Connector Execution with ephemeral schemas', () => {
     expect(after).toBe(before + 1);
   });
 
+  it('reports only the oldest ready job without reading payloads or mutating jobs', async () => {
+    const observedQueue = 'atlas.test.queue-state';
+    const isolatedQueue = 'atlas.test.queue-state.other';
+    await prepareQueue(service, observedQueue, `${observedQueue}.dead`);
+    await prepareQueue(service, isolatedQueue, `${isolatedQueue}.dead`);
+
+    const empty = await service.getQueueState(observedQueue);
+    expect(empty.oldestReadyAt).toBeUndefined();
+    expect(empty.oldestReadyAgeMs).toBeUndefined();
+
+    const now = Date.now();
+    const oldestReadyAt = new Date(now - 120_000);
+    const laterReadyAt = new Date(now - 60_000);
+    const deferredCreatedAt = new Date(now - 600_000);
+    const inactiveCreatedAt = new Date(now - 900_000);
+    const otherQueueCreatedAt = new Date(now - 1_200_000);
+    const futureStart = new Date(now + 3_600_000);
+
+    const oldestId = await enqueueSynthetic(service, observedQueue, 'oldest-ready');
+    const laterId = await enqueueSynthetic(service, observedQueue, 'later-ready');
+    const deferredId = await service.enqueue(
+      observedQueue,
+      createAtlasJobEnvelope({
+        payload: { marker: 'deferred-with-older-created-on' },
+        idempotencyKey: `queue-state:${randomUUID()}`,
+        maxBytes: 4096,
+      }),
+      { startAfter: futureStart },
+    );
+    const completedId = await enqueueSynthetic(service, observedQueue, 'completed');
+    const failedId = await enqueueSynthetic(service, observedQueue, 'failed');
+    const otherQueueId = await enqueueSynthetic(service, isolatedQueue, 'other-queue');
+
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, oldestId, {
+      createdOn: oldestReadyAt,
+      state: 'created',
+    });
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, laterId, {
+      createdOn: laterReadyAt,
+      state: 'retry',
+    });
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, deferredId, {
+      createdOn: deferredCreatedAt,
+      startAfter: futureStart,
+      state: 'created',
+    });
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, completedId, {
+      createdOn: inactiveCreatedAt,
+      state: 'completed',
+    });
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, failedId, {
+      createdOn: inactiveCreatedAt,
+      state: 'failed',
+    });
+    await setJobMetadata(observerBoss, queueSchema, isolatedQueue, otherQueueId, {
+      createdOn: otherQueueCreatedAt,
+      state: 'created',
+    });
+
+    const before = await observerBoss.getJobById(observedQueue, oldestId);
+    const state = await service.getQueueState(observedQueue);
+    const after = await observerBoss.getJobById(observedQueue, oldestId);
+
+    expect(state.oldestReadyAt).toBe(oldestReadyAt.toISOString());
+    expect(state.oldestReadyAgeMs).toBeGreaterThanOrEqual(120_000);
+    expect(state.oldestReadyAgeMs).toBeLessThan(130_000);
+    expect(Object.keys(state).sort()).toEqual(
+      [
+        'active',
+        'capturedAt',
+        'failed',
+        'oldestReadyAgeMs',
+        'oldestReadyAt',
+        'queueName',
+        'queued',
+        'total',
+      ].sort(),
+    );
+    expect(after?.state).toBe(before?.state);
+    expect(after?.id).toBe(before?.id);
+  });
+
   it('commits a domain write and enqueue in the same Prisma transaction', async () => {
     const id = randomUUID();
     const before = await countJobs(observerBoss, queueName);
@@ -422,6 +504,53 @@ async function prepareQueue(
 
 async function countJobs(boss: PgBoss, queueName: string, queued = false): Promise<number> {
   return (await boss.findJobs(queueName, { queued })).length;
+}
+
+async function enqueueSynthetic(
+  service: ConnectorExecutionService,
+  queueName: string,
+  marker: string,
+): Promise<string> {
+  return service.enqueue(
+    queueName,
+    createAtlasJobEnvelope({
+      payload: { marker },
+      idempotencyKey: `queue-state:${randomUUID()}`,
+      maxBytes: 4096,
+    }),
+  );
+}
+
+async function setJobMetadata(
+  boss: PgBoss,
+  schema: string,
+  queueName: string,
+  jobId: string,
+  input: {
+    readonly createdOn: Date;
+    readonly startAfter?: Date;
+    readonly state: 'created' | 'retry' | 'completed' | 'failed';
+  },
+): Promise<void> {
+  const queue = await boss.getQueue(queueName);
+  if (!queue) throw new Error('Queue is unavailable in test fixture.');
+  const schemaIdentifier = quoteTestIdentifier(schema);
+  const tableIdentifier = quoteTestIdentifier(queue.table);
+  await boss.getDb().executeSql(
+    `UPDATE ${schemaIdentifier}.${tableIdentifier}
+     SET created_on = $3,
+         start_after = COALESCE($4, start_after),
+         state = $5
+     WHERE name = $1 AND id = $2::uuid`,
+    [queueName, jobId, input.createdOn, input.startAfter ?? null, input.state],
+  );
+}
+
+function quoteTestIdentifier(identifier: string): string {
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(identifier)) {
+    throw new Error('Invalid test database identifier.');
+  }
+  return `"${identifier}"`;
 }
 
 function uniqueName(prefix: string): string {

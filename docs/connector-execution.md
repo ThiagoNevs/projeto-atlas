@@ -69,6 +69,14 @@ Callers dependem de `ConnectorExecutionService`, não de `PgBoss`. A interface A
 - cancelamento antes/na semântica suportada pelo pg-boss e redrive controlado;
 - estado seguro de fila para métricas futuras.
 
+O estado interno inclui `oldestReadyAt` e `oldestReadyAgeMs` somente quando há job em
+`created`/`retry` já elegível para execução (`start_after` alcançado e não bloqueado). Jobs deferred,
+bloqueados, ativos, concluídos ou falhos não distorcem essa idade. Fila sem job pronto omite ambos os
+campos; zero nunca significa ausência. A consulta é um agregado parametrizado, restrito à fila e sem
+leitura de payload. Como o pg-boss 12.33.6 não oferece essa informação em API bounded, a consulta fica
+encapsulada na infraestrutura e é intencionalmente acoplada ao schema 42 fixado, com regressão de
+integração obrigatória para qualquer upgrade.
+
 ```text
 claim/entrega do job != efeito externo exatamente uma vez
 ```

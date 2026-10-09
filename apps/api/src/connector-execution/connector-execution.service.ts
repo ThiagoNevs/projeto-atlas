@@ -25,6 +25,12 @@ import type {
 
 const EXPECTED_PG_BOSS_SCHEMA_VERSION = 42;
 const QUEUE_NAME_PATTERN = /^atlas\.[a-z0-9][a-z0-9._-]{0,126}$/;
+const PG_IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]{0,62}$/;
+
+interface OldestReadyJobRow {
+  readonly capturedAt: Date;
+  readonly oldestReadyAt: Date | null;
+}
 
 @Injectable()
 export class ConnectorExecutionService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -258,15 +264,46 @@ export class ConnectorExecutionService implements OnApplicationBootstrap, OnAppl
 
   async getQueueState(queueName: string): Promise<ConnectorQueueState> {
     validateQueueName(queueName);
-    const stats = (await this.requireBoss().getQueueStats(queueName, { force: true }))[0];
+    const boss = this.requireBoss();
+    const stats = (await boss.getQueueStats(queueName, { force: true }))[0];
     if (!stats) throw new Error('Queue state is unavailable.');
+    const queue = await boss.getQueue(queueName);
+    if (!queue) throw new Error('Queue state is unavailable.');
+
+    // pg-boss 12.33.6 has no bounded public oldest-ready-job API. Keep this
+    // version-coupled, payload-free aggregate inside the infrastructure boundary.
+    const schema = quotePgIdentifier(this.config.schema);
+    const table = quotePgIdentifier(queue.table);
+    const { rows } = await boss.getDb().executeSql(
+      `SELECT
+         ${schema}.job_now() AS "capturedAt",
+         MIN(created_on) AS "oldestReadyAt"
+       FROM ${schema}.${table}
+       WHERE name = $1
+         AND state IN ('created', 'retry')
+         AND start_after <= ${schema}.job_now()
+         AND NOT blocked`,
+      [queueName],
+    );
+    const oldestReady = rows[0] as OldestReadyJobRow | undefined;
+    if (!oldestReady || !(oldestReady.capturedAt instanceof Date)) {
+      throw new Error('Queue state is unavailable.');
+    }
+    const capturedAt = oldestReady.capturedAt;
+    const oldestReadyAt = oldestReady.oldestReadyAt;
     return Object.freeze({
       queueName,
       queued: stats.queuedCount,
       active: stats.activeCount,
       failed: stats.failedCount,
       total: stats.totalCount,
-      capturedAt: stats.capturedOn.toISOString(),
+      capturedAt: capturedAt.toISOString(),
+      ...(oldestReadyAt === null
+        ? {}
+        : {
+            oldestReadyAt: oldestReadyAt.toISOString(),
+            oldestReadyAgeMs: Math.max(0, capturedAt.getTime() - oldestReadyAt.getTime()),
+          }),
     });
   }
 
@@ -296,6 +333,13 @@ export class ConnectorExecutionService implements OnApplicationBootstrap, OnAppl
 
 function validateQueueName(name: string): void {
   if (!QUEUE_NAME_PATTERN.test(name)) throw new Error('Invalid Atlas queue name.');
+}
+
+function quotePgIdentifier(identifier: string): string {
+  if (!PG_IDENTIFIER_PATTERN.test(identifier)) {
+    throw new Error('Invalid pg-boss identifier.');
+  }
+  return `"${identifier}"`;
 }
 
 function validateWorkerDefinition<TPayload extends JsonValue>(

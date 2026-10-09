@@ -54,6 +54,8 @@ export interface ConnectorQueueState {
   readonly failed: number;
   readonly total: number;
   readonly capturedAt: string;
+  readonly oldestReadyAt?: string;
+  readonly oldestReadyAgeMs?: number;
 }
 
 export type AtlasPrismaTransaction = PrismaTransactionLike;
