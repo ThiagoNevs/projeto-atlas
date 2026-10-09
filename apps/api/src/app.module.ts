@@ -7,6 +7,7 @@ import { AssetsModule } from './assets/assets.module';
 import { ConflictsModule } from './conflicts/conflicts.module';
 import { ConflictAnalysisModule } from './conflict-analysis/conflict-analysis.module';
 import { ConnectorExecutionModule } from './connector-execution/connector-execution.module';
+import { ConnectorFrameworkModule } from './connector-framework/connector-framework.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DataQualityModule } from './data-quality/data-quality.module';
 import { DataSourcesModule } from './data-sources/data-sources.module';
@@ -31,6 +32,7 @@ import { TimelineModule } from './timeline/timeline.module';
     AuthModule,
     PrismaModule,
     ConnectorExecutionModule,
+    ConnectorFrameworkModule.register([]),
     IngestionModule,
     AssetsModule,
     EvidencesModule,

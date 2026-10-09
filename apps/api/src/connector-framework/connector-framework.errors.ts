@@ -1,0 +1,20 @@
+export type ConnectorFrameworkErrorCode =
+  | 'CONNECTOR_DEFINITION_DUPLICATE'
+  | 'CONNECTOR_DEFINITION_INVALID'
+  | 'CONNECTOR_DEFINITION_NOT_FOUND'
+  | 'CONNECTOR_INSTANCE_DISABLED'
+  | 'CONNECTOR_INSTANCE_NOT_FOUND'
+  | 'CONNECTOR_CONFIG_INVALID'
+  | 'CONNECTOR_CONFIG_VERSION_UNSUPPORTED'
+  | 'CONNECTOR_OBSERVATION_INVALID'
+  | 'CONNECTOR_SECRET_SLOT_MISSING'
+  | 'CONNECTOR_SECRET_SLOT_NOT_DECLARED'
+  | 'CONNECTOR_RUN_REQUEST_INVALID'
+  | 'CONNECTOR_RUN_REPLAY_INCONSISTENT';
+
+export class ConnectorFrameworkError extends Error {
+  constructor(readonly code: ConnectorFrameworkErrorCode) {
+    super(code);
+    this.name = 'ConnectorFrameworkError';
+  }
+}
