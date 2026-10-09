@@ -23,8 +23,36 @@ valor é entregue por um wrapper que exige consumo deliberado e apresenta repres
 serialização e inspeção. Esse wrapper reduz cópias acidentais, mas não constitui uma fronteira de
 segurança absoluta.
 
-Locators são metadata interna e não pertencem a respostas HTTP, logs operacionais ou `AuditLog`.
-Falhas usam códigos sanitizados, sem refletir locator, valor ou resposta bruta do provider.
+Locators são metadata interna e não pertencem a respostas HTTP normais, logs operacionais ou
+`AuditLog`. Falhas usam códigos sanitizados, sem refletir locator, valor ou resposta bruta do
+provider.
+
+O Connector Framework, definido no ADR-017, é o primeiro consumidor concreto que exige associação
+durável entre uma configuração operacional e suas credenciais. Por isso, o Atlas poderá persistir
+metadata estruturada de `SecretReference` para uma `ConnectorInstance`:
+
+```text
+slot semântico
+providerKind
+logicalKey
+```
+
+Essa metadata identifica como o runtime pode resolver um segredo, mas não contém o segredo. O
+invariante permanece:
+
+```text
+SecretReference != SecretMaterial
+```
+
+Material secreto resolvido continua proibido no PostgreSQL, inclusive password, access token,
+refresh token, client secret, private key, resposta de autenticação ou qualquer valor retornado pelo
+provider.
+
+A metadata persistida também permanece interna. Ela não será copiada para payload do pg-boss,
+`ConnectorObservation`, `AssetEvidence`, `AuditLog`, logs operacionais ou respostas HTTP normais.
+APIs administrativas futuras deverão expor somente uma representação segura, como existência de um
+slot configurado e, quando operacionalmente seguro, seu tipo de provider. `logicalKey` não será
+retornado sem nova decisão de segurança explícita.
 
 Providers `FILE`, Azure Key Vault e HashiCorp Vault permanecem futuros. Providers remotos deverão
 usar endpoints controlados pelo deployment, nunca pela referência. O Atlas não persiste segredo nem
@@ -48,6 +76,8 @@ criptografia, bootstrap, rotação e autorização ainda sem consumidor concreto
 - Backups do banco não se tornam backups de segredos.
 - Service Actors e conectores futuros podem depender da abstração sem acoplá-la a senha, Microsoft ou
   um cofre específico.
+- ConnectorInstance poderá manter slots persistentes de credential reference sem transformar o
+  PostgreSQL em cofre nem transportar o locator pelos fluxos de execução e evidência.
 - JavaScript strings não podem ser zeroizadas de forma confiável. As mitigações reais são reduzir o
   lifetime e as cópias, não persistir, não logar e não manter valores em objetos long-lived.
 - Secret scanning continua sendo gate obrigatório antes da primeira credencial operacional.
@@ -56,8 +86,9 @@ criptografia, bootstrap, rotação e autorização ainda sem consumidor concreto
 
 O namespace `ATLAS_SECRET_` impede leitura arbitrária de `DATABASE_URL`, `AUTH_*`, `NEXT_PUBLIC_*`,
 `PATH` e outras configurações. Não existe listagem, teste de existência, API, UI, RBAC específico ou
-auditoria de resolução. Uma indisponibilidade de provider afeta somente a operação consumidora e não
-torna o readiness global indisponível por padrão.
+auditoria de resolução. A persistência futura da metadata do Connector Framework não autoriza essas
+superfícies. Uma indisponibilidade de provider afeta somente a operação consumidora e não torna o
+readiness global indisponível por padrão.
 
 Um provider `FILE` futuro deverá usar raiz fixa e chave lógica, bloquear traversal, paths absolutos e
 symlinks. Cofres remotos deverão preferir workload/managed identity e resolver explicitamente o
@@ -65,10 +96,10 @@ problema de bootstrap sem circularidade.
 
 ## Reconsider When
 
-Um primeiro Service Actor ou connector exigir referências persistentes, lifecycle administrativo,
-provider adicional, version pinning ou uma API de metadata. Qualquer API que receba material secreto
-exigirá novo threat model e decisão arquitetural.
+Lifecycle administrativo, rotação gerenciada, provider adicional, version pinning ou API de
+metadata sensível se tornarem necessários. Qualquer API que receba material secreto exigirá novo
+threat model e decisão arquitetural.
 
 ## Related Decisions
 
-ADR-006, ADR-007, ADR-008, ADR-010, ADR-011, ADR-012 e ADR-013.
+ADR-006, ADR-007, ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 e ADR-017.
