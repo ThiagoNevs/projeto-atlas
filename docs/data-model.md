@@ -21,6 +21,11 @@ Asset
 NetworkDiscoveryProfile
 └── NetworkDiscoveryRun
     └── NetworkDiscoveryResult ──> Asset (opcional)
+
+ConnectorInstance
+├── ConnectorSecretReference
+└── ConnectorRun
+    └── AssetEvidence (opcional)
 ```
 
 ## Semântica
@@ -34,6 +39,15 @@ NetworkDiscoveryProfile
 - `NetworkDiscoveryProfile` define modo, métodos, limites e CIDRs autorizados/negados.
 - `NetworkDiscoveryRun` registra estado, duração, contadores e resumo da tentativa.
 - `NetworkDiscoveryResult` registra a observação simulada e seu vínculo opcional com um ativo.
+- `ConnectorInstance` preserva configuração versionada e agendamento declarativo de uma
+  instância, desabilitada por padrão.
+- `ConnectorSecretReference` guarda somente o localizador lógico de um segredo por slot; valor,
+  token, senha ou outra credencial nunca fazem parte deste modelo.
+- `ConnectorRun` registra gatilho, ator, estado, contadores e fingerprint idempotente de uma
+  execução. A criação e o processamento da execução pertencem a incrementos futuros.
+- `AssetEvidence` pode apontar para a execução que produziu a observação e usar uma chave de
+  observação de 64 caracteres para deduplicação. Evidências anteriores continuam válidas com os
+  dois campos nulos.
 
 Valores de `confidenceScore` e `dataQualityScore` usam escala de 0 a 100 com até duas casas
 decimais.
@@ -44,6 +58,10 @@ decimais.
 - Resultados de discovery preservam o registro e removem apenas o vínculo quando o ativo é
   excluído.
 - Runs de discovery são criados antes do processamento, permitindo persistir o estado `FAILED`.
+- Referências secretas são dependentes da instância e usam exclusão em cascata; runs e evidências
+  preservam o histórico com exclusão restrita.
+- A persistência de Connector Framework não modela as tabelas internas do pg-boss no Prisma e
+  mantém `SecretReference != SecretMaterial`.
 - Migrations antigas não devem ser editadas depois de aplicadas; mudanças são feitas por
   migrations corretivas.
 
