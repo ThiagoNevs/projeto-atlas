@@ -1,13 +1,17 @@
 # Estado atual do MVP
 
-## Connector Execution Foundation
+## Connector Execution e Connector Framework Core
 
 A fundação de execução durável aprovada pela ADR-012 está implementada com `pg-boss@12.33.6`,
 runtime `migrate:false`, migration operacional explícita, envelope versionado/limitado, fronteira
 `SecretReference != SecretMaterial`, enqueue transacional via `fromPrisma(tx)` e readiness integrado.
 
-Isso ainda não implementa Connector Framework ou conectores reais. O gate de estabilização e revisão
-para go-live produtivo permanece pendente e deve ser satisfeito explicitamente antes de deployment.
+O Core do Connector Framework também está implementado: registry code-owned de
+`ConnectorDefinition`, criação atômica e idempotente de `ConnectorRun` + job, lifecycle/retries do
+mesmo run, `ConnectorObservation` de runtime, resolução de segredo limitada por slot semântico e
+ingestão normalizada compartilhada com a entrada manual. Ainda não existem API/UI, scheduler real ou
+connector real. O gate de estabilização e revisão para go-live produtivo permanece pendente e deve
+ser satisfeito explicitamente antes de deployment.
 
 ## Visão geral
 
@@ -311,7 +315,8 @@ frontend.
   client/subject, tokens de curta duração e permissions explícitas. Gestão dinâmica de principals,
   emissão de tokens e lifecycle de credenciais permanecem fora do escopo.
 - Request ID gerado pelo servidor, correlation ID HTTP validado, logging operacional allowlisted e
-  health/liveness/readiness do PostgreSQL estão implementados. Run ID de conectores permanece futuro.
+  health/liveness/readiness do PostgreSQL estão implementados. `ConnectorRun` possui run ID estável;
+  propagação distribuída para connectors reais permanece futura.
 - Listagens de Network Discovery sem paginação.
 - Sem métricas, tracing distribuído, OpenTelemetry ou integração SIEM.
 - Browser E2E cobre um smoke autenticado; cobertura de navegador continua deliberadamente mínima.
@@ -321,7 +326,8 @@ frontend.
   API, UI, cache ou gestão produtiva do lifecycle das credenciais.
 - Ausência de camada de domínio mais forte entre controllers, services e persistência.
 - Sem política formal de backup, retenção e recuperação.
-- Fontes de Dados ainda é um catálogo estático; conectores reais, credenciais e sincronização continuam fora do escopo.
+- Fontes de Dados ainda é um catálogo estático; o Core interno de Connector Framework existe, mas
+  conectores reais, credenciais operacionais e sincronização continuam fora do escopo.
 
 ## O que já pode ser demonstrado
 
