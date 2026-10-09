@@ -72,6 +72,21 @@ enum FindingReviewIdentityConclusion {
   DIFFERENT_ASSETS
 }
 
+enum ConnectorRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum ConnectorRunTrigger {
+  REQUESTED
+  SCHEDULE
+  INTERNAL
+}
+
 enum NetworkDiscoveryMode {
   PASSIVE
   LIGHT
@@ -159,20 +174,23 @@ model AssetAttribute {
 }
 
 model AssetEvidence {
-  id               String    @id @default(uuid()) @db.Uuid
-  assetId          String    @map("asset_id") @db.Uuid
-  source           String
-  sourceRecordId   String?   @map("source_record_id")
-  evidenceType     String    @map("evidence_type")
-  payload          Json      @db.JsonB
-  fingerprint      String?
-  confidenceScore  Decimal?  @map("confidence") @db.Decimal(5, 2)
-  dataQualityScore Decimal?  @map("quality_score") @db.Decimal(5, 2)
-  observedAt       DateTime  @map("observed_at") @db.Timestamptz(3)
-  ingestedAt       DateTime  @default(now()) @map("ingested_at") @db.Timestamptz(3)
-  expiresAt        DateTime? @map("expires_at") @db.Timestamptz(3)
+  id                      String    @id @default(uuid()) @db.Uuid
+  assetId                 String    @map("asset_id") @db.Uuid
+  connectorRunId          String?   @map("connector_run_id") @db.Uuid
+  connectorObservationKey String?   @unique @map("connector_observation_key") @db.Char(64)
+  source                  String
+  sourceRecordId          String?   @map("source_record_id")
+  evidenceType            String    @map("evidence_type")
+  payload                 Json      @db.JsonB
+  fingerprint             String?
+  confidenceScore         Decimal?  @map("confidence") @db.Decimal(5, 2)
+  dataQualityScore        Decimal?  @map("quality_score") @db.Decimal(5, 2)
+  observedAt              DateTime  @map("observed_at") @db.Timestamptz(3)
+  ingestedAt              DateTime  @default(now()) @map("ingested_at") @db.Timestamptz(3)
+  expiresAt               DateTime? @map("expires_at") @db.Timestamptz(3)
 
   asset             Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  connectorRun      ConnectorRun?      @relation(fields: [connectorRunId], references: [id], onDelete: Restrict)
   attributes        AssetAttribute[]
   events            AssetEvent[]
   networkInterfaces NetworkInterface[]
@@ -180,9 +198,74 @@ model AssetEvidence {
 
   @@index([source, sourceRecordId])
   @@index([assetId, observedAt(sort: Desc)])
+  @@index([connectorRunId, observedAt(sort: Desc)])
   @@index([source, observedAt(sort: Desc)])
   @@index([fingerprint])
   @@map("asset_evidence")
+}
+
+model ConnectorInstance {
+  id                   String   @id @default(uuid()) @db.Uuid
+  connectorType        String   @map("connector_type")
+  name                 String
+  enabled              Boolean  @default(false)
+  configurationVersion Int      @default(1) @map("configuration_version")
+  configuration        Json     @db.JsonB
+  scheduleEnabled      Boolean  @default(false) @map("schedule_enabled")
+  scheduleExpression   String?  @map("schedule_expression")
+  scheduleTimeZone     String   @default("UTC") @map("schedule_time_zone")
+  version              Int      @default(1)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  secretReferences ConnectorSecretReference[]
+  runs             ConnectorRun[]
+
+  @@index([connectorType, enabled])
+  @@index([enabled, updatedAt(sort: Desc)])
+  @@map("connector_instances")
+}
+
+model ConnectorSecretReference {
+  connectorInstanceId String   @map("connector_instance_id") @db.Uuid
+  slot                String
+  providerKind        String   @map("provider_kind")
+  logicalKey          String   @map("logical_key")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  connectorInstance ConnectorInstance @relation(fields: [connectorInstanceId], references: [id], onDelete: Cascade)
+
+  @@id([connectorInstanceId, slot])
+  @@map("connector_secret_references")
+}
+
+model ConnectorRun {
+  id                  String              @id @default(uuid()) @db.Uuid
+  connectorInstanceId String              @map("connector_instance_id") @db.Uuid
+  status              ConnectorRunStatus  @default(QUEUED)
+  trigger             ConnectorRunTrigger
+  triggerActorType    String              @map("trigger_actor_type")
+  triggerActorId      String              @map("trigger_actor_id")
+  requestFingerprint  String              @unique @map("request_fingerprint") @db.Char(64)
+  scheduledFor        DateTime?           @map("scheduled_for") @db.Timestamptz(3)
+  startedAt           DateTime?           @map("started_at") @db.Timestamptz(3)
+  finishedAt          DateTime?           @map("finished_at") @db.Timestamptz(3)
+  observedCount       Int                 @default(0) @map("observed_count")
+  ingestedCount       Int                 @default(0) @map("ingested_count")
+  rejectedCount       Int                 @default(0) @map("rejected_count")
+  errorCode           String?             @map("error_code")
+  version             Int                 @default(1)
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  connectorInstance ConnectorInstance @relation(fields: [connectorInstanceId], references: [id], onDelete: Restrict)
+  evidence          AssetEvidence[]
+
+  @@index([connectorInstanceId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([triggerActorType, triggerActorId, createdAt(sort: Desc)])
+  @@map("connector_runs")
 }
 
 model AssetEvent {
