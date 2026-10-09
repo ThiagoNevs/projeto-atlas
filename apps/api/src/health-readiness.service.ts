@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import { OperationalLogger } from './operational-context/operational-logger.service';
+import { ConnectorExecutionService } from './connector-execution/connector-execution.service';
 import { PrismaService } from './prisma/prisma.service';
 
 export const HEALTH_READINESS_TIMEOUT_MS = Symbol('HEALTH_READINESS_TIMEOUT_MS');
@@ -20,6 +21,7 @@ export class HealthReadinessService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly connectorExecution: ConnectorExecutionService,
     private readonly logger: OperationalLogger,
     @Inject(HEALTH_READINESS_TIMEOUT_MS) private readonly timeoutMs: number,
   ) {}
@@ -68,6 +70,9 @@ export class HealthReadinessService {
 
   private async executeProbe(): Promise<void> {
     await this.prisma.$queryRaw`SELECT 1`;
+    if (!(await this.connectorExecution.isReady())) {
+      throw new Error('ConnectorExecutionNotReady');
+    }
   }
 
   private warnOnce(errorCode: string, errorType: string): void {
