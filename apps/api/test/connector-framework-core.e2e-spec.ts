@@ -178,7 +178,7 @@ describe('Connector Framework Core (e2e)', () => {
     expect(JSON.stringify(job?.data)).not.toMatch(/password|logicalKey|secret/i);
   });
 
-  it('registers and stops definition and dead-letter workers through Nest lifecycle hooks', async () => {
+  it('registers only source workers and none for dead-letter queues', async () => {
     const worker = new ConnectorRunWorker(
       prisma,
       execution,
@@ -191,9 +191,23 @@ describe('Connector Framework Core (e2e)', () => {
     );
 
     await worker.onApplicationBootstrap();
-    expect(execution.getState().workerCount).toBe(2);
+    expect(execution.getState().workerCount).toBe(1);
     await worker.onApplicationShutdown();
     expect(execution.getState().workerCount).toBe(0);
+
+    const emptyWorker = new ConnectorRunWorker(
+      prisma,
+      execution,
+      new ConnectorDefinitionRegistry([]),
+      {
+        resolve: () => Promise.resolve(ResolvedSecret.from('synthetic-value')),
+      } as unknown as SecretResolver,
+      new IngestionService(prisma),
+      logger,
+    );
+    await emptyWorker.onApplicationBootstrap();
+    expect(execution.getState().workerCount).toBe(0);
+    await emptyWorker.onApplicationShutdown();
   });
 
   it('rolls back ConnectorRun when transactional enqueue fails', async () => {
@@ -433,38 +447,84 @@ describe('Connector Framework Core (e2e)', () => {
     );
   });
 
-  it('finalizes a run left active after queue exhaustion without replaying collection', async () => {
-    const { run, worker } = await createWorkerRun(createDefinition(() => emitObservations()));
-    await prisma.connectorRun.update({
-      where: { id: run.id },
-      data: {
-        status: ConnectorRunStatus.RUNNING,
-        startedAt: new Date(),
-        observedCount: 1,
-        rejectedCount: 1,
+  it('leaves terminally failed jobs waiting in the DLQ and eligible for redrive', async () => {
+    const dlqConnectorType = 'synthetic-core-dlq-test';
+    const sourceQueue = connectorQueueName(dlqConnectorType);
+    const deadLetterQueue = `${sourceQueue}.dead`;
+    const baseDefinition = createDefinition(() => emitObservations());
+    let attempts = 0;
+    const definition: ConnectorDefinition<{ schemaVersion: 1; endpointLabel: string }> = {
+      ...baseDefinition,
+      collect: async function* () {
+        await Promise.resolve();
+        attempts += 1;
+        yield* [] as ConnectorAssetObservation[];
+        throw new Error('synthetic terminal failure');
       },
-    });
-
-    await worker.finalizeExhausted(
-      jobPayload(run.connectorInstanceId),
-      workerContext(run.id, 0, 0),
+      connectorType: dlqConnectorType,
+      workerPolicy: {
+        ...baseDefinition.workerPolicy,
+        retryLimit: 0,
+      },
+    };
+    const registry = new ConnectorDefinitionRegistry([definition]);
+    const worker = new ConnectorRunWorker(
+      prisma,
+      execution,
+      registry,
+      {
+        resolve: () => Promise.resolve(ResolvedSecret.from('synthetic-value')),
+      } as unknown as SecretResolver,
+      new IngestionService(prisma),
+      logger,
     );
-    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
-      expect.objectContaining({
-        status: ConnectorRunStatus.FAILED,
-        observedCount: 1,
-        ingestedCount: 0,
-        rejectedCount: 1,
-        errorCode: 'CONNECTOR_JOB_EXHAUSTED',
-        finishedAt: expect.any(Date),
-      }),
-    );
-  });
+    const instance = await createInstance(true, dlqConnectorType);
+    const runService = new ConnectorRunService(prisma, execution, registry);
 
-  async function createInstance(enabled = true) {
+    await worker.onApplicationBootstrap();
+    try {
+      expect(execution.getState().workerCount).toBe(1);
+      const { run } = await runService.create(
+        requestedRun(instance.id, `dlq-preservation:${randomUUID()}`),
+      );
+
+      await waitFor(async () => {
+        const persisted = await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } });
+        const deadJobs = await observerBoss.findJobs<AtlasJobEnvelope<ConnectorRunJobPayload>>(
+          deadLetterQueue,
+          { queued: true },
+        );
+        return (
+          persisted.status === ConnectorRunStatus.FAILED &&
+          deadJobs.some(({ data }) => data.runId === run.id)
+        );
+      });
+
+      const deadJobs = await observerBoss.findJobs<AtlasJobEnvelope<ConnectorRunJobPayload>>(
+        deadLetterQueue,
+        { queued: true },
+      );
+      expect(deadJobs.filter(({ data }) => data.runId === run.id)).toHaveLength(1);
+      expect(attempts).toBe(1);
+      expect(execution.getState().workerCount).toBe(1);
+
+      await worker.onApplicationShutdown();
+      expect(execution.getState().workerCount).toBe(0);
+      expect(await execution.redrive(deadLetterQueue, sourceQueue, 1)).toBe(1);
+      const redrivenJobs = await observerBoss.findJobs<AtlasJobEnvelope<ConnectorRunJobPayload>>(
+        sourceQueue,
+        { queued: true },
+      );
+      expect(redrivenJobs.some(({ data }) => data.runId === run.id)).toBe(true);
+    } finally {
+      await worker.onApplicationShutdown();
+    }
+  }, 20_000);
+
+  async function createInstance(enabled = true, type = connectorType) {
     const instance = await prisma.connectorInstance.create({
       data: {
-        connectorType,
+        connectorType: type,
         name: `Synthetic connector ${randomUUID()}`,
         enabled,
         configurationVersion: 1,
@@ -606,4 +666,16 @@ async function* emitObservations(
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 12_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  throw new Error('Timed out waiting for Connector Framework state.');
 }

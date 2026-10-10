@@ -68,6 +68,17 @@ QUEUED → RUNNING → COMPLETED | PARTIAL | FAILED | CANCELLED
 Os contadores persistidos são recalculados a partir das evidences duráveis sempre que possível,
 reduzindo duplicação após falha entre ingestão e acknowledgement.
 
+Quando o próprio handler observa a tentativa final, ele persiste `FAILED` ou `PARTIAL` e o erro
+sanitizado antes de relançar a falha para que o pg-boss faça o roteamento normal. O Core não
+registra worker, não reivindica jobs e não altera itens da DLQ; a fila permanece disponível para
+inspeção, alertas, retenção e redrive operacional.
+
+Falhas de infraestrutura que impedem o handler de persistir o estado terminal — como hard kill,
+expiração, perda de heartbeat ou fencing por partição de rede — podem deixar o `ConnectorRun` em
+`RUNNING` mesmo após o pg-boss esgotar o job. Reconciliação não consumidora para esses runs não é
+implementada neste incremento e permanece uma limitação do gate de estabilização do Connector
+Execution. O gate continua `PENDING` e o Core ainda não estabelece prontidão para go-live.
+
 ## Itens futuros explícitos
 
 - API/controllers e permissions `connector:*`;

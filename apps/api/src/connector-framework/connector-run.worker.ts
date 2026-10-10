@@ -50,18 +50,6 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
         handler: (payload, context) => this.process(payload, context),
       });
       this.registeredQueues.push(queueName);
-      const deadLetterQueue = `${queueName}.dead`;
-      await this.execution.registerWorker<ConnectorRunJobPayload>({
-        queueName: deadLetterQueue,
-        deadLetterQueue: `${deadLetterQueue}.unhandled`,
-        concurrency: 1,
-        retryLimit: 0,
-        retryDelaySeconds: 0,
-        retryBackoff: false,
-        expireInSeconds: definition.workerPolicy.expireInSeconds,
-        handler: (payload, context) => this.finalizeExhausted(payload, context),
-      });
-      this.registeredQueues.push(deadLetterQueue);
     }
   }
 
@@ -189,50 +177,6 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
       }
       throw error;
     }
-  }
-
-  async finalizeExhausted(
-    payload: ConnectorRunJobPayload,
-    context: AtlasWorkerContext,
-  ): Promise<void> {
-    validateJobPayload(payload, context.runId);
-    const run = await this.prisma.connectorRun.findUnique({
-      where: { id: context.runId },
-      select: {
-        id: true,
-        connectorInstanceId: true,
-        status: true,
-        rejectedCount: true,
-      },
-    });
-    if (!run || run.connectorInstanceId !== payload.connectorInstanceId) {
-      throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
-    }
-    if (
-      run.status === ConnectorRunStatus.COMPLETED ||
-      run.status === ConnectorRunStatus.PARTIAL ||
-      run.status === ConnectorRunStatus.FAILED ||
-      run.status === ConnectorRunStatus.CANCELLED
-    ) {
-      return;
-    }
-
-    const ingestedCount = await this.countEvidence(run.id);
-    await this.prisma.connectorRun.updateMany({
-      where: {
-        id: run.id,
-        status: { in: [ConnectorRunStatus.QUEUED, ConnectorRunStatus.RUNNING] },
-      },
-      data: {
-        status: ingestedCount > 0 ? ConnectorRunStatus.PARTIAL : ConnectorRunStatus.FAILED,
-        observedCount: ingestedCount + run.rejectedCount,
-        ingestedCount,
-        rejectedCount: run.rejectedCount,
-        errorCode: 'CONNECTOR_JOB_EXHAUSTED',
-        finishedAt: new Date(),
-        version: { increment: 1 },
-      },
-    });
   }
 
   private async refreshCounters(runId: string, rejectedCount: number): Promise<void> {
