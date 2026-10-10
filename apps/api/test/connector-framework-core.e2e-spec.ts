@@ -31,6 +31,7 @@ import { IngestionService } from '../src/ingestion/ingestion.service';
 import type { OperationalLogger } from '../src/operational-context/operational-logger.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ResolvedSecret } from '../src/secrets/resolved-secret';
+import { SecretResolutionError } from '../src/secrets/secret-resolution.errors';
 import type { SecretResolver } from '../src/secrets/secret-resolver.service';
 
 const connectorType = 'synthetic-core-test';
@@ -172,7 +173,11 @@ describe('Connector Framework Core (e2e)', () => {
       expect.objectContaining({
         runId: first.run.id,
         idempotencyKey: first.run.requestFingerprint,
-        payload: { schemaVersion: 1, connectorInstanceId: instance.id },
+        payload: {
+          schemaVersion: 1,
+          connectorInstanceId: instance.id,
+          configurationVersion: 1,
+        },
       }),
     );
     expect(JSON.stringify(job?.data)).not.toMatch(/password|logicalKey|secret/i);
@@ -288,9 +293,31 @@ describe('Connector Framework Core (e2e)', () => {
     } as const;
     const first = parseConnectorObservation(input);
     const second = parseConnectorObservation(input);
+    const laterObservation = parseConnectorObservation({
+      ...input,
+      observation: { ...observation, observedAt: '2026-10-10T12:00:00.000Z' },
+    });
+    const laterRun = parseConnectorObservation({ ...input, runId: randomUUID() });
+    const changedSemanticContent = parseConnectorObservation({
+      ...input,
+      observation: {
+        ...observation,
+        asset: { ...observation.asset, operatingSystem: 'Linux' },
+      },
+    });
     expect(first.connectorObservationKey).toBe(second.connectorObservationKey);
     expect(first.semanticFingerprint).toBe(second.semanticFingerprint);
     expect(first.normalized.connectorRunId).toBe(runId);
+    expect(first.normalized.source).toBe(`connector:${connectorType}:${instanceId.toLowerCase()}`);
+    expect(laterObservation.semanticFingerprint).toBe(first.semanticFingerprint);
+    expect(laterObservation.connectorObservationKey).toBe(first.connectorObservationKey);
+    expect((laterObservation.normalized.payload as { observedAt: string }).observedAt).toBe(
+      '2026-10-10T12:00:00.000Z',
+    );
+    expect(laterRun.semanticFingerprint).toBe(first.semanticFingerprint);
+    expect(laterRun.connectorObservationKey).not.toBe(first.connectorObservationKey);
+    expect(changedSemanticContent.semanticFingerprint).not.toBe(first.semanticFingerprint);
+    expect(changedSemanticContent.connectorObservationKey).not.toBe(first.connectorObservationKey);
 
     expect(() =>
       parseConnectorObservation({
@@ -313,6 +340,45 @@ describe('Connector Framework Core (e2e)', () => {
         observation: { ...observation, observedAt: '2026-02-30T12:00:00.000Z' },
       }),
     ).toThrow(ConnectorFrameworkError);
+  });
+
+  it('isolates source identity for two instances of the same connector type', async () => {
+    const firstInstance = await createInstance();
+    const secondInstance = await createInstance();
+    const firstRun = await createPersistedRun(firstInstance.id);
+    const secondRun = await createPersistedRun(secondInstance.id);
+    const observation = validObservation(`shared-provider-record-${randomUUID()}`);
+    const ingestion = new IngestionService(prisma);
+    const first = parseConnectorObservation({
+      observation,
+      connectorType,
+      connectorInstanceId: firstInstance.id,
+      runId: firstRun.id,
+      supportedObservationTypes: ['ASSET'],
+    });
+    const second = parseConnectorObservation({
+      observation,
+      connectorType,
+      connectorInstanceId: secondInstance.id,
+      runId: secondRun.id,
+      supportedObservationTypes: ['ASSET'],
+    });
+
+    expect(first.normalized.source).not.toBe(second.normalized.source);
+    await ingestion.ingestNormalizedAsset(first.normalized);
+    await ingestion.ingestNormalizedAsset(second.normalized);
+
+    const evidence = await prisma.assetEvidence.findMany({
+      where: { connectorRunId: { in: [firstRun.id, secondRun.id] } },
+      select: { assetId: true, source: true, sourceRecordId: true },
+      orderBy: { source: 'asc' },
+    });
+    expect(evidence).toHaveLength(2);
+    expect(new Set(evidence.map(({ assetId }) => assetId)).size).toBe(2);
+    expect(new Set(evidence.map(({ source }) => source)).size).toBe(2);
+    expect(new Set(evidence.map(({ sourceRecordId }) => sourceRecordId))).toEqual(
+      new Set([observation.providerRecordId]),
+    );
   });
 
   it('ingests a valid observation, completes the run and deduplicates terminal replay', async () => {
@@ -400,6 +466,194 @@ describe('Connector Framework Core (e2e)', () => {
     await worker.process(jobPayload(run.connectorInstanceId), workerContext(run.id, 1, 1));
     expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
       expect.objectContaining({ status: ConnectorRunStatus.COMPLETED, ingestedCount: 1 }),
+    );
+  });
+
+  it('rejects non-positive, unsafe and extended queue payload versions without retry', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const payloads = [
+      { configurationVersion: 0 },
+      { configurationVersion: Number.MAX_SAFE_INTEGER + 1 },
+      { configurationVersion: 1, unexpected: true },
+    ];
+
+    for (const payloadExtension of payloads) {
+      const { run, worker } = await createWorkerRun(createDefinition(collect), {
+        resolve: resolveSecret,
+      } as unknown as SecretResolver);
+      await expect(
+        worker.process(
+          {
+            schemaVersion: 1,
+            connectorInstanceId: run.connectorInstanceId,
+            ...payloadExtension,
+          },
+          workerContext(run.id, 0, 2),
+        ),
+      ).resolves.toBeUndefined();
+      expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+        expect.objectContaining({
+          status: ConnectorRunStatus.FAILED,
+          errorCode: 'CONNECTOR_RUN_REPLAY_INCONSISTENT',
+        }),
+      );
+    }
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+  });
+
+  it('fails without provider or secret work when an enqueued instance is disabled', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+    await prisma.connectorInstance.update({
+      where: { id: instance.id },
+      data: { enabled: false },
+    });
+
+    await expect(
+      worker.process(jobPayload(instance.id, 1), workerContext(run.id, 0, 2)),
+    ).resolves.toBeUndefined();
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        observedCount: 0,
+        ingestedCount: 0,
+        rejectedCount: 0,
+        errorCode: 'CONNECTOR_INSTANCE_DISABLED',
+        finishedAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('fences queued configuration changes before provider or secret work', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+    await prisma.connectorInstance.update({
+      where: { id: instance.id },
+      data: { configurationVersion: 2 },
+    });
+
+    await expect(
+      worker.process(jobPayload(instance.id, 1), workerContext(run.id, 0, 2)),
+    ).resolves.toBeUndefined();
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        errorCode: 'CONNECTOR_CONFIG_CHANGED',
+        finishedAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('distinguishes an unsupported current configuration version without retry', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+    await prisma.connectorInstance.update({
+      where: { id: instance.id },
+      data: { configurationVersion: 2 },
+    });
+
+    await expect(
+      worker.process(jobPayload(instance.id, 2), workerContext(run.id, 0, 2)),
+    ).resolves.toBeUndefined();
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        errorCode: 'CONNECTOR_CONFIG_VERSION_UNSUPPORTED',
+      }),
+    );
+  });
+
+  it('retries unavailable secret providers and fails only on the final attempt', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.reject(new SecretResolutionError('PROVIDER_UNAVAILABLE', 'ENV')),
+    );
+    const { run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+
+    await expect(
+      worker.process(jobPayload(run.connectorInstanceId), workerContext(run.id, 0, 1)),
+    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({ status: ConnectorRunStatus.RUNNING, finishedAt: null }),
+    );
+
+    await expect(
+      worker.process(jobPayload(run.connectorInstanceId), workerContext(run.id, 1, 1)),
+    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).toHaveBeenCalledTimes(2);
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        errorCode: 'SECRET_PROVIDER_UNAVAILABLE',
+        finishedAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('terminalizes a non-retryable secret failure immediately and preserves evidence', async () => {
+    const observation = validObservation(`secret-partial-${randomUUID()}`);
+    const resolveSecret = jest
+      .fn<() => Promise<ResolvedSecret>>()
+      .mockResolvedValueOnce(ResolvedSecret.from('synthetic-value'))
+      .mockRejectedValueOnce(new SecretResolutionError('SECRET_NOT_FOUND', 'ENV'));
+    let collectionAttempts = 0;
+    const { run, worker } = await createWorkerRun(
+      createDefinition(async function* () {
+        await Promise.resolve();
+        collectionAttempts += 1;
+        yield observation;
+        throw new Error('synthetic transient after evidence');
+      }),
+      { resolve: resolveSecret } as unknown as SecretResolver,
+    );
+
+    await expect(
+      worker.process(jobPayload(run.connectorInstanceId), workerContext(run.id, 0, 2)),
+    ).rejects.toThrow('synthetic transient after evidence');
+    await expect(
+      worker.process(jobPayload(run.connectorInstanceId), workerContext(run.id, 1, 2)),
+    ).resolves.toBeUndefined();
+
+    expect(collectionAttempts).toBe(1);
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.PARTIAL,
+        ingestedCount: 1,
+        errorCode: 'SECRET_NOT_FOUND',
+        finishedAt: expect.any(Date),
+      }),
     );
   });
 
@@ -542,20 +796,26 @@ describe('Connector Framework Core (e2e)', () => {
     return instance;
   }
 
-  async function createWorkerRun(definition: ConnectorDefinition) {
-    const instance = await createInstance();
-    const run = await prisma.connectorRun.create({
+  async function createPersistedRun(connectorInstanceId: string) {
+    return prisma.connectorRun.create({
       data: {
-        connectorInstanceId: instance.id,
+        connectorInstanceId,
         trigger: ConnectorRunTrigger.REQUESTED,
         triggerActorType: 'SERVICE',
         triggerActorId: actorId,
         requestFingerprint: sha256(`${testScope}:${randomUUID()}`),
       },
     });
-    const secretResolver = {
+  }
+
+  async function createWorkerRun(
+    definition: ConnectorDefinition,
+    secretResolver: SecretResolver = {
       resolve: () => Promise.resolve(ResolvedSecret.from('synthetic-value')),
-    } as unknown as SecretResolver;
+    } as unknown as SecretResolver,
+  ) {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
     const worker = new ConnectorRunWorker(
       prisma,
       execution,
@@ -564,7 +824,7 @@ describe('Connector Framework Core (e2e)', () => {
       new IngestionService(prisma),
       logger,
     );
-    return { run, worker };
+    return { instance, run, worker };
   }
 
   async function countJobs(): Promise<number> {
@@ -630,8 +890,8 @@ function requestedRun(connectorInstanceId: string, requestIdentity: string) {
   };
 }
 
-function jobPayload(connectorInstanceId: string): ConnectorRunJobPayload {
-  return { schemaVersion: 1, connectorInstanceId };
+function jobPayload(connectorInstanceId: string, configurationVersion = 1): ConnectorRunJobPayload {
+  return { schemaVersion: 1, connectorInstanceId, configurationVersion };
 }
 
 function workerContext(runId: string, retryCount: number, retryLimit: number): AtlasWorkerContext {

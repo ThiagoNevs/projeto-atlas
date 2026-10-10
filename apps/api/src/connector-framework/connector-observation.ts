@@ -103,7 +103,14 @@ export function parseConnectorObservation(input: {
     throw new ConnectorFrameworkError('CONNECTOR_OBSERVATION_INVALID');
   }
 
-  const semanticFingerprint = sha256(canonicalJson(sourceFaithfulPayload));
+  const semanticPayload = {
+    schemaVersion: 1,
+    observationType: 'ASSET',
+    providerRecordId,
+    asset: assetPayload,
+    provider: providerPayload,
+  } satisfies SafeJson;
+  const semanticFingerprint = sha256(canonicalJson(semanticPayload));
   const connectorObservationKey = sha256(
     canonicalJson({
       connectorInstanceId: input.connectorInstanceId.toLowerCase(),
@@ -118,7 +125,7 @@ export function parseConnectorObservation(input: {
     semanticFingerprint,
     connectorObservationKey,
     normalized: Object.freeze({
-      source: `connector:${input.connectorType}`,
+      source: `connector:${input.connectorType}:${input.connectorInstanceId.toLowerCase()}`,
       sourceRecordId: providerRecordId,
       hostname: asset.hostname,
       type: asset.type,

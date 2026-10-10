@@ -62,6 +62,7 @@ export class ConnectorRunService {
     const payload: ConnectorRunJobPayload = Object.freeze({
       schemaVersion: 1,
       connectorInstanceId: instance.id,
+      configurationVersion: instance.configurationVersion,
     });
 
     try {

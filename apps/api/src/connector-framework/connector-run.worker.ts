@@ -61,122 +61,150 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
   }
 
   async process(payload: ConnectorRunJobPayload, context: AtlasWorkerContext): Promise<void> {
-    validateJobPayload(payload, context.runId);
-    const run = await this.prisma.connectorRun.findUnique({
-      where: { id: context.runId },
-      include: {
-        connectorInstance: {
-          include: { secretReferences: true },
-        },
-      },
-    });
-    if (!run || run.connectorInstanceId !== payload.connectorInstanceId) {
-      throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
-    }
-    if (
-      run.status === ConnectorRunStatus.COMPLETED ||
-      run.status === ConnectorRunStatus.PARTIAL ||
-      run.status === ConnectorRunStatus.FAILED ||
-      run.status === ConnectorRunStatus.CANCELLED
-    ) {
-      return;
-    }
-
-    const definition = this.definitions.get(run.connectorInstance.connectorType);
-    const startedAt = run.startedAt ?? new Date();
-    const transitioned = await this.prisma.connectorRun.updateMany({
-      where: {
-        id: run.id,
-        status: run.status,
-      },
-      data: {
-        status: ConnectorRunStatus.RUNNING,
-        startedAt,
-        finishedAt: null,
-        errorCode: null,
-        rejectedCount: 0,
-        version: { increment: 1 },
-      },
-    });
-    if (transitioned.count !== 1) return;
-
     let rejectedCount = 0;
     try {
-      const config = validateConfiguration(definition, run.connectorInstance);
-      const secretSlots = new ConnectorSecretSlotResolver(
-        this.secrets,
-        definition.requiredSecretSlots,
-        run.connectorInstance.secretReferences,
-      );
-      await Promise.all(definition.requiredSecretSlots.map((slot) => secretSlots.resolve(slot)));
-      const safeLogger = this.safeLogger(definition.connectorType, run.id, context.correlationId);
-
-      for await (const rawObservation of definition.collect({
-        connectorInstanceId: run.connectorInstance.id,
-        runId: run.id,
-        config,
-        signal: context.signal,
-        secrets: secretSlots,
-        logger: safeLogger,
-        now: () => new Date(),
-      })) {
-        if (context.signal.aborted) throw new Error('Connector worker aborted.');
-        let parsed: ReturnType<typeof parseConnectorObservation>;
-        try {
-          parsed = parseConnectorObservation({
-            observation: rawObservation,
-            connectorType: definition.connectorType,
-            connectorInstanceId: run.connectorInstance.id,
-            runId: run.id,
-            supportedObservationTypes: definition.supportedObservationTypes,
-          });
-        } catch (error) {
-          if (!(error instanceof ConnectorFrameworkError)) throw error;
-          rejectedCount += 1;
-          await this.refreshCounters(run.id, rejectedCount);
-          continue;
-        }
-
-        await this.ingestion.ingestNormalizedAsset(parsed.normalized);
-        await this.refreshCounters(run.id, rejectedCount);
+      validateJobPayload(payload, context.runId);
+      const run = await this.prisma.connectorRun.findUnique({
+        where: { id: context.runId },
+        include: {
+          connectorInstance: {
+            include: { secretReferences: true },
+          },
+        },
+      });
+      if (!run || run.connectorInstanceId !== payload.connectorInstanceId) {
+        throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
+      }
+      if (
+        run.status === ConnectorRunStatus.COMPLETED ||
+        run.status === ConnectorRunStatus.PARTIAL ||
+        run.status === ConnectorRunStatus.FAILED ||
+        run.status === ConnectorRunStatus.CANCELLED
+      ) {
+        return;
       }
 
-      const ingestedCount = await this.countEvidence(run.id);
-      await this.prisma.connectorRun.updateMany({
-        where: { id: run.id, status: ConnectorRunStatus.RUNNING },
+      const startedAt = run.startedAt ?? new Date();
+      const transitioned = await this.prisma.connectorRun.updateMany({
+        where: {
+          id: run.id,
+          status: run.status,
+        },
         data: {
-          status:
-            rejectedCount === 0
-              ? ConnectorRunStatus.COMPLETED
-              : ingestedCount > 0
-                ? ConnectorRunStatus.PARTIAL
-                : ConnectorRunStatus.FAILED,
-          observedCount: ingestedCount + rejectedCount,
-          ingestedCount,
-          rejectedCount,
-          errorCode: rejectedCount === 0 ? null : 'CONNECTOR_OBSERVATION_REJECTED',
-          finishedAt: new Date(),
+          status: ConnectorRunStatus.RUNNING,
+          startedAt,
+          finishedAt: null,
+          errorCode: null,
+          rejectedCount: 0,
           version: { increment: 1 },
         },
       });
-    } catch (error) {
-      if (context.retryCount >= context.retryLimit) {
+      if (transitioned.count !== 1) return;
+
+      try {
+        const definition = this.definitions.get(run.connectorInstance.connectorType);
+        if (!run.connectorInstance.enabled) {
+          throw new ConnectorFrameworkError('CONNECTOR_INSTANCE_DISABLED');
+        }
+        if (payload.configurationVersion !== run.connectorInstance.configurationVersion) {
+          throw new ConnectorFrameworkError('CONNECTOR_CONFIG_CHANGED');
+        }
+        const config = validateConfiguration(definition, run.connectorInstance);
+        const secretSlots = new ConnectorSecretSlotResolver(
+          this.secrets,
+          definition.requiredSecretSlots,
+          run.connectorInstance.secretReferences,
+        );
+        await Promise.all(definition.requiredSecretSlots.map((slot) => secretSlots.resolve(slot)));
+        const safeLogger = this.safeLogger(definition.connectorType, run.id, context.correlationId);
+
+        for await (const rawObservation of definition.collect({
+          connectorInstanceId: run.connectorInstance.id,
+          runId: run.id,
+          config,
+          signal: context.signal,
+          secrets: secretSlots,
+          logger: safeLogger,
+          now: () => new Date(),
+        })) {
+          if (context.signal.aborted) throw new Error('Connector worker aborted.');
+          let parsed: ReturnType<typeof parseConnectorObservation>;
+          try {
+            parsed = parseConnectorObservation({
+              observation: rawObservation,
+              connectorType: definition.connectorType,
+              connectorInstanceId: run.connectorInstance.id,
+              runId: run.id,
+              supportedObservationTypes: definition.supportedObservationTypes,
+            });
+          } catch (error) {
+            if (!(error instanceof ConnectorFrameworkError)) throw error;
+            rejectedCount += 1;
+            await this.refreshCounters(run.id, rejectedCount);
+            continue;
+          }
+
+          await this.ingestion.ingestNormalizedAsset(parsed.normalized);
+          await this.refreshCounters(run.id, rejectedCount);
+        }
+
         const ingestedCount = await this.countEvidence(run.id);
         await this.prisma.connectorRun.updateMany({
           where: { id: run.id, status: ConnectorRunStatus.RUNNING },
           data: {
-            status: ingestedCount > 0 ? ConnectorRunStatus.PARTIAL : ConnectorRunStatus.FAILED,
+            status:
+              rejectedCount === 0
+                ? ConnectorRunStatus.COMPLETED
+                : ingestedCount > 0
+                  ? ConnectorRunStatus.PARTIAL
+                  : ConnectorRunStatus.FAILED,
             observedCount: ingestedCount + rejectedCount,
             ingestedCount,
             rejectedCount,
-            errorCode: safeErrorCode(error),
+            errorCode: rejectedCount === 0 ? null : 'CONNECTOR_OBSERVATION_REJECTED',
             finishedAt: new Date(),
             version: { increment: 1 },
           },
         });
+      } catch (error) {
+        const failure = classifyConnectorFailure(error);
+        if (!failure.retryable || context.retryCount >= context.retryLimit) {
+          await this.terminalizeFailure(run.id, rejectedCount, failure.errorCode);
+          if (!failure.retryable) return;
+        }
+        throw error;
+      }
+    } catch (error) {
+      const failure = classifyConnectorFailure(error);
+      if (!failure.retryable) {
+        await this.terminalizeFailure(context.runId, rejectedCount, failure.errorCode);
+        return;
       }
       throw error;
     }
+  }
+
+  private async terminalizeFailure(
+    runId: string,
+    rejectedCount: number,
+    errorCode: string,
+  ): Promise<void> {
+    const ingestedCount = await this.countEvidence(runId);
+    await this.prisma.connectorRun.updateMany({
+      where: {
+        id: runId,
+        status: { in: [ConnectorRunStatus.QUEUED, ConnectorRunStatus.RUNNING] },
+      },
+      data: {
+        status: ingestedCount > 0 ? ConnectorRunStatus.PARTIAL : ConnectorRunStatus.FAILED,
+        observedCount: ingestedCount + rejectedCount,
+        ingestedCount,
+        rejectedCount,
+        errorCode,
+        finishedAt: new Date(),
+        version: { increment: 1 },
+      },
+    });
   }
 
   private async refreshCounters(runId: string, rejectedCount: number): Promise<void> {
@@ -229,8 +257,12 @@ function validateJobPayload(payload: ConnectorRunJobPayload, runId: string): voi
     payload === null ||
     payload.schemaVersion !== 1 ||
     !UUID_V4_PATTERN.test(payload.connectorInstanceId) ||
+    !Number.isSafeInteger(payload.configurationVersion) ||
+    payload.configurationVersion < 1 ||
     !UUID_V4_PATTERN.test(runId) ||
-    Object.keys(payload).some((key) => !['schemaVersion', 'connectorInstanceId'].includes(key))
+    Object.keys(payload).some(
+      (key) => !['schemaVersion', 'connectorInstanceId', 'configurationVersion'].includes(key),
+    )
   ) {
     throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
   }
@@ -250,8 +282,20 @@ function validateConfiguration(
   }
 }
 
-function safeErrorCode(error: unknown): string {
-  if (error instanceof ConnectorFrameworkError) return error.code;
-  if (error instanceof SecretResolutionError) return `SECRET_${error.code}`;
-  return 'CONNECTOR_COLLECTION_FAILED';
+function classifyConnectorFailure(error: unknown): Readonly<{
+  errorCode: string;
+  retryable: boolean;
+}> {
+  if (error instanceof ConnectorFrameworkError) {
+    return Object.freeze({ errorCode: error.code, retryable: false });
+  }
+  if (error instanceof SecretResolutionError) {
+    const errorCode =
+      error.code === 'SECRET_NOT_FOUND' ? 'SECRET_NOT_FOUND' : `SECRET_${error.code}`;
+    return Object.freeze({
+      errorCode,
+      retryable: error.code === 'PROVIDER_UNAVAILABLE',
+    });
+  }
+  return Object.freeze({ errorCode: 'CONNECTOR_COLLECTION_FAILED', retryable: true });
 }

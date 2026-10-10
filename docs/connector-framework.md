@@ -30,6 +30,11 @@ Retry do pg-boss preserva o mesmo `runId`. O fingerprint da solicitação é can
 mesma criação lógica não enfileira outro job. O `connectorObservationKey` impede que o replay exato
 da mesma observação no mesmo run duplique evidence.
 
+O payload mínimo registra a `configurationVersion` aceita no enqueue. Antes de validar configuração,
+resolver secrets ou chamar o provider, o worker confirma que a instance continua habilitada e que a
+versão enfileirada ainda corresponde à versão corrente. Instance desabilitada, configuração alterada
+ou versão não suportada terminam o run de forma fail-closed e sem retry determinístico.
+
 ## Fronteiras
 
 - `ConnectorDefinition` é code-owned, imutável após o registro e não é persistida.
@@ -52,6 +57,13 @@ DTO para esse contrato interno; o Core converte uma observation validada para o 
 
 Observações individuais não criam `AuditLog` de alto volume. A evidence recebe `connectorRunId` e
 `connectorObservationKey`, preservando a rastreabilidade até a instance por meio do run.
+O `source` de connector é estável e instance-scoped no formato
+`connector:<connectorType>:<connectorInstanceId>`, sem nome de exibição, endpoint ou locator.
+
+O payload source-faithful preserva `observedAt`, mas o semantic fingerprint usa uma representação
+separada que exclui tempo de observação, run e instance. Assim, a mesma semântica observada em outro
+instante dentro do mesmo run mantém a mesma chave, enquanto outro run ou conteúdo materialmente
+alterado produz a separação apropriada.
 
 ## Lifecycle e contadores
 
@@ -64,6 +76,11 @@ QUEUED → RUNNING → COMPLETED | PARTIAL | FAILED | CANCELLED
 - nenhuma aceita e rejeição/falha terminal: `FAILED`;
 - falha antes da última tentativa mantém `RUNNING` para o retry do mesmo run;
 - run já terminal é idempotente e não é processado novamente.
+
+Erros determinísticos do framework e erros de secret não transitórios são não retryable e
+terminalizam imediatamente como `FAILED` ou `PARTIAL`. Indisponibilidade do secret provider e falhas
+genéricas de coleta continuam retryable; nas tentativas intermediárias o run permanece `RUNNING`, e
+na tentativa final o estado terminal é persistido antes de relançar a falha ao pg-boss.
 
 Os contadores persistidos são recalculados a partir das evidences duráveis sempre que possível,
 reduzindo duplicação após falha entre ingestão e acknowledgement.
