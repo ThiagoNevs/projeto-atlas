@@ -25,6 +25,8 @@ export interface AtlasWorkerContext {
   readonly idempotencyKey: string;
   readonly runId: string;
   readonly correlationId?: string;
+  readonly retryCount: number;
+  readonly retryLimit: number;
 }
 
 export interface AtlasWorkerDefinition<TPayload extends JsonValue = JsonValue> {
