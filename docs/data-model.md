@@ -41,6 +41,12 @@ ConnectorInstance
 - `NetworkDiscoveryResult` registra a observação simulada e seu vínculo opcional com um ativo.
 - `ConnectorInstance` preserva configuração versionada e agendamento declarativo de uma
   instância, desabilitada por padrão.
+- `ConnectorInstance.configurationVersion` é a versão do schema da configuração e deve ser
+  compatível com `ConnectorDefinition.configurationSchemaVersion`; editar valores dentro do mesmo
+  schema não incrementa esse campo.
+- `ConnectorInstance.version` é a revisão mutável do aggregate, usada por optimistic concurrency e
+  como execution fence. Toda mutation da instance ou do conjunto de referências de segredo
+  incrementa essa versão.
 - `ConnectorSecretReference` guarda somente o localizador lógico de um segredo por slot; valor,
   token, senha ou outra credencial nunca fazem parte deste modelo.
 - `ConnectorRun` registra gatilho, ator, estado, contadores e fingerprint idempotente de uma

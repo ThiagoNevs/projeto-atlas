@@ -30,10 +30,16 @@ Retry do pg-boss preserva o mesmo `runId`. O fingerprint da solicitação é can
 mesma criação lógica não enfileira outro job. O `connectorObservationKey` impede que o replay exato
 da mesma observação no mesmo run duplique evidence.
 
-O payload mínimo registra a `configurationVersion` aceita no enqueue. Antes de validar configuração,
-resolver secrets ou chamar o provider, o worker confirma que a instance continua habilitada e que a
-versão enfileirada ainda corresponde à versão corrente. Instance desabilitada, configuração alterada
-ou versão não suportada terminam o run de forma fail-closed e sem retry determinístico.
+O payload atual registra a `configurationVersion`, que significa versão do schema da configuração.
+O ADR-018 também exige `instanceVersion`, a revisão mutável da instance, como execution fence. Antes
+de mutations do control plane serem expostas, o Core deverá enfileirar ambos e, antes de validar
+configuração, resolver secrets ou chamar o provider, verificar primeiro que `instanceVersion`
+continua corrente e depois que as versões de schema da instance, payload e definition coincidem.
+
+O Core implementado ainda não carrega `instanceVersion` no payload. Portanto, a API de gestão não
+existe e não poderá ser exposta até esse fence ser implementado. Instance desabilitada, revisão
+alterada, schema incompatível ou versão não suportada terminarão o run de forma fail-closed e sem
+retry determinístico; mismatch de revisão usará `CONNECTOR_INSTANCE_CHANGED`.
 
 ## Fronteiras
 
