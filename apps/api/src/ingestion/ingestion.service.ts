@@ -13,6 +13,7 @@ import {
 } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { IngestAssetDto } from './dto/ingest-asset.dto';
+import type { NormalizedAssetObservation } from './normalized-asset-observation';
 
 const DEFAULT_CONFIDENCE_SCORE = 80;
 const LIFECYCLE_CONFLICT_TYPE = 'LIFECYCLE_CONFLICT';
@@ -50,19 +51,57 @@ export class IngestionService {
   constructor(private readonly prisma: PrismaService) {}
 
   async ingestAsset(dto: IngestAssetDto, actor: CurrentActor) {
-    const observedAt = new Date(dto.lastSeenAt);
-    const source = dto.source.trim().toLowerCase();
-    const sourceAssetId = dto.sourceAssetId.trim();
+    return this.ingestNormalizedAsset({
+      source: dto.source,
+      sourceRecordId: dto.sourceAssetId,
+      hostname: dto.hostname,
+      type: dto.type,
+      ...(dto.category === undefined ? {} : { category: dto.category }),
+      ...(dto.serialNumber === undefined ? {} : { serialNumber: dto.serialNumber }),
+      ...(dto.manufacturer === undefined ? {} : { manufacturer: dto.manufacturer }),
+      ...(dto.model === undefined ? {} : { model: dto.model }),
+      ...(dto.operatingSystem === undefined ? {} : { operatingSystem: dto.operatingSystem }),
+      ...(dto.osVersion === undefined ? {} : { osVersion: dto.osVersion }),
+      observedAt: new Date(dto.lastSeenAt),
+      ...(dto.ipAddresses === undefined ? {} : { ipAddresses: dto.ipAddresses }),
+      ...(dto.macAddresses === undefined ? {} : { macAddresses: dto.macAddresses }),
+      ...(dto.confidenceScore === undefined ? {} : { confidenceScore: dto.confidenceScore }),
+      ...(dto.dataQualityScore === undefined ? {} : { dataQualityScore: dto.dataQualityScore }),
+      evidenceType: 'MANUAL_ASSET_SNAPSHOT',
+      payload: this.toJson(dto),
+      description: `Ingestão manual simulada recebida da fonte ${dto.source.trim().toLowerCase()}.`,
+      auditActor: actor,
+    });
+  }
+
+  async ingestNormalizedAsset(observation: NormalizedAssetObservation) {
+    if (observation.connectorObservationKey) {
+      const existingEvidence = await this.prisma.assetEvidence.findUnique({
+        where: { connectorObservationKey: observation.connectorObservationKey },
+        select: { id: true, connectorRunId: true },
+      });
+      if (existingEvidence) {
+        if (existingEvidence.connectorRunId !== observation.connectorRunId) {
+          throw new Error('Connector observation replay is inconsistent.');
+        }
+        return { action: 'replayed' as const, evidenceId: existingEvidence.id };
+      }
+    }
+
+    const observedAt = observation.observedAt;
+    const source = observation.source.trim().toLowerCase();
+    const sourceAssetId = observation.sourceRecordId.trim();
     const canonicalKey = `${source}:${sourceAssetId}`;
-    const confidenceScore = dto.confidenceScore ?? DEFAULT_CONFIDENCE_SCORE;
-    const dataQualityScore = dto.dataQualityScore ?? this.calculateDataQuality(dto);
-    const payload = this.toJson(dto);
+    const confidenceScore = observation.confidenceScore ?? DEFAULT_CONFIDENCE_SCORE;
+    const dataQualityScore = observation.dataQualityScore ?? this.calculateDataQuality(observation);
+    const payload = observation.payload;
     const fingerprint = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-    const attributes = this.buildAttributeCandidates(dto);
-    const hasNetworkSnapshot = dto.ipAddresses !== undefined || dto.macAddresses !== undefined;
+    const attributes = this.buildAttributeCandidates(observation);
+    const hasNetworkSnapshot =
+      observation.ipAddresses !== undefined || observation.macAddresses !== undefined;
     const networkObservations = this.buildNetworkObservations(
-      dto.ipAddresses ?? [],
-      dto.macAddresses ?? [],
+      observation.ipAddresses ?? [],
+      observation.macAddresses ?? [],
     );
 
     return this.prisma.$transaction(async (transaction) => {
@@ -93,7 +132,7 @@ export class IngestionService {
       const changedFields = existingAsset
         ? this.detectChangedFields(
             existingAsset,
-            dto,
+            observation,
             attributes,
             networkObservations,
             hasNetworkSnapshot,
@@ -118,8 +157,8 @@ export class IngestionService {
         ? await transaction.asset.update({
             where: { id: existingAsset.id },
             data: {
-              name: dto.hostname.trim(),
-              kind: dto.type.trim(),
+              name: observation.hostname.trim(),
+              kind: observation.type.trim(),
               operationalStatus: OperationalStatus.SEEN_RECENTLY,
               confidenceScore,
               dataQualityScore,
@@ -129,8 +168,8 @@ export class IngestionService {
         : await transaction.asset.create({
             data: {
               canonicalKey,
-              name: dto.hostname.trim(),
-              kind: dto.type.trim(),
+              name: observation.hostname.trim(),
+              kind: observation.type.trim(),
               operationalStatus: OperationalStatus.SEEN_RECENTLY,
               administrativeStatus: AdministrativeStatus.IN_USE,
               confidenceScore,
@@ -143,9 +182,15 @@ export class IngestionService {
       const evidence = await transaction.assetEvidence.create({
         data: {
           assetId: asset.id,
+          ...(observation.connectorRunId === undefined
+            ? {}
+            : { connectorRunId: observation.connectorRunId }),
+          ...(observation.connectorObservationKey === undefined
+            ? {}
+            : { connectorObservationKey: observation.connectorObservationKey }),
           source,
           sourceRecordId: sourceAssetId,
-          evidenceType: 'MANUAL_ASSET_SNAPSHOT',
+          evidenceType: observation.evidenceType,
           payload,
           fingerprint,
           confidenceScore,
@@ -195,14 +240,19 @@ export class IngestionService {
           evidenceId: evidence.id,
           eventType,
           title: this.eventTitle(eventType),
-          description: lifecycleMessage ?? `Ingestão manual simulada recebida da fonte ${source}.`,
+          description: lifecycleMessage ?? observation.description,
           data: hasLifecycleConflict
             ? {
                 administrativeStatus: existingAsset!.administrativeStatus,
                 source,
                 evidenceId: evidence.id,
                 message: lifecycleMessage!,
-                actorId: actor.id,
+                ...(observation.auditActor === undefined
+                  ? {}
+                  : { actorId: observation.auditActor.id }),
+                ...(observation.connectorRunId === undefined
+                  ? {}
+                  : { connectorRunId: observation.connectorRunId }),
               }
             : {
                 source,
@@ -210,36 +260,43 @@ export class IngestionService {
                 confidenceScore,
                 dataQualityScore,
                 changedFields,
-                actorId: actor.id,
+                ...(observation.auditActor === undefined
+                  ? {}
+                  : { actorId: observation.auditActor.id }),
+                ...(observation.connectorRunId === undefined
+                  ? {}
+                  : { connectorRunId: observation.connectorRunId }),
               },
           occurredAt: observedAt,
         },
       });
 
-      await transaction.auditLog.create({
-        data: {
-          assetId: asset.id,
-          actorType: auditActorType(actor),
-          actorId: actor.id,
-          action: 'ASSET_INGESTION_COMPLETED',
-          entityType: 'Asset',
-          entityId: asset.id,
-          after: {
-            result: action,
-            eventType,
-          },
-          metadata: {
+      if (observation.auditActor) {
+        await transaction.auditLog.create({
+          data: {
             assetId: asset.id,
-            evidenceId: evidence.id,
-            eventId: event.id,
-            source,
-            sourceRecordId: sourceAssetId,
-            result: action,
-            eventType,
-            changedFields,
+            actorType: auditActorType(observation.auditActor),
+            actorId: observation.auditActor.id,
+            action: 'ASSET_INGESTION_COMPLETED',
+            entityType: 'Asset',
+            entityId: asset.id,
+            after: {
+              result: action,
+              eventType,
+            },
+            metadata: {
+              assetId: asset.id,
+              evidenceId: evidence.id,
+              eventId: event.id,
+              source,
+              sourceRecordId: sourceAssetId,
+              result: action,
+              eventType,
+              changedFields,
+            },
           },
-        },
-      });
+        });
+      }
 
       const assetDetail = await transaction.asset.findUniqueOrThrow({
         where: { id: asset.id },
@@ -265,7 +322,7 @@ export class IngestionService {
       attributes: Array<{ key: string; valueText: string | null }>;
       networkInterfaces: ExistingInterface[];
     },
-    dto: IngestAssetDto,
+    observation: NormalizedAssetObservation,
     attributes: AttributeCandidate[],
     observations: NetworkObservation[],
     hasNetworkSnapshot: boolean,
@@ -275,10 +332,10 @@ export class IngestionService {
       asset.attributes.map((attribute) => [attribute.key, attribute.valueText]),
     );
 
-    if (asset.name !== dto.hostname.trim()) {
+    if (asset.name !== observation.hostname.trim()) {
       changedFields.add('hostname');
     }
-    if (asset.kind !== dto.type.trim()) {
+    if (asset.kind !== observation.type.trim()) {
       changedFields.add('type');
     }
 
@@ -323,16 +380,16 @@ export class IngestionService {
     });
   }
 
-  private buildAttributeCandidates(dto: IngestAssetDto): AttributeCandidate[] {
+  private buildAttributeCandidates(observation: NormalizedAssetObservation): AttributeCandidate[] {
     const candidates = [
-      { key: 'hostname', value: dto.hostname },
-      { key: 'type', value: dto.type },
-      { key: 'category', value: dto.category },
-      { key: 'serialNumber', value: dto.serialNumber },
-      { key: 'manufacturer', value: dto.manufacturer },
-      { key: 'model', value: dto.model },
-      { key: 'operatingSystem', value: dto.operatingSystem },
-      { key: 'osVersion', value: dto.osVersion },
+      { key: 'hostname', value: observation.hostname },
+      { key: 'type', value: observation.type },
+      { key: 'category', value: observation.category },
+      { key: 'serialNumber', value: observation.serialNumber },
+      { key: 'manufacturer', value: observation.manufacturer },
+      { key: 'model', value: observation.model },
+      { key: 'operatingSystem', value: observation.operatingSystem },
+      { key: 'osVersion', value: observation.osVersion },
     ];
 
     return candidates
@@ -344,8 +401,8 @@ export class IngestionService {
   }
 
   private buildNetworkObservations(
-    rawIpAddresses: string[],
-    rawMacAddresses: string[],
+    rawIpAddresses: readonly string[],
+    rawMacAddresses: readonly string[],
   ): NetworkObservation[] {
     const ipAddresses = [...new Set(rawIpAddresses.map((ip) => ip.trim().toLowerCase()))];
     const macAddresses = [
@@ -702,19 +759,19 @@ export class IngestionService {
     });
   }
 
-  private calculateDataQuality(dto: IngestAssetDto): number {
+  private calculateDataQuality(observation: NormalizedAssetObservation): number {
     const relevantValues = [
-      dto.hostname,
-      dto.type,
-      dto.category,
-      dto.serialNumber,
-      dto.manufacturer,
-      dto.model,
-      dto.operatingSystem,
-      dto.osVersion,
-      dto.lastSeenAt,
-      dto.ipAddresses?.length ? dto.ipAddresses : undefined,
-      dto.macAddresses?.length ? dto.macAddresses : undefined,
+      observation.hostname,
+      observation.type,
+      observation.category,
+      observation.serialNumber,
+      observation.manufacturer,
+      observation.model,
+      observation.operatingSystem,
+      observation.osVersion,
+      observation.observedAt,
+      observation.ipAddresses?.length ? observation.ipAddresses : undefined,
+      observation.macAddresses?.length ? observation.macAddresses : undefined,
     ];
     const completed = relevantValues.filter((value) => value !== undefined && value !== '').length;
 

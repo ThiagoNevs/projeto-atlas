@@ -44,7 +44,7 @@ ConnectorInstance
 - `ConnectorSecretReference` guarda somente o localizador lógico de um segredo por slot; valor,
   token, senha ou outra credencial nunca fazem parte deste modelo.
 - `ConnectorRun` registra gatilho, ator, estado, contadores e fingerprint idempotente de uma
-  execução. A criação e o processamento da execução pertencem a incrementos futuros.
+  execução. O Core cria o run e o job atomicamente e preserva o mesmo run durante retries.
 - `AssetEvidence` pode apontar para a execução que produziu a observação e usar uma chave de
   observação de 64 caracteres para deduplicação. Evidências anteriores continuam válidas com os
   dois campos nulos.
@@ -62,6 +62,8 @@ decimais.
   preservam o histórico com exclusão restrita.
 - A persistência de Connector Framework não modela as tabelas internas do pg-boss no Prisma e
   mantém `SecretReference != SecretMaterial`.
+- `ConnectorDefinition` e `ConnectorObservation` permanecem conceitos de runtime; não possuem
+  tabelas próprias.
 - Migrations antigas não devem ser editadas depois de aplicadas; mudanças são feitas por
   migrations corretivas.
 

@@ -213,6 +213,8 @@ export class ConnectorExecutionService implements OnApplicationBootstrap, OnAppl
               ...(envelope.correlationId === undefined
                 ? {}
                 : { correlationId: envelope.correlationId }),
+              retryCount: rawJob.retryCount,
+              retryLimit: rawJob.retryLimit,
             });
             this.logger.log({
               event: 'connector_execution.job.completed',

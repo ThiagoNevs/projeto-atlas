@@ -306,7 +306,7 @@ describe('Connector Execution with ephemeral schemas', () => {
     const retryQueue = 'atlas.test.retry';
     const retryDlq = 'atlas.test.retry.dead';
     const idempotencyKey = `retry:${randomUUID()}`;
-    const observed: string[] = [];
+    const observed: Array<{ key: string; retryCount: number; retryLimit: number }> = [];
     await service.registerWorker({
       queueName: retryQueue,
       deadLetterQueue: retryDlq,
@@ -316,7 +316,11 @@ describe('Connector Execution with ephemeral schemas', () => {
       retryBackoff: false,
       expireInSeconds: 30,
       handler: (_payload, context) => {
-        observed.push(context.idempotencyKey);
+        observed.push({
+          key: context.idempotencyKey,
+          retryCount: context.retryCount,
+          retryLimit: context.retryLimit,
+        });
         if (observed.length === 1) throw new Error('synthetic failure');
         return Promise.resolve();
       },
@@ -326,7 +330,10 @@ describe('Connector Execution with ephemeral schemas', () => {
       createAtlasJobEnvelope({ payload: {}, idempotencyKey, maxBytes: 4096 }),
     );
     await waitFor(() => observed.length === 2);
-    expect(observed).toEqual([idempotencyKey, idempotencyKey]);
+    expect(observed).toEqual([
+      { key: idempotencyKey, retryCount: 0, retryLimit: 1 },
+      { key: idempotencyKey, retryCount: 1, retryLimit: 1 },
+    ]);
     await service.stopWorker(retryQueue);
   }, 20_000);
 

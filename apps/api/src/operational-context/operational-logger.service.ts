@@ -17,6 +17,7 @@ export interface OperationalLogRecord {
   readonly errorCode?: string;
   readonly queueName?: string;
   readonly jobId?: string;
+  readonly runId?: string;
 }
 
 @Injectable()
@@ -62,6 +63,7 @@ export class OperationalLogger {
       ...(record.errorCode === undefined ? {} : { errorCode: record.errorCode }),
       ...(record.queueName === undefined ? {} : { queueName: record.queueName }),
       ...(record.jobId === undefined ? {} : { jobId: record.jobId }),
+      ...(record.runId === undefined ? {} : { runId: record.runId }),
     });
   }
 }
