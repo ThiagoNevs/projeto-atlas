@@ -20,6 +20,11 @@ function registeredControllers(root: NestType): NestType[] {
     for (const imported of (Reflect.getMetadata(MODULE_METADATA.IMPORTS, moduleType) ??
       []) as unknown[]) {
       if (typeof imported === 'function') visit(imported as NestType);
+      if (typeof imported === 'object' && imported !== null && 'module' in imported) {
+        const dynamic = imported as { module: NestType; controllers?: NestType[] };
+        visit(dynamic.module);
+        for (const controller of dynamic.controllers ?? []) controllers.add(controller);
+      }
     }
   }
   visit(root);
@@ -33,7 +38,7 @@ describe('authorization policy completeness', () => {
     const missingOrAmbiguous: string[] = [];
 
     const controllers = registeredControllers(AppModule);
-    expect(controllers).toHaveLength(16);
+    expect(controllers).toHaveLength(17);
     for (const ControllerType of controllers) {
       const prototype = ControllerType.prototype as object;
       for (const methodName of Object.getOwnPropertyNames(prototype)) {
@@ -56,7 +61,7 @@ describe('authorization policy completeness', () => {
       }
     }
 
-    expect(handlers).toHaveLength(47);
+    expect(handlers).toHaveLength(57);
     expect(publicHandlers).toEqual([
       'HealthController.check (/)',
       'HealthController.checkLive (live)',
