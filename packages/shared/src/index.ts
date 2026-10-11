@@ -65,6 +65,9 @@ export const ATLAS_PERMISSIONS = permissionRegistry as {
   readonly discoveryConfigure: 'discovery:configure';
   readonly discoveryExecute: 'discovery:execute';
   readonly ingestionExecute: 'ingestion:execute';
+  readonly connectorRead: 'connector:read';
+  readonly connectorConfigure: 'connector:configure';
+  readonly connectorExecute: 'connector:execute';
   readonly auditRead: 'audit:read';
 };
 

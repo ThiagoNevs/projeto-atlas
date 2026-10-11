@@ -3,6 +3,7 @@ import {
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
 } from '@nestjs/common';
+import { types as utilTypes } from 'node:util';
 
 import { ConnectorExecutionService } from '../connector-execution/connector-execution.service';
 import type { AtlasWorkerContext } from '../connector-execution/connector-execution.types';
@@ -63,7 +64,7 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
   async process(payload: ConnectorRunJobPayload, context: AtlasWorkerContext): Promise<void> {
     let rejectedCount = 0;
     try {
-      validateJobPayload(payload, context.runId);
+      const validatedPayload = validateJobPayload(payload, context.runId);
       const run = await this.prisma.connectorRun.findUnique({
         where: { id: context.runId },
         include: {
@@ -72,7 +73,7 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
           },
         },
       });
-      if (!run || run.connectorInstanceId !== payload.connectorInstanceId) {
+      if (!run || run.connectorInstanceId !== validatedPayload.connectorInstanceId) {
         throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
       }
       if (
@@ -106,7 +107,10 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
         if (!run.connectorInstance.enabled) {
           throw new ConnectorFrameworkError('CONNECTOR_INSTANCE_DISABLED');
         }
-        if (payload.configurationVersion !== run.connectorInstance.configurationVersion) {
+        if (validatedPayload.instanceVersion !== run.connectorInstance.version) {
+          throw new ConnectorFrameworkError('CONNECTOR_INSTANCE_CHANGED');
+        }
+        if (validatedPayload.configurationVersion !== run.connectorInstance.configurationVersion) {
           throw new ConnectorFrameworkError('CONNECTOR_CONFIG_CHANGED');
         }
         const config = validateConfiguration(definition, run.connectorInstance);
@@ -251,21 +255,68 @@ export class ConnectorRunWorker implements OnApplicationBootstrap, OnApplication
   }
 }
 
-function validateJobPayload(payload: ConnectorRunJobPayload, runId: string): void {
+function validateJobPayload(
+  payload: ConnectorRunJobPayload,
+  runId: string,
+): ConnectorRunJobPayload {
+  if (typeof payload !== 'object' || payload === null || utilTypes.isProxy(payload)) {
+    throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
+  }
+  const prototype = Object.getPrototypeOf(payload) as unknown;
+  const descriptors = Object.getOwnPropertyDescriptors(payload);
+  const expected = [
+    'schemaVersion',
+    'connectorInstanceId',
+    'configurationVersion',
+    'instanceVersion',
+  ] as const;
+  const keys = Reflect.ownKeys(descriptors);
   if (
-    typeof payload !== 'object' ||
-    payload === null ||
-    payload.schemaVersion !== 1 ||
-    !UUID_V4_PATTERN.test(payload.connectorInstanceId) ||
-    !Number.isSafeInteger(payload.configurationVersion) ||
-    payload.configurationVersion < 1 ||
-    !UUID_V4_PATTERN.test(runId) ||
-    Object.keys(payload).some(
-      (key) => !['schemaVersion', 'connectorInstanceId', 'configurationVersion'].includes(key),
+    (prototype !== Object.prototype && prototype !== null) ||
+    keys.length !== expected.length ||
+    keys.some(
+      (key) =>
+        typeof key !== 'string' ||
+        !expected.includes(key as (typeof expected)[number]) ||
+        !isEnumerableDataDescriptor(descriptors[key]),
     )
   ) {
     throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
   }
+  const schemaVersion = descriptors.schemaVersion.value;
+  const connectorInstanceId = descriptors.connectorInstanceId.value;
+  const configurationVersion = descriptors.configurationVersion.value;
+  const instanceVersion = descriptors.instanceVersion.value;
+  if (
+    schemaVersion !== 1 ||
+    typeof connectorInstanceId !== 'string' ||
+    !UUID_V4_PATTERN.test(connectorInstanceId) ||
+    !Number.isSafeInteger(configurationVersion) ||
+    (configurationVersion as number) < 1 ||
+    !Number.isSafeInteger(instanceVersion) ||
+    (instanceVersion as number) < 1 ||
+    !UUID_V4_PATTERN.test(runId)
+  ) {
+    throw new ConnectorFrameworkError('CONNECTOR_RUN_REPLAY_INCONSISTENT');
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    connectorInstanceId: connectorInstanceId.toLowerCase(),
+    configurationVersion: configurationVersion as number,
+    instanceVersion: instanceVersion as number,
+  });
+}
+
+function isEnumerableDataDescriptor(
+  descriptor: PropertyDescriptor | undefined,
+): descriptor is PropertyDescriptor & { value: unknown } {
+  return (
+    descriptor !== undefined &&
+    descriptor.enumerable === true &&
+    Object.prototype.hasOwnProperty.call(descriptor, 'value') &&
+    !Object.prototype.hasOwnProperty.call(descriptor, 'get') &&
+    !Object.prototype.hasOwnProperty.call(descriptor, 'set')
+  );
 }
 
 function validateConfiguration(

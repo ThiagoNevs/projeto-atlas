@@ -42,6 +42,7 @@ export class ConnectorRunService {
         enabled: true,
         connectorType: true,
         configurationVersion: true,
+        version: true,
         configuration: true,
       },
     });
@@ -63,6 +64,7 @@ export class ConnectorRunService {
       schemaVersion: 1,
       connectorInstanceId: instance.id,
       configurationVersion: instance.configurationVersion,
+      instanceVersion: instance.version,
     });
 
     try {
@@ -94,6 +96,23 @@ export class ConnectorRunService {
           }),
           { singletonKey: runId },
         );
+        if (normalized.trigger === ConnectorRunTrigger.REQUESTED) {
+          await transaction.auditLog.create({
+            data: {
+              actorType:
+                normalized.triggerActor.kind === 'HUMAN' ? 'USER' : normalized.triggerActor.kind,
+              actorId: normalized.triggerActor.id,
+              action: 'CONNECTOR_RUN_REQUESTED',
+              entityType: 'ConnectorRun',
+              entityId: runId,
+              metadata: {
+                runId,
+                connectorInstanceId: instance.id,
+                trigger: ConnectorRunTrigger.REQUESTED,
+              },
+            },
+          });
+        }
         return created;
       });
       return { run, replayed: false };

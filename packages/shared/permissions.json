@@ -14,5 +14,8 @@
   "discoveryConfigure": "discovery:configure",
   "discoveryExecute": "discovery:execute",
   "ingestionExecute": "ingestion:execute",
+  "connectorRead": "connector:read",
+  "connectorConfigure": "connector:configure",
+  "connectorExecute": "connector:execute",
   "auditRead": "audit:read"
 }
