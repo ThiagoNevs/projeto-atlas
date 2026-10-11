@@ -68,6 +68,12 @@ configuração de schedule
 lifecycle operacional
 ```
 
+`configurationVersion` representa exclusivamente a versão do schema de configuração e deve
+coincidir com `ConnectorDefinition.configurationSchemaVersion`. Edições normais dos valores de
+configuração não alteram esse campo. `version` é a revisão mutável do aggregate, usada tanto por
+optimistic concurrency quanto pelo execution fence; toda mutation da instance ou de suas referências
+de segredo incrementa essa revisão. O ADR-018 formaliza essas semânticas.
+
 O lifecycle normal será criar, configurar, habilitar e desabilitar. Hard delete não será a operação
 normal e não haverá API geral de delete no framework inicial. Uma instance que possua runs ou
 evidence históricos não poderá ser removida de forma destrutiva.
@@ -208,11 +214,11 @@ O fluxo aceito é:
 ```text
 trigger autenticado ou scheduler
 → criar ConnectorRun(QUEUED)
-→ enqueue via Connector Execution
+→ enqueue de configurationVersion + instanceVersion via Connector Execution
 → confirmar ambos na mesma transação PostgreSQL
 → worker reivindica o job
 → mesmo ConnectorRun passa a RUNNING
-→ carregar ConnectorInstance e validar configuração/versão
+→ carregar ConnectorInstance e validar primeiro a revisão, depois o schema de configuração
 → resolver slots necessários em memória
 → Connector.collect()
 → stream de ConnectorObservation
@@ -223,6 +229,13 @@ trigger autenticado ou scheduler
 ```
 
 Criação do run e enqueue usarão a fronteira `fromPrisma(tx)` aceita no ADR-012.
+
+Antes de validar configuração, resolver secrets ou chamar o provider, o worker deverá exigir
+`payload.instanceVersion == ConnectorInstance.version`. Mismatch será
+`CONNECTOR_INSTANCE_CHANGED`, não retryable. De forma independente, deverá verificar que
+`payload.configurationVersion`, `ConnectorInstance.configurationVersion` e
+`ConnectorDefinition.configurationSchemaVersion` coincidem. O Core atual ainda precisa incorporar
+o `instanceVersion` ao payload antes de mutations do control plane serem expostas.
 
 O Atlas será a fonte de verdade de schedules. Uma instance persistirá futuramente
 `scheduleEnabled`, `scheduleExpression` e `scheduleTimeZone`; registros internos de schedule do
@@ -320,17 +333,18 @@ connector:configure
 connector:execute
 ```
 
-`connector:read` permitirá list/detail de instances e runs. `connector:configure` cobrirá criação,
-configuração, enable/disable, schedule e slots de credential. `connector:execute` cobrirá run
-solicitado, cancelamento e redrive controlado.
+`connector:read` permitirá list/detail de definitions, instances e runs. `connector:configure`
+cobrirá criação, configuração, enable/disable e slots de credential. `connector:execute` cobrirá run
+solicitado. Schedule, cancelamento e redrive permanecem fora da primeira versão do control plane,
+conforme ADR-018.
 
 Um mapping humano inicial poderá conceder read ao Viewer, read/execute ao Analyst e as três ao
 Admin. Service Actors terão mappings explícitos e separados. `atlas:access` continuará sendo gate
 independente e obrigatório; nenhum ator ou worker terá bypass.
 
-Operações administrativas relevantes gerarão `AuditLog`, incluindo configuração da instance,
-enable/disable, solicitação manual, cancelamento e redrive. Observações individuais e telemetria de
-worker não serão transformadas em AuditLog de alto volume.
+Operações administrativas relevantes gerarão `AuditLog`, incluindo criação/configuração da
+instance, enable/disable, mudanças seguras de referência e solicitação manual. Observações
+individuais e telemetria de worker não serão transformadas em AuditLog de alto volume.
 
 ## Persistence intent
 
@@ -361,12 +375,12 @@ id UUID PK
 connectorType required
 name required
 enabled false by default
-configurationVersion default 1
+configurationVersion default 1 (versão do schema de configuração)
 configuration JSONB
 scheduleEnabled false
 scheduleExpression nullable
 scheduleTimeZone default UTC
-version default 1
+version default 1 (revisão mutável da instance e execution fence)
 createdAt
 updatedAt
 ```
@@ -488,4 +502,4 @@ paginação/load, provisioning/rotation de segredo, TLS e revisão de segurança
 
 ## Related Decisions
 
-ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 e ADR-016.
+ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-016 e ADR-018.
