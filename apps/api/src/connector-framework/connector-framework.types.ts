@@ -81,4 +81,5 @@ export type ConnectorRunJobPayload = Readonly<{
   schemaVersion: 1;
   connectorInstanceId: string;
   configurationVersion: number;
+  instanceVersion: number;
 }>;

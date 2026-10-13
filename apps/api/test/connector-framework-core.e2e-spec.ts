@@ -101,6 +101,7 @@ describe('Connector Framework Core (e2e)', () => {
       where: { connectorRunId: { in: runIds } },
       select: { assetId: true },
     });
+    await prisma.auditLog.deleteMany({ where: { entityId: { in: [...runIds, ...instanceIds] } } });
     await prisma.asset.deleteMany({ where: { id: { in: assets.map(({ assetId }) => assetId) } } });
     await prisma.connectorRun.deleteMany({ where: { id: { in: runIds } } });
     await prisma.connectorSecretReference.deleteMany({
@@ -164,7 +165,13 @@ describe('Connector Framework Core (e2e)', () => {
     expect(first.run.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(replay).toEqual({ run: first.run, replayed: true });
     expect([before, afterFirst, afterReplay]).toEqual([before, before + 1, before + 1]);
-
+    const requestedAudits = await prisma.auditLog.findMany({
+      where: { entityId: first.run.id, action: 'CONNECTOR_RUN_REQUESTED' },
+    });
+    expect(requestedAudits).toHaveLength(1);
+    expect(JSON.stringify(requestedAudits)).not.toMatch(
+      /atomic:|requestFingerprint|idempotencyKey|jobId|queueName/,
+    );
     const jobs = await observerBoss.findJobs<AtlasJobEnvelope<ConnectorRunJobPayload>>(queueName, {
       queued: true,
     });
@@ -177,6 +184,7 @@ describe('Connector Framework Core (e2e)', () => {
           schemaVersion: 1,
           connectorInstanceId: instance.id,
           configurationVersion: 1,
+          instanceVersion: 1,
         },
       }),
     );
@@ -229,6 +237,9 @@ describe('Connector Framework Core (e2e)', () => {
       failingExecution,
       new ConnectorDefinitionRegistry([createDefinition(() => emitObservations())]),
     );
+    const auditsBefore = await prisma.auditLog.count({
+      where: { action: 'CONNECTOR_RUN_REQUESTED', actorId },
+    });
 
     await expect(service.create(requestedRun(instance.id, requestIdentity))).rejects.toThrow(
       'synthetic enqueue failure',
@@ -236,6 +247,11 @@ describe('Connector Framework Core (e2e)', () => {
     expect(await prisma.connectorRun.count({ where: { connectorInstanceId: instance.id } })).toBe(
       0,
     );
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'CONNECTOR_RUN_REQUESTED', actorId },
+      }),
+    ).toBe(auditsBefore);
   });
 
   it('fails closed for disabled instances and invalid trigger actor combinations', async () => {
@@ -401,7 +417,7 @@ describe('Connector Framework Core (e2e)', () => {
       }),
     );
     expect(await prisma.assetEvidence.count({ where: { connectorRunId: run.id } })).toBe(1);
-    expect(await prisma.auditLog.count({ where: { actorId } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { entityId: run.id } })).toBe(0);
   });
 
   it('finishes PARTIAL when one observation is rejected and one is ingested', async () => {
@@ -475,9 +491,11 @@ describe('Connector Framework Core (e2e)', () => {
       Promise.resolve(ResolvedSecret.from('synthetic-value')),
     );
     const payloads = [
-      { configurationVersion: 0 },
-      { configurationVersion: Number.MAX_SAFE_INTEGER + 1 },
-      { configurationVersion: 1, unexpected: true },
+      { configurationVersion: 0, instanceVersion: 1 },
+      { configurationVersion: Number.MAX_SAFE_INTEGER + 1, instanceVersion: 1 },
+      { configurationVersion: 1, instanceVersion: 0 },
+      { configurationVersion: 1, instanceVersion: Number.MAX_SAFE_INTEGER + 1 },
+      { configurationVersion: 1, instanceVersion: 1, unexpected: true },
     ];
 
     for (const payloadExtension of payloads) {
@@ -516,7 +534,7 @@ describe('Connector Framework Core (e2e)', () => {
     } as unknown as SecretResolver);
     await prisma.connectorInstance.update({
       where: { id: instance.id },
-      data: { enabled: false },
+      data: { enabled: false, version: { increment: 1 } },
     });
 
     await expect(
@@ -561,6 +579,108 @@ describe('Connector Framework Core (e2e)', () => {
         status: ConnectorRunStatus.FAILED,
         errorCode: 'CONNECTOR_CONFIG_CHANGED',
         finishedAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('fences an instance revision change before provider or secret work', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+    await prisma.connectorInstance.update({
+      where: { id: instance.id },
+      data: {
+        version: { increment: 1 },
+        configuration: { schemaVersion: 1, endpointLabel: 'new' },
+      },
+    });
+    await expect(
+      worker.process(jobPayload(instance.id, 1, 1), workerContext(run.id, 0, 2)),
+    ).resolves.toBeUndefined();
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        errorCode: 'CONNECTOR_INSTANCE_CHANGED',
+        finishedAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('fences a secret-reference revision without resolving the changed secret', async () => {
+    const collect = jest.fn<ConnectorDefinition['collect']>(() => emitObservations());
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+    await prisma.$transaction([
+      prisma.connectorSecretReference.update({
+        where: {
+          connectorInstanceId_slot: {
+            connectorInstanceId: instance.id,
+            slot: 'bind-password',
+          },
+        },
+        data: { logicalKey: 'CONNECTOR_CHANGED_TEST_VALUE' },
+      }),
+      prisma.connectorInstance.update({
+        where: { id: instance.id },
+        data: { version: { increment: 1 } },
+      }),
+    ]);
+
+    await worker.process(jobPayload(instance.id, 1, 1), workerContext(run.id, 0, 2));
+
+    expect(collect).not.toHaveBeenCalled();
+    expect(resolveSecret).not.toHaveBeenCalled();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        errorCode: 'CONNECTOR_INSTANCE_CHANGED',
+      }),
+    );
+  });
+
+  it('terminalizes a stale instance revision as PARTIAL when durable evidence exists', async () => {
+    const observation = validObservation(`instance-partial-${randomUUID()}`);
+    let attempts = 0;
+    const collect = jest.fn<ConnectorDefinition['collect']>(async function* () {
+      await Promise.resolve();
+      attempts += 1;
+      yield observation;
+      throw new Error('synthetic transient after evidence');
+    });
+    const resolveSecret = jest.fn<() => Promise<ResolvedSecret>>(() =>
+      Promise.resolve(ResolvedSecret.from('synthetic-value')),
+    );
+    const { instance, run, worker } = await createWorkerRun(createDefinition(collect), {
+      resolve: resolveSecret,
+    } as unknown as SecretResolver);
+
+    await expect(
+      worker.process(jobPayload(instance.id, 1, 1), workerContext(run.id, 0, 2)),
+    ).rejects.toThrow('synthetic transient after evidence');
+    await prisma.connectorInstance.update({
+      where: { id: instance.id },
+      data: { version: { increment: 1 } },
+    });
+    await worker.process(jobPayload(instance.id, 1, 1), workerContext(run.id, 1, 2));
+
+    expect(attempts).toBe(1);
+    expect(resolveSecret).toHaveBeenCalledTimes(1);
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.PARTIAL,
+        ingestedCount: 1,
+        errorCode: 'CONNECTOR_INSTANCE_CHANGED',
       }),
     );
   });
@@ -890,8 +1010,12 @@ function requestedRun(connectorInstanceId: string, requestIdentity: string) {
   };
 }
 
-function jobPayload(connectorInstanceId: string, configurationVersion = 1): ConnectorRunJobPayload {
-  return { schemaVersion: 1, connectorInstanceId, configurationVersion };
+function jobPayload(
+  connectorInstanceId: string,
+  configurationVersion = 1,
+  instanceVersion = 1,
+): ConnectorRunJobPayload {
+  return { schemaVersion: 1, connectorInstanceId, configurationVersion, instanceVersion };
 }
 
 function workerContext(runId: string, retryCount: number, retryLimit: number): AtlasWorkerContext {
