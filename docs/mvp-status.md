@@ -9,9 +9,14 @@ runtime `migrate:false`, migration operacional explícita, envelope versionado/l
 O Core do Connector Framework também está implementado: registry code-owned de
 `ConnectorDefinition`, criação atômica e idempotente de `ConnectorRun` + job, lifecycle/retries do
 mesmo run, `ConnectorObservation` de runtime, resolução de segredo limitada por slot semântico e
-ingestão normalizada compartilhada com a entrada manual. Ainda não existem API/UI, scheduler real ou
-connector real. O gate de estabilização e revisão para go-live produtivo permanece pendente e deve
-ser satisfeito explicitamente antes de deployment.
+ingestão normalizada compartilhada com a entrada manual. O plano de controle v1 oferece as operações
+protegidas já documentadas para definitions, instances e runs. Ainda não existem UI, scheduler real
+ou connector real.
+
+O ADR-019 aceita o desenho de readiness técnico, observabilidade, retenção, capacidade, política da
+DLQ e reconciliação de runs abandonados. Esses controles ainda não estão implementados; o gate de
+estabilização para go-live produtivo permanece pendente e deve ser satisfeito explicitamente antes
+de deployment.
 
 ## Visão geral
 

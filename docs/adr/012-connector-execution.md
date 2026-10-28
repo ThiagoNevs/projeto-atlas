@@ -133,6 +133,11 @@ de erros.
 - O schema da fila exige ownership e upgrade independentes das migrations Prisma.
 - Connector Execution, Connector Framework e conectores reais continuam exigindo PRs próprios.
 
+O contrato operacional necessário antes do go-live — readiness técnico, observabilidade da fila,
+retenção, capacidade, política da DLQ e reconciliação de runs abandonados — é formalizado pelo
+[ADR-019](019-connector-execution-production-stabilization.md). Essa decisão complementa, sem
+substituir, a escolha arquitetural registrada neste ADR.
+
 ## Security / Operational Considerations
 
 Workers devem operar com least privilege. A role normal precisa apenas das permissões DML e de

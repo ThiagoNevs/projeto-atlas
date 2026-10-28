@@ -135,9 +135,13 @@ inspeção, alertas, retenção e redrive operacional.
 
 Falhas de infraestrutura que impedem o handler de persistir o estado terminal — como hard kill,
 expiração, perda de heartbeat ou fencing por partição de rede — podem deixar o `ConnectorRun` em
-`RUNNING` mesmo após o pg-boss esgotar o job. Reconciliação não consumidora para esses runs não é
-implementada neste incremento e permanece uma limitação do gate de estabilização do Connector
-Execution. O gate continua `PENDING` e o Core ainda não estabelece prontidão para go-live.
+`RUNNING` mesmo após o pg-boss esgotar o job. O ADR-019 aceita o desenho da reconciliação não
+consumidora, a correlação sem payload e as janelas conservadoras para esses runs. A implementação
+continua pendente; o Core ainda não estabelece prontidão para go-live.
+
+O ADR-019 também define o contrato futuro de readiness técnico, observabilidade, retenção,
+capacidade e DLQ. A aceitação dessa arquitetura não significa que esses controles já estejam
+disponíveis no runtime.
 
 ## Itens futuros explícitos
 

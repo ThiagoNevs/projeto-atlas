@@ -23,6 +23,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 - [ADR-016 — Referências de segredo e propriedade externa](016-secret-references.md) — Accepted — material secreto externo e resolução interna allowlisted.
 - [ADR-017 — Connector Framework](017-connector-framework.md) — Accepted — definitions em código, instances e runs persistidos, observations em runtime e ingestão evidence-first.
 - [ADR-018 — Connector Management Control Plane](018-connector-management-control-plane.md) — Accepted — versões, fencing, REST, RBAC, secrets, idempotência e auditoria da gestão de connectors.
+- [ADR-019 — Estabilização de produção da execução de conectores](019-connector-execution-production-stabilization.md) — Accepted — readiness, observabilidade, retenção, capacidade, DLQ e reconciliação conservadora.
 
 ## Decision backlog
 
