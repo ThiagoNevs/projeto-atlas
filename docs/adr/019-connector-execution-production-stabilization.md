@@ -99,7 +99,15 @@ técnico.
 
 Logs estruturados de início, conclusão e falha de execução devem incluir o contexto de retry
 disponível, incluindo `retryCount` e `retryLimit`, além dos identificadores seguros de run, job e
-connector. Payloads, tokens, credenciais e material secreto não podem ser registrados.
+connector. Quando aplicável, falhas podem expor somente classificações seguras e limitadas, como
+`errorCode`, `errorType`, `retryCount`, `retryLimit`, `durationMs`, `runId`, `jobId`, `queueName` e
+`correlationId`.
+
+Esses logs não podem conter `Idempotency-Key`, `requestIdentity` ou identidade idempotente bruta
+equivalente, `error.message` bruto do provider, mensagem bruta de exceção do provider, stack com
+material do provider, diagnósticos brutos de credencial ou provider, configuração,
+`SecretReference`, `logicalKey`, material secreto, resposta do provider, payload da fila ou
+`DATABASE_URL`.
 
 ### 4. Retenção e limpeza
 
@@ -163,6 +171,12 @@ efeito de negócio externo exatamente uma vez
 Uma falha após o efeito externo e antes do acknowledgement pode causar nova execução. Handlers de
 conectores devem ser idempotentes e usar chaves de idempotência quando o sistema externo permitir.
 
+A proteção interna do Atlas contra replay continua usando os mecanismos existentes de deduplicação
+de evidence e observation, incluindo fingerprint semântico da observation e
+`connectorObservationKey`/deduplicação de evidence. Essa proteção reduz efeitos duplicados no estado
+e nas evidências do Atlas quando o trabalho é repetido, mas não converte efeitos externos no provider
+em semântica exatamente uma vez. A idempotência do handler continua obrigatória.
+
 ### 8. Correlação comprovada entre run, job e DLQ
 
 Um spike controlado com PostgreSQL 17, pg-boss `12.33.6` e schema `42` comprovou:
@@ -205,9 +219,18 @@ O reconciler:
 - não executa jobs;
 - não faz claim;
 - não lê payloads;
+- não resolve `SecretReference` nem material secreto;
+- não acessa credenciais de provider;
+- não invoca `ConnectorDefinition.collect()`;
+- não faz chamadas de rede ou ao provider;
 - não redrive automaticamente;
 - não altera runs já terminais;
 - não cria `AuditLog` por item reconciliado.
+
+O reconciler não personifica o ator que disparou o run nem reutiliza proveniência `HUMAN` ou
+`SERVICE` para executar ações. `ConnectorRun.triggerActorType` e `ConnectorRun.triggerActorId`
+permanecem apenas como proveniência histórica. A reconciliação é reparo de lifecycle de
+infraestrutura e não introduz ator humano ou de serviço artificial.
 
 Estados vivos `created`, `retry` e `active` não podem provocar terminalização. Um job de origem em
 estado terminal `failed`, ou uma cópia correlacionada na DLQ, constitui evidência durável suficiente
