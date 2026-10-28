@@ -11,6 +11,7 @@ const VIEWER_PERMISSIONS = [
   ATLAS_PERMISSIONS.conflictRead,
   ATLAS_PERMISSIONS.reviewCaseRead,
   ATLAS_PERMISSIONS.discoveryRead,
+  ATLAS_PERMISSIONS.connectorRead,
 ] as const;
 
 const ANALYST_PERMISSIONS = [
@@ -20,6 +21,7 @@ const ANALYST_PERMISSIONS = [
   ATLAS_PERMISSIONS.conflictManage,
   ATLAS_PERMISSIONS.reviewCaseManage,
   ATLAS_PERMISSIONS.discoveryExecute,
+  ATLAS_PERMISSIONS.connectorExecute,
   ATLAS_PERMISSIONS.auditRead,
 ] as const;
 
@@ -32,6 +34,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AtlasRole, readonly AtlasPermissi
     ATLAS_PERMISSIONS.inventoryImport,
     ATLAS_PERMISSIONS.discoveryConfigure,
     ATLAS_PERMISSIONS.ingestionExecute,
+    ATLAS_PERMISSIONS.connectorConfigure,
   ],
 };
 
