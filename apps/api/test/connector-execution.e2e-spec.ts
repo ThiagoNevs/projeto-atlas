@@ -30,6 +30,7 @@ describe('Connector Execution lifecycle boundaries', () => {
       ready: true,
       status: 'disabled',
       workerCount: 0,
+      poolMax: 2,
     });
   });
 
@@ -53,6 +54,240 @@ describe('Connector Execution lifecycle boundaries', () => {
       expect(rows[0]?.exists).toBe(false);
     } finally {
       await prisma.$disconnect();
+    }
+  });
+});
+
+describe('Connector Execution production compatibility', () => {
+  it('shares one runtime compatibility probe and caches the result', async () => {
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_runtime_probe'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    fixture.schemaVersion.mockClear();
+    fixture.detectSchemaDrift.mockClear();
+    const pending = deferred<number>();
+    fixture.schemaVersion.mockImplementation(() => pending.promise);
+
+    const first = service.isReady();
+    const second = service.isReady();
+    expect(fixture.schemaVersion).toHaveBeenCalledTimes(1);
+    pending.resolve(42);
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(fixture.detectSchemaDrift).toHaveBeenCalledTimes(1);
+
+    await expect(service.isReady()).resolves.toBe(true);
+    expect(fixture.schemaVersion).toHaveBeenCalledTimes(1);
+    await service.onApplicationShutdown();
+  });
+
+  it('fails closed on timeout and recovers after the negative cache expires', async () => {
+    jest.useFakeTimers();
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_runtime_recovery'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    try {
+      await service.onApplicationBootstrap();
+      fixture.schemaVersion.mockClear();
+      fixture.detectSchemaDrift.mockClear();
+      const pending = deferred<number>();
+      fixture.schemaVersion.mockImplementationOnce(() => pending.promise);
+
+      const timedProbe = service.isReady();
+      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(timedProbe).resolves.toBe(false);
+      pending.resolve(42);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      fixture.schemaVersion.mockResolvedValue(42);
+      await jest.advanceTimersByTimeAsync(5_001);
+      await expect(service.isReady()).resolves.toBe(true);
+      expect(fixture.detectSchemaDrift).toHaveBeenCalled();
+    } finally {
+      await service.onApplicationShutdown();
+      jest.useRealTimers();
+    }
+  });
+
+  it('fails runtime readiness when schema drift is detected', async () => {
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_runtime_drift'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    fixture.schemaVersion.mockClear();
+    fixture.detectSchemaDrift.mockClear();
+    fixture.detectSchemaDrift.mockResolvedValue({ ok: false });
+
+    await expect(service.isReady()).resolves.toBe(false);
+    await service.onApplicationShutdown();
+  });
+
+  it('fails runtime readiness on schema mismatch without running drift detection', async () => {
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_runtime_mismatch'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    fixture.schemaVersion.mockClear();
+    fixture.detectSchemaDrift.mockClear();
+    fixture.schemaVersion.mockResolvedValue(41);
+
+    await expect(service.isReady()).resolves.toBe(false);
+    expect(fixture.detectSchemaDrift).not.toHaveBeenCalled();
+    await service.onApplicationShutdown();
+  });
+
+  it('fails runtime readiness safely when the compatibility probe rejects', async () => {
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_runtime_error'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    fixture.schemaVersion.mockClear();
+    fixture.schemaVersion.mockRejectedValue(new Error('NEVER_LOG_RUNTIME_PROBE_DETAIL'));
+
+    await expect(service.isReady()).resolves.toBe(false);
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain(
+      'NEVER_LOG_RUNTIME_PROBE_DETAIL',
+    );
+    await service.onApplicationShutdown();
+  });
+
+  it('uses separate source and dead-letter retention values', async () => {
+    const fixture = fakeBoss();
+    const config = {
+      ...configFor(true, 'pgboss_retention'),
+      sourceRetentionSeconds: 86_400,
+      dlqRetentionSeconds: 2_592_000,
+    };
+    const service = new ConnectorExecutionService(config, logger, () =>
+      Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    await service.registerWorker({
+      queueName: 'atlas.test.retention',
+      deadLetterQueue: 'atlas.test.retention.dead',
+      concurrency: 1,
+      retryLimit: 1,
+      retryDelaySeconds: 0,
+      retryBackoff: false,
+      expireInSeconds: 30,
+      handler: () => Promise.resolve(),
+    });
+
+    expect(fixture.createQueue).toHaveBeenNthCalledWith(
+      1,
+      'atlas.test.retention.dead',
+      expect.objectContaining({ deleteAfterSeconds: 2_592_000 }),
+    );
+    expect(fixture.createQueue).toHaveBeenNthCalledWith(
+      2,
+      'atlas.test.retention',
+      expect.objectContaining({ deleteAfterSeconds: 86_400 }),
+    );
+    expect(fixture.updateQueue).toHaveBeenNthCalledWith(
+      1,
+      'atlas.test.retention.dead',
+      expect.objectContaining({ deleteAfterSeconds: 2_592_000 }),
+    );
+    expect(fixture.updateQueue).toHaveBeenNthCalledWith(
+      2,
+      'atlas.test.retention',
+      expect.objectContaining({ deleteAfterSeconds: 86_400 }),
+    );
+    await service.onApplicationShutdown();
+  });
+
+  it('warns on backlog and DLQ depth without failing runtime readiness', async () => {
+    const fixture = fakeBoss();
+    const service = new ConnectorExecutionService(
+      configFor(true, 'pgboss_operational_warning'),
+      logger,
+      () => Promise.resolve(fixture.boss),
+    );
+    await service.onApplicationBootstrap();
+    await service.registerWorker({
+      queueName: 'atlas.test.warning',
+      deadLetterQueue: 'atlas.test.warning.dead',
+      concurrency: 1,
+      retryLimit: 1,
+      retryDelaySeconds: 0,
+      retryBackoff: false,
+      expireInSeconds: 30,
+      handler: () => Promise.resolve(),
+    });
+    const snapshot = jest.spyOn(service, 'getOperationalSnapshot').mockResolvedValue({
+      execution: service.getState(),
+      queues: [
+        {
+          queueName: 'atlas.test.warning',
+          created: 2,
+          retry: 1,
+          queued: 3,
+          active: 0,
+          failed: 0,
+          total: 3,
+          capturedAt: new Date().toISOString(),
+          oldestReadyAt: new Date(Date.now() - 600_000).toISOString(),
+          oldestReadyAgeMs: 600_000,
+          deadLetterQueue: 'atlas.test.warning.dead',
+          deadLetterQueued: 1,
+        },
+      ],
+    });
+    (logger.warn as jest.Mock).mockClear();
+
+    await (
+      service as unknown as { sampleOperationalState(): Promise<void> }
+    ).sampleOperationalState();
+
+    const warningRecords = (logger.warn as jest.Mock).mock.calls.map(([record]) => record);
+    expect(warningRecords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: 'connector_execution.queue.oldest_ready_warning' }),
+        expect.objectContaining({ event: 'connector_execution.dlq.warning' }),
+      ]),
+    );
+    await expect(service.isReady()).resolves.toBe(true);
+    await service.onApplicationShutdown();
+    snapshot.mockClear();
+    (service as unknown as { startOperationalSampling(): void }).startOperationalSampling();
+    await Promise.resolve();
+    expect(snapshot.mock.calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['CONNECTOR_EXECUTION_SOURCE_RETENTION_SECONDS', '86399'],
+    ['CONNECTOR_EXECUTION_DLQ_RETENTION_SECONDS', '7776001'],
+    ['CONNECTOR_EXECUTION_OLDEST_READY_WARNING_SECONDS', '59'],
+    ['CONNECTOR_EXECUTION_DLQ_WARNING_DEPTH', '0'],
+    ['CONNECTOR_EXECUTION_OBSERVABILITY_INTERVAL_SECONDS', '14'],
+    ['CONNECTOR_EXECUTION_RECONCILIATION_INTERVAL_SECONDS', '3601'],
+    ['CONNECTOR_EXECUTION_RECONCILIATION_BATCH_SIZE', '101'],
+    ['CONNECTOR_EXECUTION_MISSING_JOB_GRACE_SECONDS', '3599'],
+    ['CONNECTOR_EXECUTION_SOURCE_RETENTION_SECONDS', '604800.5'],
+  ])('rejects invalid %s configuration', (name, value) => {
+    const previous = process.env[name];
+    process.env[name] = value;
+    try {
+      expect(() => new ConnectorExecutionConfig()).toThrow(`${name} deve ser inteiro entre`);
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
     }
   });
 });
@@ -137,6 +372,8 @@ describe('Connector Execution with ephemeral schemas', () => {
     expect(await service.isReady()).toBe(true);
     expect(await service.getQueueState(queueName)).toEqual({
       queueName,
+      created: expect.any(Number),
+      retry: expect.any(Number),
       queued: expect.any(Number),
       active: expect.any(Number),
       failed: expect.any(Number),
@@ -190,6 +427,7 @@ describe('Connector Execution with ephemeral schemas', () => {
     );
     const completedId = await enqueueSynthetic(service, observedQueue, 'completed');
     const failedId = await enqueueSynthetic(service, observedQueue, 'failed');
+    const activeId = await enqueueSynthetic(service, observedQueue, 'active');
     const otherQueueId = await enqueueSynthetic(service, isolatedQueue, 'other-queue');
 
     await setJobMetadata(observerBoss, queueSchema, observedQueue, oldestId, {
@@ -213,6 +451,10 @@ describe('Connector Execution with ephemeral schemas', () => {
       createdOn: inactiveCreatedAt,
       state: 'failed',
     });
+    await setJobMetadata(observerBoss, queueSchema, observedQueue, activeId, {
+      createdOn: inactiveCreatedAt,
+      state: 'active',
+    });
     await setJobMetadata(observerBoss, queueSchema, isolatedQueue, otherQueueId, {
       createdOn: otherQueueCreatedAt,
       state: 'created',
@@ -222,6 +464,9 @@ describe('Connector Execution with ephemeral schemas', () => {
     const state = await service.getQueueState(observedQueue);
     const after = await observerBoss.getJobById(observedQueue, oldestId);
 
+    expect(state).toEqual(
+      expect.objectContaining({ created: 2, retry: 1, queued: 3, active: 1, failed: 1, total: 6 }),
+    );
     expect(state.oldestReadyAt).toBe(oldestReadyAt.toISOString());
     expect(state.oldestReadyAgeMs).toBeGreaterThanOrEqual(120_000);
     expect(state.oldestReadyAgeMs).toBeLessThan(130_000);
@@ -229,16 +474,83 @@ describe('Connector Execution with ephemeral schemas', () => {
       [
         'active',
         'capturedAt',
+        'created',
         'failed',
         'oldestReadyAgeMs',
         'oldestReadyAt',
         'queueName',
         'queued',
+        'retry',
         'total',
       ].sort(),
     );
     expect(after?.state).toBe(before?.state);
     expect(after?.id).toBe(before?.id);
+  });
+
+  it.each(['created', 'retry', 'active'] as const)(
+    'classifies correlated source work in %s as LIVE',
+    async (jobState) => {
+      const source = `atlas.test.infrastructure-live-${jobState}`;
+      const deadLetter = `${source}.dead`;
+      const runId = randomUUID();
+      await prepareQueue(service, source, deadLetter);
+      const jobId = await service.enqueue(
+        source,
+        createAtlasJobEnvelope({
+          runId,
+          payload: {},
+          idempotencyKey: `infrastructure-live:${randomUUID()}`,
+          maxBytes: 4096,
+        }),
+        { singletonKey: runId },
+      );
+      await setJobMetadata(observerBoss, queueSchema, source, jobId, {
+        createdOn: new Date(),
+        state: jobState,
+      });
+
+      expect(await service.inspectRunInfrastructure(source, deadLetter, runId)).toEqual(
+        expect.objectContaining({
+          state: 'LIVE',
+          sourceLiveCount: 1,
+          sourceExhaustedCount: 0,
+          deadLetterCount: 0,
+        }),
+      );
+    },
+  );
+
+  it('classifies only a failed source job with exhausted retries as TERMINAL', async () => {
+    const source = 'atlas.test.infrastructure-exhausted';
+    const deadLetter = `${source}.dead`;
+    const runId = randomUUID();
+    await prepareQueue(service, source, deadLetter);
+    const jobId = await service.enqueue(
+      source,
+      createAtlasJobEnvelope({
+        runId,
+        payload: {},
+        idempotencyKey: `infrastructure-exhausted:${randomUUID()}`,
+        maxBytes: 4096,
+      }),
+      { singletonKey: runId },
+    );
+    await setJobMetadata(observerBoss, queueSchema, source, jobId, {
+      createdOn: new Date(),
+      state: 'failed',
+      retryCount: 2,
+      retryLimit: 2,
+    });
+
+    expect(await service.inspectRunInfrastructure(source, deadLetter, runId)).toEqual(
+      expect.objectContaining({
+        state: 'TERMINAL',
+        sourceLiveCount: 0,
+        sourceExhaustedCount: 1,
+        deadLetterCount: 0,
+      }),
+    );
   });
 
   it('commits a domain write and enqueue in the same Prisma transaction', async () => {
@@ -325,6 +637,28 @@ describe('Connector Execution with ephemeral schemas', () => {
         return Promise.resolve();
       },
     });
+    const snapshot = await service.getOperationalSnapshot();
+    expect(snapshot.execution).toEqual(
+      expect.objectContaining({ enabled: true, ready: true, schemaVersion: 42, poolMax: 2 }),
+    );
+    expect(snapshot.queues).toEqual([
+      expect.objectContaining({
+        queueName: retryQueue,
+        deadLetterQueue: retryDlq,
+        created: expect.any(Number),
+        retry: expect.any(Number),
+        queued: expect.any(Number),
+        active: expect.any(Number),
+        failed: expect.any(Number),
+        total: expect.any(Number),
+        deadLetterQueued: expect.any(Number),
+      }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toMatch(
+      /payload|configuration|logicalKey|idempotencyKey|requestIdentity|databaseUrl/i,
+    );
+    (logger.log as jest.Mock).mockClear();
+    (logger.error as jest.Mock).mockClear();
     await service.enqueue(
       retryQueue,
       createAtlasJobEnvelope({ payload: {}, idempotencyKey, maxBytes: 4096 }),
@@ -334,6 +668,37 @@ describe('Connector Execution with ephemeral schemas', () => {
       { key: idempotencyKey, retryCount: 0, retryLimit: 1 },
       { key: idempotencyKey, retryCount: 1, retryLimit: 1 },
     ]);
+    const jobLogs = [
+      ...(logger.log as jest.Mock).mock.calls,
+      ...(logger.error as jest.Mock).mock.calls,
+    ]
+      .map(([record]) => record as Record<string, unknown>)
+      .filter(({ queueName }) => queueName === retryQueue);
+    expect(jobLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: 'connector_execution.job.started',
+          runId: expect.any(String),
+          retryCount: 0,
+          retryLimit: 1,
+        }),
+        expect.objectContaining({
+          event: 'connector_execution.job.failed',
+          runId: expect.any(String),
+          retryCount: 0,
+          retryLimit: 1,
+          durationMs: expect.any(Number),
+        }),
+        expect.objectContaining({
+          event: 'connector_execution.job.completed',
+          runId: expect.any(String),
+          retryCount: 1,
+          retryLimit: 1,
+          durationMs: expect.any(Number),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(jobLogs)).not.toContain(idempotencyKey);
     await service.stopWorker(retryQueue);
   }, 20_000);
 
@@ -400,18 +765,38 @@ describe('Connector Execution with ephemeral schemas', () => {
       expireInSeconds: 30,
       handler: () => Promise.reject(new Error('synthetic terminal failure')),
     });
+    const runId = randomUUID();
     await service.enqueue(
       source,
       createAtlasJobEnvelope({
+        runId,
         payload: {},
         idempotencyKey: `dlq:${randomUUID()}`,
         maxBytes: 4096,
       }),
+      { singletonKey: runId },
     );
     await waitFor(async () => (await countJobs(observerBoss, dlq, true)) === 1);
+    const snapshot = await service.getOperationalSnapshot();
+    expect(snapshot.queues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queueName: source,
+          deadLetterQueue: dlq,
+          deadLetterQueued: 1,
+        }),
+      ]),
+    );
+    await expect(service.isReady()).resolves.toBe(true);
+    expect(await service.inspectRunInfrastructure(source, dlq, runId)).toEqual(
+      expect.objectContaining({ state: 'TERMINAL', deadLetterCount: 1 }),
+    );
     await service.stopWorker(source);
     expect(await service.redrive(dlq, source, 1)).toBe(1);
     expect(await countJobs(observerBoss, source, true)).toBeGreaterThanOrEqual(1);
+    expect(await service.inspectRunInfrastructure(source, dlq, runId)).toEqual(
+      expect.objectContaining({ state: 'LIVE', sourceLiveCount: 1 }),
+    );
     expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain(
       'synthetic terminal failure',
     );
@@ -421,7 +806,21 @@ describe('Connector Execution with ephemeral schemas', () => {
     await prisma.$executeRawUnsafe(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'atlas-connector-execution' AND pid <> pg_backend_pid()`,
     );
-    await waitFor(() => service.isReady(), 15_000);
+    // Let the bounded compatibility cache expire so this assertion proves a
+    // real post-interruption probe instead of observing the previous success.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 5_100));
+    await waitFor(async () => {
+      if (!(await service.isReady())) return false;
+      try {
+        // Exercise the recovered pool beyond the compatibility calls so no
+        // terminated client leaks into the following test.
+        await service.getQueueState(queueName);
+        await service.getQueueState(queueName);
+        return true;
+      } catch {
+        return false;
+      }
+    }, 15_000);
     expect(await service.isReady()).toBe(true);
   }, 20_000);
 
@@ -486,6 +885,14 @@ function configFor(enabled: boolean, schema: string): ConnectorExecutionConfig {
     poolMax: 2,
     payloadMaxBytes: 65_536,
     shutdownTimeoutMs: 10_000,
+    sourceRetentionSeconds: 604_800,
+    dlqRetentionSeconds: 2_592_000,
+    oldestReadyWarningSeconds: 300,
+    dlqWarningDepth: 1,
+    observabilityIntervalSeconds: 60,
+    reconciliationIntervalSeconds: 60,
+    reconciliationBatchSize: 100,
+    missingJobGraceSeconds: 86_400,
     schema,
     databaseUrl: enabled ? process.env.DATABASE_URL : undefined,
   };
@@ -536,7 +943,9 @@ async function setJobMetadata(
   input: {
     readonly createdOn: Date;
     readonly startAfter?: Date;
-    readonly state: 'created' | 'retry' | 'completed' | 'failed';
+    readonly state: 'created' | 'retry' | 'active' | 'completed' | 'failed';
+    readonly retryCount?: number;
+    readonly retryLimit?: number;
   },
 ): Promise<void> {
   const queue = await boss.getQueue(queueName);
@@ -547,9 +956,19 @@ async function setJobMetadata(
     `UPDATE ${schemaIdentifier}.${tableIdentifier}
      SET created_on = $3,
          start_after = COALESCE($4, start_after),
-         state = $5
+         state = $5,
+         retry_count = COALESCE($6, retry_count),
+         retry_limit = COALESCE($7, retry_limit)
      WHERE name = $1 AND id = $2::uuid`,
-    [queueName, jobId, input.createdOn, input.startAfter ?? null, input.state],
+    [
+      queueName,
+      jobId,
+      input.createdOn,
+      input.startAfter ?? null,
+      input.state,
+      input.retryCount ?? null,
+      input.retryLimit ?? null,
+    ],
   );
 }
 
@@ -562,6 +981,35 @@ function quoteTestIdentifier(identifier: string): string {
 
 function uniqueName(prefix: string): string {
   return `${prefix}_${process.pid}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+}
+
+function fakeBoss() {
+  const schemaVersion = jest.fn<() => Promise<number>>().mockResolvedValue(42);
+  const detectSchemaDrift = jest
+    .fn<() => Promise<{ ok: boolean }>>()
+    .mockResolvedValue({ ok: true });
+  const createQueue = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue();
+  const updateQueue = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue();
+  const boss = {
+    on: jest.fn(),
+    start: jest.fn<() => Promise<void>>().mockResolvedValue(),
+    stop: jest.fn<() => Promise<void>>().mockResolvedValue(),
+    schemaVersion,
+    detectSchemaDrift,
+    createQueue,
+    updateQueue,
+    work: jest.fn<() => Promise<string>>().mockResolvedValue('worker-test-id'),
+    offWork: jest.fn<() => Promise<void>>().mockResolvedValue(),
+  } as unknown as PgBoss;
+  return { boss, schemaVersion, detectSchemaDrift, createQueue, updateQueue };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 async function waitFor(
