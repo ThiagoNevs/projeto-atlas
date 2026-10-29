@@ -135,13 +135,21 @@ inspeção, alertas, retenção e redrive operacional.
 
 Falhas de infraestrutura que impedem o handler de persistir o estado terminal — como hard kill,
 expiração, perda de heartbeat ou fencing por partição de rede — podem deixar o `ConnectorRun` em
-`RUNNING` mesmo após o pg-boss esgotar o job. O ADR-019 aceita o desenho da reconciliação não
-consumidora, a correlação sem payload e as janelas conservadoras para esses runs. A implementação
-continua pendente; o Core ainda não estabelece prontidão para go-live.
+`RUNNING` mesmo após o pg-boss esgotar o job. O reconciliador do ADR-019 observa somente metadados
+correlacionados por `singletonKey = runId`, sem claim, payload ou consumo da DLQ. Trabalho source
+`created`, `retry` ou `active` sempre vence evidência terminal antiga; falha source comprovadamente
+esgotada ou cópia correlacionada na DLQ autoriza reparo. Ausência só autoriza reparo após retenção da
+source mais a janela de graça. Estados ambíguos falham fechados.
 
-O ADR-019 também define o contrato futuro de readiness técnico, observabilidade, retenção,
-capacidade e DLQ. A aceitação dessa arquitetura não significa que esses controles já estejam
-disponíveis no runtime.
+O reparo recalcula `ingestedCount` por `AssetEvidence`, preserva rejeições persistidas e usa update
+condicional sobre `QUEUED|RUNNING`, permitindo no máximo uma transição terminal entre réplicas ou
+na corrida com o worker. Ele não cria `AuditLog`, não altera o trigger actor e não inventa
+`startedAt`; persiste somente `PARTIAL|FAILED` com `CONNECTOR_EXECUTION_ABANDONED`.
+
+Neste candidato de estabilização, readiness técnico valida continuamente schema 42 e drift com
+probe limitada, cacheada e single-flight. Snapshots internos agregados distinguem `created`, `retry`, `active`, `failed`, idade
+do item pronto mais antigo e profundidade da DLQ, sem ler payload. Backlog e DLQ geram warnings, mas
+não tornam `/health/ready` indisponível. Retenções source e DLQ são independentes e configuráveis.
 
 ## Itens futuros explícitos
 
@@ -150,4 +158,4 @@ disponíveis no runtime.
 - teste de conexão;
 - primeiro connector AD DS;
 - checkpoint/cursor persistente;
-- observabilidade produtiva, runbooks e fechamento do gate de estabilização da execução.
+- exportação de métricas/telemetria externa e runbooks operacionais de produção.

@@ -13,10 +13,13 @@ ingestão normalizada compartilhada com a entrada manual. O plano de controle v1
 protegidas já documentadas para definitions, instances e runs. Ainda não existem UI, scheduler real
 ou connector real.
 
-O ADR-019 aceita o desenho de readiness técnico, observabilidade, retenção, capacidade, política da
-DLQ e reconciliação de runs abandonados. Esses controles ainda não estão implementados; o gate de
-estabilização para go-live produtivo permanece pendente e deve ser satisfeito explicitamente antes
-de deployment.
+O contrato de estabilização do ADR-019 está implementado neste candidato: readiness valida versão e
+drift do schema pg-boss com probe limitada e cacheada; retenções de source/DLQ são configuráveis;
+snapshots internos payload-free sinalizam backlog e DLQ; e runs abandonados podem ser reconciliados
+de forma conservadora, evidence-first e race-safe. Esses controles não criam endpoint operacional,
+worker de DLQ, scheduler nem connector real. O Atlas continua sem estar pronto para deployment
+produtivo; a estabilização permanece `PENDING — implementation candidate` até integração e validação,
+e o go-live continua `NOT YET` até os demais gates operacionais e o primeiro connector serem concluídos.
 
 ## Visão geral
 
