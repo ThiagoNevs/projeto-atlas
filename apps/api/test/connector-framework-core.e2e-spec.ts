@@ -18,6 +18,7 @@ import type {
 import { parseConnectorObservation } from '../src/connector-framework/connector-observation';
 import { ConnectorRunService } from '../src/connector-framework/connector-run.service';
 import { ConnectorRunWorker } from '../src/connector-framework/connector-run.worker';
+import { ConnectorRunReconciler } from '../src/connector-framework/connector-run-reconciler.service';
 import { ConnectorSecretSlotResolver } from '../src/connector-framework/connector-secret-slots';
 import { createPgBoss } from '../src/connector-execution/connector-execution.adapter';
 import { ConnectorExecutionConfig } from '../src/connector-execution/connector-execution.config';
@@ -92,6 +93,7 @@ describe('Connector Framework Core (e2e)', () => {
   }, 30_000);
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     const runs = await prisma.connectorRun.findMany({
       where: { connectorInstanceId: { in: [...instanceIds] } },
       select: { id: true },
@@ -895,6 +897,312 @@ describe('Connector Framework Core (e2e)', () => {
     }
   }, 20_000);
 
+  it('leaves a run unchanged while correlated queue work is LIVE', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockResolvedValue(infrastructureState('LIVE', 1, 0, 0));
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 1,
+      reconciledCount: 0,
+    });
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({ status: ConnectorRunStatus.QUEUED, errorCode: null, version: 1 }),
+    );
+  });
+
+  it('fails closed without inspecting runs when runtime compatibility is unavailable', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(false);
+    const inspect = jest.spyOn(execution, 'inspectRunInfrastructure');
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 0,
+      reconciledCount: 0,
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect((await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      ConnectorRunStatus.QUEUED,
+    );
+  });
+
+  it('does no reconciliation work while execution is disabled or after shutdown', async () => {
+    const disabledExecution = {
+      config: { ...execution.config, enabled: false },
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      inspectRunInfrastructure: jest.fn(),
+    } as unknown as ConnectorExecutionService;
+    const reconciler = new ConnectorRunReconciler(prisma, disabledExecution, logger);
+
+    reconciler.onApplicationBootstrap();
+    await expect(reconciler.reconcileOnce()).resolves.toEqual({
+      inspectedCount: 0,
+      reconciledCount: 0,
+    });
+    expect((disabledExecution.isReady as jest.Mock).mock.calls).toHaveLength(0);
+    expect((disabledExecution.inspectRunInfrastructure as jest.Mock).mock.calls).toHaveLength(0);
+
+    await reconciler.onApplicationShutdown();
+    await expect(reconciler.reconcileOnce()).resolves.toEqual({
+      inspectedCount: 0,
+      reconciledCount: 0,
+    });
+  });
+
+  it('does not mutate a run when infrastructure evidence is INCONCLUSIVE', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockResolvedValue(infrastructureState('INCONCLUSIVE', 0, 0, 0));
+
+    await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({ status: ConnectorRunStatus.QUEUED, errorCode: null, version: 1 }),
+    );
+  });
+
+  it('terminalizes exhausted infrastructure without inventing observations', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    const auditsBefore = await prisma.auditLog.count({ where: { entityId: run.id } });
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockResolvedValue(infrastructureState('TERMINAL', 0, 1, 0));
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 1,
+      reconciledCount: 1,
+    });
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.FAILED,
+        observedCount: 0,
+        ingestedCount: 0,
+        rejectedCount: 0,
+        errorCode: 'CONNECTOR_EXECUTION_ABANDONED',
+        triggerActorType: 'SERVICE',
+        triggerActorId: actorId,
+        startedAt: null,
+        finishedAt: expect.any(Date),
+        version: 2,
+      }),
+    );
+    expect(await prisma.auditLog.count({ where: { entityId: run.id } })).toBe(auditsBefore);
+  });
+
+  it('uses durable evidence and persisted rejections to reconcile PARTIAL', async () => {
+    const instance = await createInstance();
+    const run = await prisma.connectorRun.create({
+      data: {
+        connectorInstanceId: instance.id,
+        trigger: ConnectorRunTrigger.REQUESTED,
+        triggerActorType: 'SERVICE',
+        triggerActorId: actorId,
+        requestFingerprint: sha256(`${testScope}:${randomUUID()}`),
+        rejectedCount: 2,
+      },
+    });
+    const asset = await prisma.asset.create({
+      data: { name: `Reconciler ${randomUUID()}`, kind: 'SYNTHETIC' },
+    });
+    await prisma.assetEvidence.create({
+      data: {
+        assetId: asset.id,
+        connectorRunId: run.id,
+        source: 'connector:synthetic-core-test:test',
+        evidenceType: 'SYNTHETIC',
+        payload: { schemaVersion: 1 },
+        observedAt: new Date(),
+      },
+    });
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockResolvedValue(infrastructureState('TERMINAL', 0, 0, 1));
+
+    await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce();
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.PARTIAL,
+        observedCount: 3,
+        ingestedCount: 1,
+        rejectedCount: 2,
+        errorCode: 'CONNECTOR_EXECUTION_ABANDONED',
+      }),
+    );
+  });
+
+  it('preserves young MISSING runs and reconciles only after retention plus grace', async () => {
+    const instance = await createInstance();
+    const young = await createPersistedRun(instance.id);
+    const old = await prisma.connectorRun.create({
+      data: {
+        connectorInstanceId: instance.id,
+        trigger: ConnectorRunTrigger.REQUESTED,
+        triggerActorType: 'SERVICE',
+        triggerActorId: actorId,
+        requestFingerprint: sha256(`${testScope}:${randomUUID()}`),
+        createdAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1_000),
+      },
+    });
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockResolvedValue(infrastructureState('MISSING', 0, 0, 0));
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 2,
+      reconciledCount: 1,
+    });
+    expect((await prisma.connectorRun.findUniqueOrThrow({ where: { id: young.id } })).status).toBe(
+      ConnectorRunStatus.QUEUED,
+    );
+    expect((await prisma.connectorRun.findUniqueOrThrow({ where: { id: old.id } })).status).toBe(
+      ConnectorRunStatus.FAILED,
+    );
+  });
+
+  it('does not inspect a future scheduled run', async () => {
+    const instance = await createInstance();
+    const run = await prisma.connectorRun.create({
+      data: {
+        connectorInstanceId: instance.id,
+        trigger: ConnectorRunTrigger.SCHEDULE,
+        triggerActorType: 'SYSTEM',
+        triggerActorId: 'system:atlas:scheduler',
+        requestFingerprint: sha256(`${testScope}:${randomUUID()}`),
+        scheduledFor: new Date(Date.now() + 60_000),
+      },
+    });
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    const inspect = jest.spyOn(execution, 'inspectRunInfrastructure');
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 0,
+      reconciledCount: 0,
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect((await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      ConnectorRunStatus.QUEUED,
+    );
+  });
+
+  it('lets a concurrent worker transition win the conditional terminal write', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    jest.spyOn(execution, 'inspectRunInfrastructure').mockImplementation(async () => {
+      await prisma.connectorRun.update({
+        where: { id: run.id },
+        data: {
+          status: ConnectorRunStatus.COMPLETED,
+          finishedAt: new Date(),
+          version: { increment: 1 },
+        },
+      });
+      return infrastructureState('TERMINAL', 0, 1, 0);
+    });
+
+    expect(await new ConnectorRunReconciler(prisma, execution, logger).reconcileOnce()).toEqual({
+      inspectedCount: 1,
+      reconciledCount: 0,
+    });
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({
+        status: ConnectorRunStatus.COMPLETED,
+        errorCode: null,
+        version: 2,
+      }),
+    );
+  });
+
+  it('allows at most one terminal mutation across two reconciler replicas', async () => {
+    const instance = await createInstance();
+    const run = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    const bothInspecting = deferred<void>();
+    let inspections = 0;
+    jest.spyOn(execution, 'inspectRunInfrastructure').mockImplementation(async () => {
+      inspections += 1;
+      if (inspections === 2) bothInspecting.resolve();
+      await bothInspecting.promise;
+      return infrastructureState('TERMINAL', 0, 1, 0);
+    });
+    const first = new ConnectorRunReconciler(prisma, execution, logger);
+    const second = new ConnectorRunReconciler(prisma, execution, logger);
+
+    const results = await Promise.all([first.reconcileOnce(), second.reconcileOnce()]);
+    expect(results.reduce((sum, result) => sum + result.reconciledCount, 0)).toBe(1);
+    expect(await prisma.connectorRun.findUniqueOrThrow({ where: { id: run.id } })).toEqual(
+      expect.objectContaining({ status: ConnectorRunStatus.FAILED, version: 2 }),
+    );
+  });
+
+  it('honors the configured reconciliation batch limit deterministically', async () => {
+    const instance = await createInstance();
+    const runs = await Promise.all([
+      createPersistedRun(instance.id),
+      createPersistedRun(instance.id),
+      createPersistedRun(instance.id),
+    ]);
+    const batchExecution = {
+      config: { ...execution.config, enabled: true, reconciliationBatchSize: 2 },
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      inspectRunInfrastructure: jest
+        .fn<ConnectorExecutionService['inspectRunInfrastructure']>()
+        .mockResolvedValue(infrastructureState('TERMINAL', 0, 1, 0)),
+    } as unknown as ConnectorExecutionService;
+
+    await expect(
+      new ConnectorRunReconciler(prisma, batchExecution, logger).reconcileOnce(),
+    ).resolves.toEqual({ inspectedCount: 2, reconciledCount: 2 });
+    expect((batchExecution.inspectRunInfrastructure as jest.Mock).mock.calls).toHaveLength(2);
+    const persisted = await prisma.connectorRun.findMany({
+      where: { id: { in: runs.map(({ id }) => id) } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    expect(persisted.filter(({ status }) => status === ConnectorRunStatus.FAILED)).toHaveLength(2);
+    expect(persisted.filter(({ status }) => status === ConnectorRunStatus.QUEUED)).toHaveLength(1);
+  });
+
+  it('shares one pass within a replica and isolates one run inspection failure', async () => {
+    const instance = await createInstance();
+    const failedInspection = await createPersistedRun(instance.id);
+    const terminal = await createPersistedRun(instance.id);
+    jest.spyOn(execution, 'isReady').mockResolvedValue(true);
+    const release = deferred<void>();
+    jest
+      .spyOn(execution, 'inspectRunInfrastructure')
+      .mockImplementation(async (_source, _dead, runId) => {
+        await release.promise;
+        if (runId === failedInspection.id) throw new Error('unsafe provider detail');
+        return infrastructureState('TERMINAL', 0, 1, 0);
+      });
+    const reconciler = new ConnectorRunReconciler(prisma, execution, logger);
+    const first = reconciler.reconcileOnce();
+    const second = reconciler.reconcileOnce();
+    expect(second).toBe(first);
+    release.resolve();
+
+    await expect(first).resolves.toEqual({ inspectedCount: 2, reconciledCount: 1 });
+    expect(
+      (await prisma.connectorRun.findUniqueOrThrow({ where: { id: failedInspection.id } })).status,
+    ).toBe(ConnectorRunStatus.QUEUED);
+    expect(
+      (await prisma.connectorRun.findUniqueOrThrow({ where: { id: terminal.id } })).status,
+    ).toBe(ConnectorRunStatus.FAILED);
+    expect(JSON.stringify((logger.warn as jest.Mock).mock.calls)).not.toContain(
+      'unsafe provider detail',
+    );
+  });
+
   async function createInstance(enabled = true, type = connectorType) {
     const instance = await prisma.connectorInstance.create({
       data: {
@@ -1036,9 +1344,41 @@ function configFor(schema: string): ConnectorExecutionConfig {
     poolMax: 2,
     payloadMaxBytes: 65_536,
     shutdownTimeoutMs: 5_000,
+    sourceRetentionSeconds: 604_800,
+    dlqRetentionSeconds: 2_592_000,
+    oldestReadyWarningSeconds: 300,
+    dlqWarningDepth: 1,
+    observabilityIntervalSeconds: 60,
+    reconciliationIntervalSeconds: 60,
+    reconciliationBatchSize: 100,
+    missingJobGraceSeconds: 86_400,
     schema,
     databaseUrl: process.env.DATABASE_URL,
   };
+}
+
+function infrastructureState(
+  state: 'LIVE' | 'TERMINAL' | 'MISSING' | 'INCONCLUSIVE',
+  sourceLiveCount: number,
+  sourceExhaustedCount: number,
+  deadLetterCount: number,
+) {
+  return {
+    state,
+    sourceQueue: queueName,
+    deadLetterQueue: `${queueName}.dead`,
+    sourceLiveCount,
+    sourceExhaustedCount,
+    deadLetterCount,
+  } as const;
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value?: T) => void } {
+  let resolve!: (value?: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise as (value?: T) => void;
+  });
+  return { promise, resolve };
 }
 
 async function* emitObservations(

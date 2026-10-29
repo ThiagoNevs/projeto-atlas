@@ -47,10 +47,14 @@ export interface ConnectorExecutionState {
   readonly status: 'disabled' | 'starting' | 'ready' | 'stopping' | 'stopped' | 'failed';
   readonly schemaVersion?: number;
   readonly workerCount: number;
+  readonly poolMax: number;
 }
 
 export interface ConnectorQueueState {
   readonly queueName: string;
+  readonly created: number;
+  readonly retry: number;
+  /** Ready or deferred work in pg-boss created/retry states. */
   readonly queued: number;
   readonly active: number;
   readonly failed: number;
@@ -58,6 +62,27 @@ export interface ConnectorQueueState {
   readonly capturedAt: string;
   readonly oldestReadyAt?: string;
   readonly oldestReadyAgeMs?: number;
+}
+
+export interface ConnectorRegisteredQueueState extends ConnectorQueueState {
+  readonly deadLetterQueue: string;
+  readonly deadLetterQueued: number;
+}
+
+export interface ConnectorExecutionOperationalSnapshot {
+  readonly execution: ConnectorExecutionState;
+  readonly queues: readonly ConnectorRegisteredQueueState[];
+}
+
+export type ConnectorRunInfrastructureState = 'LIVE' | 'TERMINAL' | 'MISSING' | 'INCONCLUSIVE';
+
+export interface ConnectorRunInfrastructureInspection {
+  readonly state: ConnectorRunInfrastructureState;
+  readonly sourceQueue: string;
+  readonly deadLetterQueue: string;
+  readonly sourceLiveCount: number;
+  readonly sourceExhaustedCount: number;
+  readonly deadLetterCount: number;
 }
 
 export type AtlasPrismaTransaction = PrismaTransactionLike;
