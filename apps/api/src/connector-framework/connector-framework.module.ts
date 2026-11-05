@@ -6,6 +6,7 @@ import { SecretsModule } from '../secrets/secrets.module';
 import { ConnectorDefinitionRegistry } from './connector-definition.registry';
 import { ConnectorRunService } from './connector-run.service';
 import { ConnectorRunWorker } from './connector-run.worker';
+import { ConnectorRunReconciler } from './connector-run-reconciler.service';
 import { CONNECTOR_DEFINITIONS, type ConnectorDefinition } from './connector-framework.types';
 import { ConnectorManagementController } from './management/connector-management.controller';
 import { ConnectorManagementService } from './management/connector-management.service';
@@ -23,6 +24,7 @@ export class ConnectorFrameworkModule {
         ConnectorDefinitionRegistry,
         ConnectorRunService,
         ConnectorRunWorker,
+        ConnectorRunReconciler,
         ConnectorManagementService,
       ],
       exports: [ConnectorDefinitionRegistry, ConnectorRunService],

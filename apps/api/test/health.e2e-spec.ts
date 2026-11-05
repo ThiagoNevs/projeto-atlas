@@ -118,11 +118,41 @@ describe('health readiness failure boundaries', () => {
     const query = jest.fn<() => Promise<unknown>>().mockResolvedValue([{ '?column?': 1 }]);
     const fixture = await createHealthFixture(query, 100, () => Promise.resolve(false));
 
+    const warnSpy = jest.spyOn(fixture.logger, 'warn');
     try {
       await request(serverOf(fixture.app)).get('/health/ready').expect(503, {
         status: 'not_ready',
       });
       expect(query).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'health.readiness.failed',
+          errorType: 'ConnectorExecutionProbeError',
+          errorCode: 'CONNECTOR_EXECUTION_READINESS_FAILED',
+        }),
+      );
+    } finally {
+      await fixture.app.close();
+    }
+  });
+
+  it('classifies a rejected Connector Execution probe separately from PostgreSQL', async () => {
+    const query = jest.fn<() => Promise<unknown>>().mockResolvedValue([{ '?column?': 1 }]);
+    const fixture = await createHealthFixture(query, 100, () =>
+      Promise.reject(new Error('queue-internal-detail')),
+    );
+    const warnSpy = jest.spyOn(fixture.logger, 'warn');
+    try {
+      await request(serverOf(fixture.app)).get('/health/ready').expect(503, {
+        status: 'not_ready',
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCode: 'CONNECTOR_EXECUTION_READINESS_FAILED',
+          errorType: 'ConnectorExecutionProbeError',
+        }),
+      );
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('queue-internal-detail');
     } finally {
       await fixture.app.close();
     }

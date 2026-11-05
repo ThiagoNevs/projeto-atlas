@@ -36,6 +36,49 @@ export class ConnectorExecutionConfig {
     1_000,
     120_000,
   );
+  readonly sourceRetentionSeconds = readInteger(
+    'CONNECTOR_EXECUTION_SOURCE_RETENTION_SECONDS',
+    604_800,
+    86_400,
+    7_776_000,
+  );
+  readonly dlqRetentionSeconds = readInteger(
+    'CONNECTOR_EXECUTION_DLQ_RETENTION_SECONDS',
+    2_592_000,
+    86_400,
+    7_776_000,
+  );
+  readonly oldestReadyWarningSeconds = readInteger(
+    'CONNECTOR_EXECUTION_OLDEST_READY_WARNING_SECONDS',
+    300,
+    60,
+    86_400,
+  );
+  readonly dlqWarningDepth = readInteger('CONNECTOR_EXECUTION_DLQ_WARNING_DEPTH', 1, 1, 100_000);
+  readonly observabilityIntervalSeconds = readInteger(
+    'CONNECTOR_EXECUTION_OBSERVABILITY_INTERVAL_SECONDS',
+    60,
+    15,
+    3_600,
+  );
+  readonly reconciliationIntervalSeconds = readInteger(
+    'CONNECTOR_EXECUTION_RECONCILIATION_INTERVAL_SECONDS',
+    60,
+    15,
+    3_600,
+  );
+  readonly reconciliationBatchSize = readInteger(
+    'CONNECTOR_EXECUTION_RECONCILIATION_BATCH_SIZE',
+    100,
+    1,
+    100,
+  );
+  readonly missingJobGraceSeconds = readInteger(
+    'CONNECTOR_EXECUTION_MISSING_JOB_GRACE_SECONDS',
+    86_400,
+    3_600,
+    604_800,
+  );
   readonly schema = (process.env.CONNECTOR_EXECUTION_SCHEMA ?? DEFAULT_SCHEMA).trim();
   readonly databaseUrl = this.enabled ? process.env.DATABASE_URL?.trim() : undefined;
 

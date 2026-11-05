@@ -14,6 +14,13 @@ interface ProbeResult {
 type ReadinessResult =
   { readonly source: 'probe'; readonly ready: boolean } | { readonly source: 'timeout' };
 
+class ConnectorExecutionReadinessError extends Error {
+  constructor() {
+    super('Connector Execution readiness failed.');
+    this.name = 'ConnectorExecutionReadinessError';
+  }
+}
+
 @Injectable()
 export class HealthReadinessService {
   private inFlightProbe: Promise<ProbeResult> | undefined;
@@ -54,8 +61,12 @@ export class HealthReadinessService {
     this.warningEmitted = false;
     const probe = this.executeProbe()
       .then(() => ({ ready: true }))
-      .catch(() => {
-        this.warnOnce('POSTGRES_READINESS_FAILED', 'DatabaseProbeError');
+      .catch((error: unknown) => {
+        if (error instanceof ConnectorExecutionReadinessError) {
+          this.warnOnce('CONNECTOR_EXECUTION_READINESS_FAILED', 'ConnectorExecutionProbeError');
+        } else {
+          this.warnOnce('POSTGRES_READINESS_FAILED', 'DatabaseProbeError');
+        }
         return { ready: false };
       })
       .finally(() => {
@@ -70,8 +81,14 @@ export class HealthReadinessService {
 
   private async executeProbe(): Promise<void> {
     await this.prisma.$queryRaw`SELECT 1`;
-    if (!(await this.connectorExecution.isReady())) {
-      throw new Error('ConnectorExecutionNotReady');
+    let connectorReady = false;
+    try {
+      connectorReady = await this.connectorExecution.isReady();
+    } catch {
+      throw new ConnectorExecutionReadinessError();
+    }
+    if (!connectorReady) {
+      throw new ConnectorExecutionReadinessError();
     }
   }
 
