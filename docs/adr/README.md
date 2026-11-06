@@ -24,6 +24,7 @@ adotados; `Proposed` registra direção ainda não implementada.
 - [ADR-017 — Connector Framework](017-connector-framework.md) — Accepted — definitions em código, instances e runs persistidos, observations em runtime e ingestão evidence-first.
 - [ADR-018 — Connector Management Control Plane](018-connector-management-control-plane.md) — Accepted — versões, fencing, REST, RBAC, secrets, idempotência e auditoria da gestão de connectors.
 - [ADR-019 — Estabilização de produção da execução de conectores](019-connector-execution-production-stabilization.md) — Accepted — readiness, observabilidade, retenção, capacidade, DLQ e reconciliação conservadora.
+- [ADR-020 — Connector Active Directory Domain Services](020-active-directory-domain-services-connector.md) — Accepted — contrato read-only, LDAPS, identidade por objectGUID, paginação e failover do primeiro connector real.
 
 ## Decision backlog
 

@@ -8,6 +8,11 @@ cria uma execução lógica durável e processa observações provider-neutral p
 evidence-first compartilhada. O registro de produção permanece deliberadamente vazio: ainda não há
 connector real, UI ou scheduler.
 
+A ADR-020 define o contrato do primeiro connector futuro, Active Directory Domain Services. Uma
+instance representará um domínio e coletará somente computers por LDAPS/636, com identidade por
+`objectGUID`, paginação e failover bounded. A decisão arquitetural não registra o connector, não cria
+credencial e não altera o estado vazio do registry produtivo.
+
 ## Fluxo
 
 ```text
@@ -156,6 +161,6 @@ não tornam `/health/ready` indisponível. Retenções source e DLQ são indepen
 - scheduler real e reconciliação de schedules;
 - cancelamento/redrive administrativos e AuditLog correspondente;
 - teste de conexão;
-- primeiro connector AD DS;
+- implementação e validação controlada do connector AD DS conforme ADR-020;
 - checkpoint/cursor persistente;
 - exportação de métricas/telemetria externa e runbooks operacionais de produção.
