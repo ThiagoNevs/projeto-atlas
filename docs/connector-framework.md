@@ -8,10 +8,15 @@ cria uma execução lógica durável e processa observações provider-neutral p
 evidence-first compartilhada. O registro de produção permanece deliberadamente vazio: ainda não há
 connector real, UI ou scheduler.
 
-A ADR-020 define o contrato do primeiro connector futuro, Active Directory Domain Services. Uma
-instance representará um domínio e coletará somente computers por LDAPS/636, com identidade por
-`objectGUID`, paginação e failover bounded. A decisão arquitetural não registra o connector, não cria
-credencial e não altera o estado vazio do registry produtivo.
+A ADR-021 define Network Discovery como a primeira fonte de discovery planejada para o produto
+operacional. Ela reutilizará este framework e a ingestão evidence-first, sem criar uma pipeline
+paralela. Seu contrato técnico, controles de escopo e modelo de Edge Collector ainda dependem de
+gates próprios; nenhuma `ConnectorDefinition` de produção foi registrada.
+
+A ADR-020 permanece `Accepted` como contrato do futuro connector Active Directory Domain Services:
+uma instance representará um domínio e coletará somente computers por LDAPS/636, com identidade por
+`objectGUID`, paginação e failover bounded. Sua implementação e o laboratório AD DS foram adiados
+para depois do Discovery-first MVP.
 
 ## Fluxo
 
@@ -161,6 +166,7 @@ não tornam `/health/ready` indisponível. Retenções source e DLQ são indepen
 - scheduler real e reconciliação de schedules;
 - cancelamento/redrive administrativos e AuditLog correspondente;
 - teste de conexão;
-- implementação e validação controlada do connector AD DS conforme ADR-020;
+- arquitetura e implementação controlada de Network Discovery conforme ADR-021;
+- implementação e validação do connector AD DS conforme ADR-020, após o Discovery-first MVP;
 - checkpoint/cursor persistente;
 - exportação de métricas/telemetria externa e runbooks operacionais de produção.
