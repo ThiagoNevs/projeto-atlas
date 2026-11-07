@@ -47,44 +47,44 @@ devem ser definidos após validação com usuários e priorização de mercado.
 
 **Dependências:** estabilização da Fase 1, definição da persona da demo e critérios comerciais.
 
-## Fase 3 — Integrações reais
+## Fase 3 — Discovery-first operacional
 
-**Objetivo:** provar valor com fontes corporativas reais sem depender ainda de descoberta ativa.
+**Objetivo:** provar o inventário operacional combinando descoberta autorizada, evidências e contexto
+mantido por pessoas.
 
 **Entregas:**
 
-- framework de conectores e credenciais;
-- primeiro conector Microsoft, priorizando Intune ou Defender;
-- sincronização incremental e checkpoints;
+- arquitetura segura de Network Discovery e Edge Collector;
+- escopos de rede explicitamente autorizados e bounded;
+- observações processadas pela ingestão evidence-first compartilhada;
+- fluxo de unknown/unclassified assets;
+- correlação conservadora, sem merge destrutivo;
+- enriquecimento manual de responsabilidade e application context;
+- visibilidade de ativos novos, alterados, retornados e não observados recentemente;
+- auditoria das configurações e execuções relevantes.
+
+**Prioridade:** próximo ciclo arquitetural e de produto.
+
+**Dependências:** contratos de discovery, trust/comunicação do Edge Collector, identidade e
+correlação, controles de escopo e ambiente local controlado.
+
+## Fase 4 — Connectors empresariais
+
+**Objetivo:** ampliar evidências com fontes corporativas após o Discovery-first MVP.
+
+**Entregas:**
+
+- Active Directory Domain Services conforme ADR-020;
+- Microsoft Entra ID, Intune e Defender em contratos separados;
+- sincronização incremental e checkpoints quando aplicáveis;
 - políticas de confiança por fonte;
-- tratamento de indisponibilidade, retry e dead-letter;
-- observabilidade e auditoria de ingestões;
-- mapeamento configurável para atributos normalizados.
+- mapeamento versionado para atributos normalizados;
+- credenciais de menor privilégio e gates produtivos específicos.
 
-**Prioridade:** alta após validação comercial.
+**Prioridade:** posterior ao Discovery-first MVP.
 
-**Dependências:** autenticação, gestão segura de secrets, modelo de tenants e ambiente de testes
-Microsoft.
-
-## Fase 4 — Collector real
-
-**Objetivo:** coletar evidências autorizadas dentro da infraestrutura do cliente com segurança.
-
-**Entregas:**
-
-- arquitetura e empacotamento do Collector;
-- registro e identidade segura do Collector;
-- política explícita de escopo e redes negadas;
-- descoberta passiva e leve com limites operacionais;
-- comunicação autenticada e criptografada;
-- atualização segura, health check e telemetria;
-- proteção específica para redes sensíveis e OT/IoT;
-- pilotos controlados antes de qualquer método ativo.
-
-**Prioridade:** alta, mas posterior aos conectores.
-
-**Dependências:** threat model, gestão de certificados/secrets, observabilidade, autorização por
-tenant e revisão de segurança.
+**Dependências:** contratos específicos por provider, ambiente controlado, credenciais de teste,
+SecretReference e revisão de segurança.
 
 ## Fase 5 — Produto comercial
 
@@ -125,23 +125,24 @@ Connector Execution Foundation
 ↓
 Connector Framework
 ↓
-Active Directory Domain Services
+Network Discovery Architecture
 ↓
-Microsoft Entra ID
+Edge Collector Trust & Communication
 ↓
-Microsoft Intune
+Asset Identity / Correlation
 ↓
-Microsoft Defender
+Discovery Safety & Scope Controls
 ↓
-Azure Resources
+Network Discovery v1
 ↓
-Identity Engine
+Controlled Local Deployment
 ↓
-Trust Engine
+Enterprise connectors (AD DS deferred, then provider-specific roadmap)
 ```
 
-Essa sequência não cria uma fila, connector, Service Actor, Identity Engine ou Trust Engine por si só;
-cada etapa depende de requisitos, threat model e autorização próprios.
+Essa sequência não implementa Network Discovery, Edge Collector ou connector por si só; cada
+etapa depende de requisitos, threat model e autorização próprios. A ADR-020 permanece `Accepted`,
+mas AD DS não bloqueia o Discovery-first MVP.
 
 A foundation de secrets separa referência e material secreto, usa provisionamento out-of-band e não
 inclui persistência, API, UI, rotação gerenciada, provider `FILE` ou cofre externo. Secret scanning no

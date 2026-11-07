@@ -1,5 +1,18 @@
 # Estado atual do MVP
 
+## Estratégia Discovery-first
+
+A ADR-021 formaliza a próxima prioridade do produto: Network Discovery e inventário manual serão
+as duas entradas primárias do primeiro produto operacional. Automação coleta observações; pessoas
+registram contexto e decisões; o Atlas preserva ambos como categorias distintas. Unknown/unclassified
+assets permanecem visíveis para classificação e enriquecimento, e uma ausência de observação não
+equivale a exclusão.
+
+Essa estratégia está aceita, mas ainda não implementada. Network Discovery real, Edge Collector,
+correlação de identidade, controles concretos de scan e o workflow de unknown assets dependem de
+gates posteriores. A ADR-020 continua `Accepted`, enquanto o connector e o laboratório AD DS ficam
+adiados para depois do Discovery-first MVP.
+
 ## Connector Execution e Connector Framework Core
 
 A fundação de execução durável aprovada pela ADR-012 está implementada com `pg-boss@12.33.6`,
@@ -18,9 +31,9 @@ drift do schema pg-boss com probe limitada e cacheada; retenções de source/DLQ
 snapshots internos payload-free sinalizam backlog e DLQ; e runs abandonados podem ser reconciliados
 de forma conservadora, evidence-first e race-safe. Esses controles não criam endpoint operacional,
 worker de DLQ, scheduler nem connector real. O Atlas continua sem estar pronto para deployment
-produtivo. A ADR-020 agora define o contrato do futuro connector AD DS, mas nenhuma
-`ConnectorDefinition` produtiva ou credencial real foi criada; o go-live continua `NOT YET` até a
-implementação, validação em ambiente controlado e First Production Credential Gate.
+produtivo. A ADR-020 define o contrato do futuro connector AD DS e a ADR-021 o adia em favor de
+Network Discovery. Nenhuma `ConnectorDefinition` produtiva ou credencial real foi criada; o go-live
+continua `NOT YET` até implementação e validação controladas.
 
 ## Visão geral
 
@@ -301,6 +314,7 @@ frontend.
 ## Fora do escopo atual
 
 - Multi-tenant produtivo e isolamento por organização.
+- Network Discovery real, Edge Collector e workflow funcional de unknown/unclassified assets.
 - Conectores reais para Microsoft Intune, Defender, Entra ID ou CMDBs.
 - Collector instalado na infraestrutura do cliente.
 - Ping, DNS, ARP, Nmap, SNMP, SSH, WMI ou WinRM reais.
